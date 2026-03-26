@@ -1,0 +1,28 @@
+# Dependencies
+/node_modules/
+node_modules/
+**/node_modules/
+
+# Environment files (do not commit secrets)
+.env
+**/.env
+!**/.env.example
+
+# Logs
+*.log
+**/logs/
+
+# Cursor / IDE artifacts
+.cursor/
+
+# Build / output folders (common across projects)
+dist/
+build/
+coverage/
+out/
+.next/
+
+# OS files
+Thumbs.db
+.DS_Store
+

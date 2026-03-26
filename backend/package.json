@@ -1,0 +1,37 @@
+{
+  "name": "hemodialysis-backend",
+  "version": "1.0.0",
+  "description": "涉县善谷医院血液透析室管理系统 - 后端服务",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "migrate": "node src/utils/runMigrations.js",
+    "seed": "node src/utils/runSeeds.js"
+  },
+  "keywords": [
+    "hemodialysis",
+    "medical"
+  ],
+  "author": "任计阁",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "exceljs": "^4.3.0",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.3.1",
+    "helmet": "^7.0.0",
+    "joi": "^17.9.2",
+    "jsonwebtoken": "^9.0.0",
+    "morgan": "^1.10.0",
+    "node-cron": "^3.0.2",
+    "pg": "^8.11.0",
+    "redis": "^4.6.7",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

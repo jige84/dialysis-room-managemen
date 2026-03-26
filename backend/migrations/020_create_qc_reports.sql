@@ -1,0 +1,32 @@
+-- 020_create_qc_reports.sql
+CREATE TABLE IF NOT EXISTS qc_reports (
+  id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  report_year             SMALLINT NOT NULL,
+  report_month            SMALLINT NOT NULL CHECK (report_month BETWEEN 1 AND 12),
+  total_patient_sessions  INTEGER,
+  total_nurse_sessions    INTEGER,
+  nurse_patient_ratio     NUMERIC(5,2),
+  spot_check_ratio        NUMERIC(5,2),
+  sunday_ratio            NUMERIC(5,2),
+  total_sessions          INTEGER,
+  circuit_clotting_count  INTEGER DEFAULT 0,
+  circuit_clotting_rate   NUMERIC(8,5),
+  membrane_rupture_count  INTEGER DEFAULT 0,
+  membrane_rupture_rate   NUMERIC(8,5),
+  avf_sessions            INTEGER,
+  puncture_injury_count   INTEGER DEFAULT 0,
+  puncture_injury_rate    NUMERIC(8,5),
+  cvc_catheter_days       INTEGER DEFAULT 0,
+  crbsi_count             INTEGER DEFAULT 0,
+  crbsi_rate              NUMERIC(8,5),
+  status                  VARCHAR(20) DEFAULT 'draft'
+                            CHECK (status IN ('draft','submitted','confirmed','exported')),
+  submitted_by            UUID REFERENCES users(id),
+  submitted_at            TIMESTAMP,
+  confirmed_by            UUID REFERENCES users(id),
+  confirmed_at            TIMESTAMP,
+  notes                   TEXT,
+  created_at              TIMESTAMP DEFAULT NOW(),
+  updated_at              TIMESTAMP DEFAULT NOW(),
+  UNIQUE (report_year, report_month)
+);

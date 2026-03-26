@@ -1,0 +1,160 @@
+/**
+ * 认证路由：登录、退出、修改密码
+ */
+const express = require('express');
+const router = express.Router();
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const Joi = require('joi');
+const { pool } = require('../config/database');
+const { cache } = require('../config/redis');
+const auth = require('../middleware/auth');
+const { success, error, unauthorized } = require('../utils/response');
+require('dotenv').config();
+
+// 登录失败计数（内存，生产环境应存Redis）
+const loginAttempts = new Map();
+
+const loginSchema = Joi.object({
+  username: Joi.string().required().label('用户名'),
+  password: Joi.string().required().label('密码'),
+});
+
+// POST /api/auth/login
+router.post('/login', async (req, res, next) => {
+  try {
+    const { error: validErr } = loginSchema.validate(req.body);
+    if (validErr) return error(res, validErr.details[0].message);
+
+    const { username, password } = req.body;
+
+    // 检查登录失败次数
+    const attempts = loginAttempts.get(username) || { count: 0, lockedUntil: 0 };
+    if (attempts.lockedUntil > Date.now()) {
+      const mins = Math.ceil((attempts.lockedUntil - Date.now()) / 60000);
+      return error(res, `账号已锁定，请 ${mins} 分钟后重试`, 429);
+    }
+
+    const { rows } = await pool.query(
+      'SELECT id, username, password_hash, real_name, role, is_active FROM users WHERE username = $1',
+      [username]
+    );
+
+    if (rows.length === 0) {
+      recordFailedAttempt(loginAttempts, username);
+      return unauthorized(res, '用户名或密码错误');
+    }
+
+    const user = rows[0];
+
+    if (!user.is_active) {
+      return unauthorized(res, '账号已被禁用，请联系管理员');
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      recordFailedAttempt(loginAttempts, username);
+      const remaining = 5 - (loginAttempts.get(username)?.count || 0);
+      return unauthorized(res, `用户名或密码错误，还可尝试 ${Math.max(0, remaining)} 次`);
+    }
+
+    // 登录成功，清除失败计数
+    loginAttempts.delete(username);
+
+    // 更新最后登录时间
+    await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, real_name: user.real_name, role: user.role },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: process.env.JWT_EXPIRES_IN || '8h',
+        issuer:    'dialysis-system',
+        audience:  'dialysis-app',
+      }
+    );
+
+    return success(res, {
+      token,
+      user: { id: user.id, username: user.username, real_name: user.real_name, role: user.role }
+    }, '登录成功');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/logout
+router.post('/logout', auth, async (req, res, next) => {
+  try {
+    // 将Token加入黑名单（8小时后自动过期，与 JWT_EXPIRES_IN 一致）
+    await cache.blacklistToken(req.token, 28800);
+    return success(res, null, '已退出登录');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/change-password
+router.post('/change-password', auth, async (req, res, next) => {
+  try {
+    const { old_password, new_password } = req.body;
+
+    if (!old_password || !new_password) {
+      return error(res, '请提供旧密码和新密码');
+    }
+
+    if (new_password.length < 8 || !/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(new_password)) {
+      return error(res, '新密码必须≥8位，且包含大写字母、小写字母和数字');
+    }
+
+    const { rows } = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    if (rows.length === 0) return error(res, '用户不存在', 404);
+
+    const match = await bcrypt.compare(old_password, rows[0].password_hash);
+    if (!match) return error(res, '旧密码不正确');
+
+    const newHash = await bcrypt.hash(new_password, 12);
+    await pool.query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newHash, req.user.id]
+    );
+
+    // 将旧Token加入黑名单，强制重新登录
+    await cache.blacklistToken(req.token, 28800);
+
+    return success(res, null, '密码修改成功，请重新登录');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/auth/me
+router.get('/me', auth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, username, real_name, role, last_login_at, created_at FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (rows.length === 0) return error(res, '用户不存在', 404);
+    return success(res, rows[0]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 记录登录失败次数（5次锁定30分钟）
+function recordFailedAttempt(map, username) {
+  const record = map.get(username) || { count: 0, lockedUntil: 0 };
+  record.count++;
+  if (record.count >= 5) {
+    record.lockedUntil = Date.now() + 30 * 60 * 1000;
+    record.count = 0;
+  }
+  map.set(username, record);
+}
+
+module.exports = router;
