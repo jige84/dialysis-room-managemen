@@ -25,26 +25,26 @@ class AlertEngine {
     const WARN_BEFORE_DAYS = 14;
 
     const { rows: patients } = await pool.query(
-      `SELECT DISTINCT ON (p.id, is.screen_type)
-         p.id, p.name, is.screen_type, is.screen_date
+      `SELECT DISTINCT ON (p.id, is.test_type)
+         p.id, p.name, is.test_type, is.test_date
        FROM patients p
        LEFT JOIN infection_screenings is ON is.patient_id = p.id
        WHERE p.status = 'active'
-       ORDER BY p.id, is.screen_type, is.screen_date DESC`
+       ORDER BY p.id, is.test_type, is.test_date DESC`
     );
 
     let count = 0;
     for (const row of patients) {
-      const daysSince = row.screen_date
-        ? Math.floor((Date.now() - new Date(row.screen_date).getTime()) / 86400000)
+      const daysSince = row.test_date
+        ? Math.floor((Date.now() - new Date(row.test_date).getTime()) / 86400000)
         : 9999;
 
       if (daysSince >= DUE_DAYS - WARN_BEFORE_DAYS) {
-        const dueDate = row.screen_date
-          ? new Date(new Date(row.screen_date).getTime() + DUE_DAYS * 86400000).toISOString().slice(0, 10)
+        const dueDate = row.test_date
+          ? new Date(new Date(row.test_date).getTime() + DUE_DAYS * 86400000).toISOString().slice(0, 10)
           : null;
 
-        const exists = await this._alertExists(row.id, 'infection_screening_due', row.screen_type);
+        const exists = await this._alertExists(row.id, 'infection_screening_due', row.test_type);
         if (exists) continue;
 
         await pool.query(
@@ -53,10 +53,10 @@ class AlertEngine {
            ON CONFLICT (patient_id, alert_type, alert_subtype) WHERE status='pending' DO NOTHING`,
           [
             row.id,
-            row.screen_type || '初筛',
+            row.test_type || '初筛',
             daysSince >= DUE_DAYS ? 'high' : 'medium',
             `感染筛查到期：${row.name}`,
-            `患者 ${row.name} 的 ${row.screen_type || '感染'} 筛查已${daysSince}天未复查，请安排复查`,
+            `患者 ${row.name} 的 ${row.test_type || '感染'} 筛查已${daysSince}天未复查，请安排复查`,
             dueDate,
           ]
         );

@@ -1,113 +1,254 @@
-import { useState } from 'react';
-import { Card, Tabs, Button, Table, Tag, Space, Descriptions, Divider, message } from 'antd';
+import { useEffect, useState } from 'react';
+import { Card, Tabs, Button, Table, Tag, Space, message, Modal, Form, Input, Select, DatePicker, InputNumber, Checkbox } from 'antd';
 import { ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
+import IsolationZoneTag from '../../components/IsolationZoneTag/IsolationZoneTag';
+import { PageLoading, PageErrorResult } from '../../components/PageStates/PageStates';
+import { patientsApi, type PatientDetailRecord } from '../../api/patients';
+import { infectionApi, type InfectionScreeningLatestRow } from '../../api/infection';
+import labsApi, { LAB_TYPE_LABELS, type LabResult } from '../../api/labs';
+import { dialysisApi, type DialysisRecordListRow } from '../../api/dialysis';
+import vascularApi from '../../api/vascular';
+import { useAuthStore } from '../../stores/authStore';
 
-const MOCK_PATIENT = {
-  id: 'P20210315', name: '张国华', avatar: '张', gender: '男', age: 56,
-  diagnosis: '糖尿病肾病 · CKD-5期', comorbidities: '糖尿病、高血压、轻度心衰',
-  phone: '138****7823', emergency: '张某某（妻）138****9012',
-  address: '涉县县城×××', dialysisMode: 'HD（血液透析）',
-  startDate: '2021-08-22', dialysisAge: '4年7月',
-  nurse: '杨晨', zone: 'normal', status: 'active',
-  consents: [
-    { name: '透析知情同意书', status: 'signed', date: '2021-03-15' },
-    { name: '透析器复用同意书', status: 'signed', date: '2021-03-15' },
-    { name: 'CVC置管同意书', status: 'na' },
-  ],
-};
+function formatDialysisMode(mode?: string | null): string {
+  if (!mode) return 'HD';
+  const m = mode.toUpperCase();
+  if (m === 'HD') return '血液透析（HD）';
+  if (m === 'HDF') return '血液透析滤过（HDF）';
+  if (m === 'HP') return '血液灌流（HP）';
+  return mode;
+}
 
-const MOCK_INFECTION = [
-  { item: 'HBsAg',      result: '阴性', date: '2025-12-10', next: '2026-06-10', status: 'normal' },
-  { item: '抗-HCV',     result: '阴性', date: '2025-12-10', next: '2026-06-10', status: 'normal' },
-  { item: '抗-HIV',     result: '阴性', date: '2025-12-10', next: '2026-06-10', status: 'normal' },
-  { item: '梅毒（TPPA）', result: '阴性', date: '2025-12-10', next: '2026-06-10', status: 'normal' },
-];
+function formatGender(g: string): string {
+  return g === 'F' ? '女' : '男';
+}
 
-const MOCK_LABS = [
-  { key: '1', date: '2026-03-15', item: '血清钾 K⁺', value: '5.8', unit: 'mmol/L', range: '3.5–5.5', status: 'high' },
-  { key: '2', date: '2026-03-15', item: '血清肌酐 Cr', value: '862', unit: 'μmol/L', range: '<115', status: 'high' },
-  { key: '3', date: '2026-03-15', item: '血红蛋白 Hb', value: '98', unit: 'g/L', range: '110–160', status: 'low' },
-  { key: '4', date: '2026-03-15', item: 'iPTH', value: '312', unit: 'pg/mL', range: '150–300', status: 'high' },
-  { key: '5', date: '2026-03-01', item: 'spKt/V', value: '1.25', unit: '', range: '≥1.2', status: 'normal' },
-  { key: '6', date: '2026-03-01', item: 'URR', value: '68%', unit: '', range: '≥65%', status: 'normal' },
-];
+function formatFamilyContact(fc: unknown): string {
+  if (!fc || typeof fc !== 'object') return '—';
+  const o = fc as { name?: string; phone?: string };
+  const parts = [o.name, o.phone].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '—';
+}
 
-const MOCK_DIALYSIS_HISTORY = [
-  { key: '1', date: '2026-03-19', shift: '下午班', machine: '5号机', preWeight: 64.5, postWeight: 62.1, uf: 2400, duration: 4.0, ktv: 1.25, complications: '无', nurse: '陈燕' },
-  { key: '2', date: '2026-03-17', shift: '上午班', machine: '5号机', preWeight: 64.2, postWeight: 62.0, uf: 2200, duration: 4.0, ktv: 1.22, complications: '无', nurse: '杨晨' },
-  { key: '3', date: '2026-03-15', shift: '下午班', machine: '5号机', preWeight: 65.0, postWeight: 62.3, uf: 2700, duration: 4.0, ktv: 1.28, complications: '轻度低血压', nurse: '陈燕' },
-];
+function buildPresentIllness(p: PatientDetailRecord): string {
+  if (p.present_illness?.trim()) return p.present_illness.trim();
+  const dx = p.primary_diagnosis || '—';
+  const stage = p.ckd_stage ? `CKD ${p.ckd_stage} 期` : '';
+  const comorb = p.comorbidities?.filter(Boolean).length
+    ? `合并症包括：${p.comorbidities.join('、')}。`
+    : '';
+  return `患者诊断「${dx}」${stage ? `，${stage}` : ''}。自 ${p.dialysis_start_date ?? '—'} 起在本科行维持性${formatDialysisMode(p.dialysis_mode)}。${comorb}`;
+}
 
-const MOCK_ORDERS = [
-  { key: '1', drug: '重组人促红素注射液', dose: '6000 IU', route: '皮下注射', freq: 'tiw（每透析日）', doctor: '任计阁', status: 'active' },
-  { key: '2', drug: '碳酸钙片', dose: '0.6g', route: '口服 随餐', freq: 'tid（每日三次）', doctor: '任计阁', status: 'active' },
-  { key: '3', drug: '蔗糖铁注射液', dose: '200mg', route: '静脉输注（透析中）', freq: 'qw（每周1次）', doctor: '任计阁', status: 'active' },
-  { key: '4', drug: '骨化三醇胶囊', dose: '0.25μg', route: '口服', freq: 'tiw（每透析日）', doctor: '任计阁', status: 'stopped' },
-];
+function buildPastHistory(p: PatientDetailRecord): string {
+  if (p.past_history?.trim()) return p.past_history.trim();
+  const comorb = p.comorbidities?.filter(Boolean).join('、');
+  return comorb
+    ? `既往长期合并症与伴发疾病：${comorb}。`
+    : '患者档案中暂无结构化既往史条目，可在患者档案中维护合并症等信息。';
+}
 
-const MOCK_VASCULAR = {
-  current: { type: 'AVF', side: '左前臂', method: '绳梯穿刺', startDate: '2021-03-20', bloodflow: 800, status: 'good' },
-  assessments: [
-    { date: '2026-03-01', bloodflow: 820, thrill: '震颤良好', bruit: '血管杂音清晰', skin: '正常', result: '功能良好' },
-    { date: '2026-01-15', bloodflow: 780, thrill: '震颤良好', bruit: '血管杂音清晰', skin: '正常', result: '功能良好' },
-  ],
-};
+function infectionItemLabel(screenType: string): string {
+  const map: Record<string, string> = {
+    hbsag: 'HBsAg',
+    hbvdna: 'HBV-DNA',
+    hcvab: '抗-HCV',
+    hcvrna: 'HCV-RNA',
+    hiv: '抗-HIV',
+    syphilis_tppa: '梅毒（TPPA）',
+    syphilis_rpr: '梅毒（RPR）',
+    chest_xray: '胸部X线',
+  };
+  return map[screenType] || screenType;
+}
 
-const MOCK_PRESCRIPTION = {
-  frequency: '每周 3 次', duration: '4.0 小时', mode: 'HD（血液透析）', dialyzer: 'FX80（高通量）',
-  dryWeight: 62.0, assessDate: '2026-03-01',
-  anticoagulant: '普通肝素', heparinFirst: '3000IU', heparinMaint: '500IU/h',
-  bloodFlow: 250, dialysateFlow: 500,
-  na: 138, k: 2.0, ca: 1.5, temp: 36.5,
-  doctor: '任计阁', startDate: '2026-01-10',
-};
+function formatInfectionResult(code: string): string {
+  const m: Record<string, string> = {
+    positive: '阳性',
+    negative: '阴性',
+    normal: '正常',
+    abnormal: '异常',
+  };
+  return m[code] || code;
+}
+
+function formatShift(shift: string): string {
+  const m: Record<string, string> = {
+    morning: '上午班',
+    afternoon: '下午班',
+    evening: '晚班',
+  };
+  return m[shift] || shift;
+}
+
+function isValidUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function buildRecentChangeLines(
+  labs: LabResult[],
+  dialysis: DialysisRecordListRow[],
+): { date: string; text: string }[] {
+  const lines: { date: string; text: string }[] = [];
+  const seen = new Set<string>();
+  const push = (date: string, text: string) => {
+    const k = `${date}|${text}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    lines.push({ date, text });
+  };
+
+  const labSorted = [...labs]
+    .filter(l => l.is_abnormal || l.is_critical)
+    .sort((a, b) => b.test_date.localeCompare(a.test_date))
+    .slice(0, 8);
+
+  for (const l of labSorted) {
+    const name = LAB_TYPE_LABELS[l.test_type] || l.test_type;
+    const flag = l.is_critical ? '危急值' : '异常';
+    push(l.test_date, `检验：${name} ${l.value} ${l.unit}（${flag}）`);
+  }
+
+  const dialSorted = [...dialysis].sort((a, b) => b.session_date.localeCompare(a.session_date)).slice(0, 8);
+  for (const d of dialSorted) {
+    if (d.ktv != null && Number(d.ktv) < 1.2) {
+      push(d.session_date, `透析：Kt/V ${d.ktv}（未达 1.2），${formatShift(d.shift)}`);
+    }
+    if (d.is_circuit_clotted) {
+      push(d.session_date, `透析：体外循环完全凝血（停机更换管路），${formatShift(d.shift)}`);
+    }
+    if (d.is_membrane_ruptured) {
+      push(d.session_date, `透析：透析器破膜 / 漏血，${formatShift(d.shift)}`);
+    }
+    if (d.coagulation_grade != null && d.coagulation_grade >= 2) {
+      push(d.session_date, `透析：体外循环凝血分级 ${d.coagulation_grade} 级，${formatShift(d.shift)}`);
+    }
+  }
+
+  return lines.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+}
 
 // ── 标签页内容 ──────────────────────────────────────────────
-function TabBasic() {
+type TabBasicProps = {
+  patient: PatientDetailRecord;
+  infectionRows: InfectionScreeningLatestRow[];
+  recentLines: { date: string; text: string }[];
+};
+
+type EditFormValues = {
+  name: string;
+  gender: 'M' | 'F';
+  dob: Dayjs;
+  dialysis_start_date: Dayjs;
+  primary_diagnosis: string;
+  present_illness?: string;
+  past_history?: string;
+  ckd_stage?: number | null;
+  comorbidities?: string[];
+  dialysis_mode?: string;
+  id_card?: string;
+  phone?: string;
+  family_contact_name?: string;
+  family_contact_phone?: string;
+  address?: string;
+  consent_dialysis?: boolean;
+  consent_dialysis_date?: Dayjs | null;
+  consent_cvc?: boolean;
+  consent_cvc_date?: Dayjs | null;
+  current_access_type?: 'none' | 'AVF' | 'AVG' | 'TCC' | 'NCC';
+};
+
+type PatientVascularAccessBrief = {
+  id?: string;
+  access_type?: string | null;
+  is_active?: boolean;
+  is_current?: boolean;
+};
+
+function getCurrentAccessRecord(patient: PatientDetailRecord): PatientVascularAccessBrief | null {
+  const fromList = ((patient as PatientDetailRecord & { vascular_accesses?: PatientVascularAccessBrief[] }).vascular_accesses || [])
+    .find(v => v?.is_current || v?.is_active);
+  if (fromList) return fromList;
+  if (patient.access_type) {
+    return { access_type: patient.access_type, is_current: true };
+  }
+  return null;
+}
+
+function getCurrentAccessType(patient: PatientDetailRecord): 'AVF' | 'AVG' | 'TCC' | 'NCC' | 'none' {
+  const current = getCurrentAccessRecord(patient);
+  const raw = (current?.access_type || '').toString().trim().toUpperCase();
+  if (raw === 'AVF' || raw === 'AVG' || raw === 'TCC' || raw === 'NCC') return raw;
+  return 'none';
+}
+
+function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
+  const dobStr = patient.dob ? dayjs(patient.dob).format('YYYY-MM-DD') : '—';
+  const rows = [
+    ['姓名', patient.name],
+    ['性别 / 年龄', `${formatGender(patient.gender)} / ${patient.age ?? '—'}岁（${dobStr}）`],
+    ['身份证号', patient.id_card || '—'],
+    ['主要诊断', patient.primary_diagnosis],
+    ['CKD 分期', patient.ckd_stage ? `${patient.ckd_stage} 期` : '—'],
+    ['合并症', patient.comorbidities?.length ? patient.comorbidities.join('、') : '—'],
+    ['联系电话', patient.phone || '—'],
+    ['家属联系人', formatFamilyContact(patient.family_contact)],
+    ['家庭住址', patient.address?.trim() || '—'],
+    ['透析方式', formatDialysisMode(patient.dialysis_mode)],
+    ['透析开始日期', `${patient.dialysis_start_date ?? '—'}（透析龄 ${patient.dialysis_age ?? '—'}）`],
+    ['责任护士', '—'],
+  ] as const;
+
+  const infectionTable = infectionRows.map((r, i) => {
+    const next =
+      r.next_due_date ||
+      (r.screen_date ? dayjs(r.screen_date).add(6, 'month').format('YYYY-MM-DD') : '—');
+    const neg = r.result === 'negative' || r.result === 'normal';
+    return {
+      key: String(i),
+      item: infectionItemLabel(r.screen_type),
+      resultText: formatInfectionResult(r.result),
+      neg,
+      date: r.screen_date,
+      next,
+    };
+  });
+
   return (
     <div className="grid-2" style={{ gap: 20 }}>
       <Card title="👤 基本信息" size="small" style={{ border: '1px solid #DBEAFE' }}
-        extra={<Button size="small">编辑</Button>}
         styles={{ header: { background: '#FAFCFF' } }}>
         <table style={{ width: '100%', fontSize: 13.5, borderCollapse: 'collapse' }}>
-          {[
-            ['姓名', MOCK_PATIENT.name],
-            ['性别 / 年龄', `${MOCK_PATIENT.gender} / ${MOCK_PATIENT.age}岁（1970-07-22）`],
-            ['主要诊断', MOCK_PATIENT.diagnosis],
-            ['合并症', MOCK_PATIENT.comorbidities],
-            ['联系电话', MOCK_PATIENT.phone],
-            ['家属联系人', MOCK_PATIENT.emergency],
-            ['家庭住址', MOCK_PATIENT.address],
-            ['透析方式', MOCK_PATIENT.dialysisMode],
-            ['透析开始日期', `${MOCK_PATIENT.startDate}（透析龄 ${MOCK_PATIENT.dialysisAge}）`],
-            ['责任护士', MOCK_PATIENT.nurse],
-          ].map(([label, value]) => (
+          {rows.map(([label, value]) => (
             <tr key={label}>
               <td style={{ color: '#7B92BC', padding: '7px 0', width: 120, verticalAlign: 'top' }}>{label}</td>
-              <td style={{ fontWeight: label === '姓名' || label === '责任护士' ? 600 : 400, color: label === '责任护士' ? '#0EA5E9' : '#0D1B3E' }}>{value}</td>
+              <td style={{ fontWeight: label === '姓名' ? 600 : 400, color: '#0D1B3E' }}>{value}</td>
             </tr>
           ))}
         </table>
       </Card>
 
       <Card title="🦠 传染病筛查" size="small" style={{ border: '1px solid #DBEAFE' }}
-        extra={<Button size="small">录入新结果</Button>}
         styles={{ header: { background: '#FAFCFF' } }}>
         <Table
-          dataSource={MOCK_INFECTION.map((r, i) => ({ ...r, key: i }))}
+          dataSource={infectionTable}
           size="small"
           pagination={false}
+          locale={{ emptyText: '暂无传染病筛查记录，请在「传染病管理」中录入。' }}
           columns={[
             { title: '项目', dataIndex: 'item' },
             {
               title: '结果',
               render: (_, r) => (
                 <span style={{
-                  background: r.result === '阴性' ? '#ECFDF5' : '#FFF1F2',
-                  color: r.result === '阴性' ? '#059669' : '#BE123C',
+                  background: r.neg ? '#ECFDF5' : '#FFF1F2',
+                  color: r.neg ? '#059669' : '#BE123C',
                   padding: '2px 8px', borderRadius: 20, fontSize: 11.5,
-                }}>{r.result}</span>
+                }}>{r.resultText}</span>
               ),
             },
             { title: '检测日期', dataIndex: 'date', render: v => <span className="num text-sm">{v}</span> },
@@ -121,291 +262,584 @@ function TabBasic() {
       </Card>
 
       <Card title="📝 简要病史" size="small" style={{ border: '1px solid #DBEAFE', gridColumn: 'span 2' }}
-        extra={<Button size="small">编辑</Button>}
         styles={{ header: { background: '#FAFCFF' } }}>
         <div className="grid-3" style={{ gap: 24, fontSize: 13.5 }}>
           <div>
             <div style={{ fontWeight: 600, color: '#7B92BC', marginBottom: 8, fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>现病史</div>
-            <p style={{ color: '#0D1B3E', lineHeight: 1.8, margin: 0 }}>患者2型糖尿病病史20余年，肾功能减退10年，自2021年8月起规律血液透析（每周3次）。近期血压控制尚可，干体重较上月评估上调0.5kg。</p>
+            <p style={{ color: '#0D1B3E', lineHeight: 1.8, margin: 0 }}>{buildPresentIllness(patient)}</p>
           </div>
           <div>
             <div style={{ fontWeight: 600, color: '#7B92BC', marginBottom: 8, fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>既往史</div>
-            <p style={{ color: '#0D1B3E', lineHeight: 1.8, margin: 0 }}>高血压病史15年，服用氨氯地平控制中；轻度心衰，心功能II级；否认手术史、外伤史。无药物过敏史。</p>
+            <p style={{ color: '#0D1B3E', lineHeight: 1.8, margin: 0 }}>{buildPastHistory(patient)}</p>
           </div>
           <div>
             <div style={{ fontWeight: 600, color: '#7B92BC', marginBottom: 8, fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>近期病情变化</div>
-            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 6, padding: 10, lineHeight: 1.8 }}>
-              <span style={{ color: '#D97706', fontWeight: 600 }}>⚠ 2026-03-19：</span>
-              血清钾K⁺偏高（5.8 mmol/L），已嘱低钾饮食，次日复查。
-            </div>
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function TabPrescription() {
-  const p = MOCK_PRESCRIPTION;
-  return (
-    <div>
-      <Card title="💊 当前透析处方" size="small" style={{ border: '1px solid #DBEAFE', marginBottom: 20 }}
-        extra={<Space size={8}><Button size="small">处方历史</Button><Button size="small" type="primary">修改处方</Button></Space>}
-        styles={{ header: { background: '#FAFCFF' } }}>
-        <div className="grid-4" style={{ gap: 20, marginBottom: 16 }}>
-          {[['透析频次', p.frequency], ['标准时长', p.duration], ['透析方式', p.mode], ['透析器型号', p.dialyzer]].map(([l, v]) => (
-            <div key={l}>
-              <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>{l}</div>
-              <div style={{ fontWeight: 600 }}>{v}</div>
-            </div>
-          ))}
-        </div>
-        <Divider style={{ margin: '12px 0', borderColor: '#DBEAFE' }} />
-        <div className="grid-4" style={{ gap: 20, marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>干体重目标</div>
-            <div style={{ fontWeight: 700, fontSize: 18, color: '#0284C7' }} className="num">{p.dryWeight} kg</div>
-            <div style={{ fontSize: 12, color: '#7B92BC' }}>评估日期 {p.assessDate}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>抗凝方案</div>
-            <div style={{ fontWeight: 600 }}>{p.anticoagulant}</div>
-            <div style={{ fontSize: 12, color: '#7B92BC' }}>首剂{p.heparinFirst} · 维持{p.heparinMaint}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>血流速</div>
-            <div style={{ fontWeight: 600 }} className="num">{p.bloodFlow} mL/min</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>透析液流速</div>
-            <div style={{ fontWeight: 600 }} className="num">{p.dialysateFlow} mL/min</div>
-          </div>
-        </div>
-        <div style={{ background: '#F8FAFC', borderRadius: 8, padding: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#7B92BC', marginBottom: 10 }}>透析液参数</div>
-          <div className="grid-4" style={{ gap: 16 }}>
-            {[['钠浓度', `${p.na} mmol/L`], ['钾浓度', `${p.k} mmol/L`], ['钙浓度', `${p.ca} mmol/L`], ['温度', `${p.temp} ℃`]].map(([l, v]) => (
-              <div key={l}>
-                <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 2 }}>{l}</div>
-                <div style={{ fontWeight: 700 }} className="num">{v}</div>
+            {recentLines.length === 0 ? (
+              <p style={{ color: '#7B92BC', lineHeight: 1.8, margin: 0 }}>近期无异常检验或未达标的透析摘要；数据来自检验结果与透析记录。</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {recentLines.map(line => (
+                  <div
+                    key={`${line.date}-${line.text}`}
+                    style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 6, padding: 10, lineHeight: 1.8 }}
+                  >
+                    <span style={{ color: '#D97706', fontWeight: 600 }} className="num">{line.date}</span>
+                    <span style={{ color: '#0D1B3E' }}> {line.text}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         </div>
-        <div style={{ marginTop: 12, fontSize: 12.5, color: '#7B92BC' }}>
-          📝 处方医生：{p.doctor} · 开具时间：{p.startDate} · 有效期：长期有效
-        </div>
       </Card>
     </div>
   );
 }
 
-function TabVascular() {
-  const v = MOCK_VASCULAR;
-  return (
-    <div>
-      <div className="hd-vascular-card avf" style={{ marginBottom: 20 }}>
-        <div className="flex justify-between items-center" style={{ marginBottom: 12 }}>
-          <span style={{ background: '#ECFDF5', color: '#059669', padding: '3px 10px', borderRadius: 20, fontSize: 13, fontWeight: 500 }}>
-            🫀 动静脉内瘘（AVF）— 当前使用
-          </span>
-          <Space size={8}>
-            <Button size="small">评估记录</Button>
-            <Button size="small" type="primary">编辑</Button>
-          </Space>
-        </div>
-        <div className="grid-4" style={{ gap: 16 }}>
-          {[['位置', v.current.side], ['穿刺方法', v.current.method], ['建立日期', v.current.startDate], ['平均血流量', `${v.current.bloodflow} mL/min`]].map(([l, val]) => (
-            <div key={l}>
-              <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 3 }}>{l}</div>
-              <div style={{ fontWeight: 600 }}>{val}</div>
-            </div>
-          ))}
-        </div>
-      </div>
+type TabDialysisHistoryProps = {
+  rows: DialysisRecordListRow[];
+};
 
-      <Card title="📋 评估记录" size="small" style={{ border: '1px solid #DBEAFE' }}
-        extra={<Button size="small" type="primary">＋ 录入评估</Button>}
-        styles={{ header: { background: '#FAFCFF' } }}>
-        <Table
-          dataSource={v.assessments.map((r, i) => ({ ...r, key: i }))}
-          size="small"
-          pagination={false}
-          columns={[
-            { title: '评估日期', dataIndex: 'date' },
-            { title: '血流量', dataIndex: 'bloodflow', render: v => <span className="num">{v} mL/min</span> },
-            { title: '震颤', dataIndex: 'thrill' },
-            { title: '杂音', dataIndex: 'bruit' },
-            { title: '皮肤', dataIndex: 'skin' },
-            { title: '评估结果', dataIndex: 'result', render: v => <span style={{ color: '#059669', fontWeight: 500 }}>{v}</span> },
-          ]}
-        />
-      </Card>
-    </div>
-  );
-}
-
-function TabLabs() {
-  const statusStyle: Record<string, { className: string }> = {
-    normal: { className: 'lab-normal' },
-    high:   { className: 'lab-high' },
-    low:    { className: 'lab-low' },
-    critical: { className: 'lab-critical' },
-  };
+function TabDialysisHistory({ rows }: TabDialysisHistoryProps) {
+  const sortedRows = [...rows].sort((a, b) => b.session_date.localeCompare(a.session_date));
+  const tableRows = sortedRows.map(r => {
+    const complications: string[] = [];
+    if (r.is_circuit_clotted) complications.push('完全凝血');
+    if (r.is_membrane_ruptured) complications.push('漏血');
+    if (r.coagulation_grade != null && r.coagulation_grade >= 2) {
+      complications.push(`凝血${r.coagulation_grade}级`);
+    }
+    return {
+      ...r,
+      complicationsText: complications.length > 0 ? complications.join('、') : '无',
+      durationHours: r.actual_duration != null ? (r.actual_duration / 60).toFixed(1) : '—',
+    };
+  });
 
   return (
-    <Card title="🧪 检验结果" size="small" style={{ border: '1px solid #DBEAFE' }}
-      extra={<Button size="small" type="primary">录入新结果</Button>}
-      styles={{ header: { background: '#FAFCFF' } }}>
+    <Card
+      title="📖 透析历史记录"
+      size="small"
+      style={{ border: '1px solid #DBEAFE' }}
+      styles={{ header: { background: '#FAFCFF' } }}
+    >
       <Table
-        dataSource={MOCK_LABS}
+        rowKey="id"
+        dataSource={tableRows}
         size="small"
-        pagination={false}
+        pagination={{ pageSize: 10, showTotal: total => `共 ${total} 条` }}
+        locale={{ emptyText: '暂无透析历史记录。' }}
         columns={[
-          { title: '检测日期', dataIndex: 'date', render: v => <span className="num text-sm">{v}</span> },
-          { title: '检验项目', dataIndex: 'item', render: v => <span style={{ fontWeight: 500 }}>{v}</span> },
+          { title: '透析日期', dataIndex: 'session_date' },
+          { title: '班次', dataIndex: 'shift', render: v => <Tag color="orange" style={{ fontSize: 11 }}>{formatShift(v)}</Tag> },
+          { title: '上机体重', dataIndex: 'pre_weight', render: v => <span className="num">{v ?? '—'}{v != null ? ' kg' : ''}</span> },
+          { title: '下机体重', dataIndex: 'post_weight', render: v => <span className="num">{v ?? '—'}{v != null ? ' kg' : ''}</span> },
+          { title: '超滤量', dataIndex: 'uf_volume', render: v => <span className="num">{v ?? '—'}{v != null ? ' mL' : ''}</span> },
+          { title: '实际时长', dataIndex: 'durationHours', render: v => <span className="num">{v} {v !== '—' ? 'h' : ''}</span> },
           {
-            title: '结果值',
-            render: (_, r) => (
-              <span className={`num ${statusStyle[r.status]?.className || 'lab-normal'}`}>
-                {r.value} {r.unit}
+            title: 'Kt/V',
+            dataIndex: 'ktv',
+            render: v => (
+              <span className={`num ${v != null && v < 1.2 ? 'lab-critical' : 'lab-normal'}`}>
+                {v ?? '—'}
               </span>
             ),
           },
-          { title: '参考范围', dataIndex: 'range', render: v => <span className="text-sm text-muted">{v}</span> },
           {
-            title: '状态',
-            render: (_, r) => {
-              const m: Record<string, { label: string; color: string; bg: string }> = {
-                normal:   { label: '正常',   color: '#059669', bg: '#ECFDF5' },
-                high:     { label: '偏高',   color: '#D97706', bg: '#FFFBEB' },
-                low:      { label: '偏低',   color: '#4338CA', bg: '#EEF2FF' },
-                critical: { label: '危急值', color: '#BE123C', bg: '#FFF1F2' },
-              };
-              const s = m[r.status] || m.normal;
-              return <span style={{ background: s.bg, color: s.color, padding: '2px 8px', borderRadius: 20, fontSize: 11.5, fontWeight: 500 }}>{s.label}</span>;
-            },
+            title: 'URR',
+            dataIndex: 'urr',
+            render: v => <span className="num">{v != null ? `${v}%` : '—'}</span>,
           },
+          { title: '并发症摘要', dataIndex: 'complicationsText' },
         ]}
       />
     </Card>
   );
 }
 
-function TabHistory() {
-  return (
-    <Card title="📖 透析历史记录" size="small" style={{ border: '1px solid #DBEAFE' }}
-      styles={{ header: { background: '#FAFCFF' } }}>
-      <Table
-        dataSource={MOCK_DIALYSIS_HISTORY}
-        size="small"
-        pagination={{ pageSize: 10, showTotal: total => `共 ${total} 条` }}
-        columns={[
-          { title: '透析日期', dataIndex: 'date' },
-          { title: '班次', dataIndex: 'shift', render: v => <Tag color="orange" style={{ fontSize: 11 }}>{v}</Tag> },
-          { title: '机器', dataIndex: 'machine' },
-          { title: '上机体重', dataIndex: 'preWeight', render: v => <span className="num">{v} kg</span> },
-          { title: '下机体重', dataIndex: 'postWeight', render: v => <span className="num">{v} kg</span> },
-          { title: '超滤量', dataIndex: 'uf', render: v => <span className="num">{v} mL</span> },
-          { title: '实际时长', dataIndex: 'duration', render: v => <span className="num">{v} h</span> },
-          { title: 'Kt/V', dataIndex: 'ktv', render: v => <span className={`num ${v < 1.2 ? 'lab-critical' : 'lab-normal'}`}>{v}</span> },
-          { title: '并发症', dataIndex: 'complications' },
-          { title: '责护', dataIndex: 'nurse' },
-        ]}
-      />
-    </Card>
-  );
-}
+type TabCareCoordinationProps = {
+  patient: PatientDetailRecord;
+  dialysisRows: DialysisRecordListRow[];
+  infectionRows: InfectionScreeningLatestRow[];
+  labRows: LabResult[];
+  onNavigate: (path: string) => void;
+  onOpenEditPatient: () => void;
+};
 
-function TabOrders() {
-  const active = MOCK_ORDERS.filter(o => o.status === 'active');
-  const stopped = MOCK_ORDERS.filter(o => o.status === 'stopped');
+function TabCareCoordination({
+  patient,
+  dialysisRows,
+  infectionRows,
+  labRows,
+  onNavigate,
+  onOpenEditPatient,
+}: TabCareCoordinationProps) {
+  const INFECTION_WARNING_DAYS = 175;
+  const INFECTION_OVERDUE_DAYS = 185;
+  const alertLevelPriority: Record<'high' | 'medium' | 'info', number> = {
+    high: 0,
+    medium: 1,
+    info: 2,
+  };
+  const alertLevelStyle: Record<'high' | 'medium' | 'info', { label: string; color: string; bg: string; border: string }> = {
+    high: { label: '高优先', color: '#BE123C', bg: '#FFF1F2', border: '#FECDD3' },
+    medium: { label: '中优先', color: '#B45309', bg: '#FFFBEB', border: '#FDE68A' },
+    info: { label: '提示', color: '#0369A1', bg: '#F0F9FF', border: '#BAE6FD' },
+  };
 
-  const columns = [
-    { title: '药品名称', dataIndex: 'drug', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
-    { title: '剂量', dataIndex: 'dose', render: (v: string) => <span className="num">{v}</span> },
-    { title: '用法', dataIndex: 'route' },
-    { title: '执行频次', dataIndex: 'freq', render: (v: string) => <Tag color="blue" style={{ fontSize: 11 }}>{v}</Tag> },
-    { title: '开具医生', dataIndex: 'doctor' },
+  const moduleCards = [
+    { title: '💉 透析记录录入', route: '/dialysis/entry', desc: '录入本次透析执行、生命体征、并发症与 Kt/V。', action: '去录入' },
+    { title: '💊 透析处方管理', route: '/prescription', desc: '维护透析参数、干体重、抗凝方案与处方版本。', action: '去管理' },
+    { title: '📋 长期医嘱单', route: '/orders', desc: '开立/停止长期医嘱，供透析当班逐条执行确认。', action: '去管理' },
+    { title: '🧪 检验结果管理', route: '/labs', desc: '录入与追踪检验结果、异常值与危急值处理。', action: '去管理' },
+    { title: '🫀 血管通路管理', route: '/vascular', desc: '维护通路状态、评估记录、穿刺记录与风险评估。', action: '去管理' },
+    { title: '🦠 传染病管理', route: '/infection', desc: '录入筛查、追踪到期、维护隔离分区与分机规则。', action: '去管理' },
+  ] as const;
+
+  const latestDialysis = [...dialysisRows].sort((a, b) => b.session_date.localeCompare(a.session_date))[0];
+  const abnormalLabCount = labRows.filter(l => l.is_abnormal).length;
+  const criticalLabCount = labRows.filter(l => l.is_critical).length;
+  const nextInfectionDate = infectionRows
+    .map(r => r.next_due_date)
+    .filter((v): v is string => Boolean(v))
+    .sort()[0];
+  const currentAccessType = getCurrentAccessType(patient);
+  const isCatheterAccess = currentAccessType === 'TCC' || currentAccessType === 'NCC';
+  const catheterLabel = currentAccessType === 'TCC' ? '长期导管（TCC）' : '临时导管（NCC）';
+  const unSignedConsents = [
+    !patient.consent_dialysis ? '透析知情同意书' : null,
+    isCatheterAccess && !patient.consent_cvc ? `${catheterLabel}置管同意书` : null,
+  ].filter((v): v is string => Boolean(v));
+
+  const infectionAlerts = infectionRows
+    .filter(r => Boolean(r.screen_date))
+    .map((r, idx) => {
+      const daysSince = dayjs().diff(dayjs(r.screen_date), 'day');
+      if (daysSince >= INFECTION_OVERDUE_DAYS) {
+        return {
+          key: `infection-overdue-${idx}`,
+          level: 'high' as const,
+          title: `${infectionItemLabel(r.screen_type)} 复查已超期`,
+          desc: `距离上次检测 ${daysSince} 天（阈值 ${INFECTION_OVERDUE_DAYS} 天），建议立即复查。`,
+          actionLabel: '去传染病管理',
+          actionPath: `/infection?patient_id=${encodeURIComponent(patient.id)}`,
+        };
+      }
+      if (daysSince >= INFECTION_WARNING_DAYS) {
+        return {
+          key: `infection-warning-${idx}`,
+          level: 'medium' as const,
+          title: `${infectionItemLabel(r.screen_type)} 即将到期`,
+          desc: `距离上次检测 ${daysSince} 天（预警阈值 ${INFECTION_WARNING_DAYS} 天），请提前安排复查。`,
+          actionLabel: '去传染病管理',
+          actionPath: `/infection?patient_id=${encodeURIComponent(patient.id)}`,
+        };
+      }
+      return null;
+    })
+    .filter((v): v is {
+      key: string;
+      level: 'high' | 'medium' | 'info';
+      title: string;
+      desc: string;
+      actionLabel: string;
+      actionPath: string;
+    } => Boolean(v));
+
+  const reminderItems = [
+    ...(criticalLabCount > 0
+      ? [{
+          key: 'critical-lab',
+          level: 'high' as const,
+          title: '存在检验危急值',
+          desc: `当前批次共 ${criticalLabCount} 项危急值，需立即确认与处置。`,
+          actionLabel: '去检验结果管理',
+          actionPath: `/labs?patient_id=${encodeURIComponent(patient.id)}`,
+        }]
+      : []),
+    ...(abnormalLabCount > 0
+      ? [{
+          key: 'abnormal-lab',
+          level: 'medium' as const,
+          title: '存在异常检验结果',
+          desc: `当前批次共 ${abnormalLabCount} 项异常，请结合透析处方与医嘱评估。`,
+          actionLabel: '去检验结果管理',
+          actionPath: `/labs?patient_id=${encodeURIComponent(patient.id)}`,
+        }]
+      : []),
+    ...(latestDialysis?.ktv != null && Number(latestDialysis.ktv) < 1.2
+      ? [{
+          key: 'ktv-inadequate',
+          level: 'high' as const,
+          title: 'Kt/V 未达标',
+          desc: `最近一次 Kt/V=${latestDialysis.ktv}（标准 ≥1.2），建议复核处方与实际执行。`,
+          actionLabel: '去透析处方管理',
+          actionPath: `/prescription?patient_id=${encodeURIComponent(patient.id)}`,
+        }]
+      : []),
+    ...(latestDialysis?.is_circuit_clotted
+      ? [{
+          key: 'circuit-clotted',
+          level: 'high' as const,
+          title: '最近透析出现完全凝血',
+          desc: '已记录体外循环完全凝血事件，建议评估抗凝策略与通路状态。',
+          actionLabel: '去血管通路管理',
+          actionPath: `/vascular?patient_id=${encodeURIComponent(patient.id)}`,
+        }]
+      : []),
+    ...(latestDialysis?.is_membrane_ruptured
+      ? [{
+          key: 'blood-leak',
+          level: 'high' as const,
+          title: '最近透析出现漏血事件',
+          desc: '存在透析器破膜/漏血记录，建议复盘并加强过程监测。',
+          actionLabel: '去透析记录录入',
+          actionPath: `/dialysis/entry?patient_id=${encodeURIComponent(patient.id)}`,
+        }]
+      : []),
+    ...(unSignedConsents.length > 0
+      ? [{
+          key: 'consent-missing',
+          level: 'info' as const,
+          title: '知情同意书待完善',
+          desc: `未登记：${unSignedConsents.join('、')}。`,
+          actionLabel: '去编辑患者信息',
+          actionPath: `/patients/${encodeURIComponent(patient.id)}`,
+        }]
+      : []),
+    ...infectionAlerts,
   ];
 
+  const prioritizedReminders = [...reminderItems]
+    .sort((a, b) => alertLevelPriority[a.level] - alertLevelPriority[b.level])
+    .slice(0, 6);
+
   return (
-    <div>
-      <Card title={<span>✅ 有效医嘱 <span style={{ color: '#7B92BC', fontSize: 12 }}>({active.length}条)</span></span>}
-        size="small" style={{ border: '1px solid #DBEAFE', marginBottom: 16 }}
-        extra={<Button size="small" type="primary">开具新医嘱</Button>}
-        styles={{ header: { background: '#FAFCFF' } }}>
-        <Table dataSource={active} columns={columns} size="small" pagination={false} rowKey="key" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Card
+        size="small"
+        title="⚠️ 重要提醒与预警"
+        style={{ border: '1px solid #DBEAFE' }}
+        styles={{ header: { background: '#FAFCFF' } }}
+      >
+        {prioritizedReminders.length === 0 ? (
+          <div style={{ padding: '8px 0', fontSize: 13.5, color: '#059669', lineHeight: 1.8 }}>
+            当前无高优先级预警，患者管理状态稳定。
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {prioritizedReminders.map(item => {
+              const style = alertLevelStyle[item.level];
+              return (
+                <div
+                  key={item.key}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '10px 12px',
+                    border: `1px solid ${style.border}`,
+                    background: style.bg,
+                    borderRadius: 8,
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, color: style.color, fontWeight: 700 }}>{style.label}</span>
+                      <span style={{ fontSize: 14, color: '#0D1B3E', fontWeight: 600 }}>{item.title}</span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.7 }}>{item.desc}</div>
+                  </div>
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={() => {
+                      if (item.key === 'consent-missing') {
+                        onOpenEditPatient();
+                        return;
+                      }
+                      onNavigate(item.actionPath);
+                    }}
+                  >
+                    {item.actionLabel}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
-      {stopped.length > 0 && (
-        <Card title={<span>⛔ 已停止医嘱 <span style={{ color: '#7B92BC', fontSize: 12 }}>({stopped.length}条)</span></span>}
-          size="small" style={{ border: '1px solid #DBEAFE', opacity: 0.7 }}
-          styles={{ header: { background: '#F8FAFC' } }}>
-          <Table dataSource={stopped} columns={columns} size="small" pagination={false} rowKey="key" />
-        </Card>
-      )}
+
+      <div className="grid-4" style={{ gap: 12 }}>
+        <div className="hd-stat-card teal">
+          <div className="hd-stat-label">最近透析</div>
+          <div className="hd-stat-value num">{latestDialysis?.session_date ?? '—'}</div>
+          <div className="hd-stat-meta">{latestDialysis ? formatShift(latestDialysis.shift) : '暂无记录'}</div>
+        </div>
+        <div className="hd-stat-card amber">
+          <div className="hd-stat-label">异常检验</div>
+          <div className="hd-stat-value num">{abnormalLabCount}</div>
+          <div className="hd-stat-meta">最近加载批次</div>
+        </div>
+        <div className="hd-stat-card red">
+          <div className="hd-stat-label">危急值</div>
+          <div className="hd-stat-value num">{criticalLabCount}</div>
+          <div className="hd-stat-meta">需要优先处理</div>
+        </div>
+        <div className="hd-stat-card blue">
+          <div className="hd-stat-label">下次传染病复查</div>
+          <div className="hd-stat-value num">{nextInfectionDate ?? '—'}</div>
+          <div className="hd-stat-meta">{nextInfectionDate ? '以最新筛查为准' : '暂无计划日期'}</div>
+        </div>
+      </div>
+
+      <div className="grid-3" style={{ gap: 14 }}>
+        {moduleCards.map(card => (
+          <Card
+            key={card.route}
+            size="small"
+            style={{ border: '1px solid #DBEAFE' }}
+            styles={{ body: { padding: 14 } }}
+          >
+            <div style={{ fontWeight: 600, color: '#0D1B3E', marginBottom: 8 }}>{card.title}</div>
+            <div style={{ fontSize: 12.5, color: '#7B92BC', lineHeight: 1.7, minHeight: 44 }}>
+              {card.desc}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <Button
+                type="primary"
+                size="small"
+                onClick={() => onNavigate(`${card.route}?patient_id=${encodeURIComponent(patient.id)}`)}
+              >
+                {card.action}
+              </Button>
+            </div>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
 
-function TabInfection() {
-  return (
-    <Card title="🦠 传染病筛查完整记录" size="small" style={{ border: '1px solid #DBEAFE' }}
-      extra={<Button size="small" type="primary">录入新结果</Button>}
-      styles={{ header: { background: '#FAFCFF' } }}>
-      <Table
-        dataSource={MOCK_INFECTION.map((r, i) => ({ ...r, key: i }))}
-        size="small"
-        pagination={false}
-        columns={[
-          { title: '筛查项目', dataIndex: 'item', render: v => <span style={{ fontWeight: 500 }}>{v}</span> },
-          {
-            title: '结果',
-            render: (_, r) => (
-              <span style={{
-                background: r.result === '阴性' ? '#ECFDF5' : '#FFF1F2',
-                color: r.result === '阴性' ? '#059669' : '#BE123C',
-                padding: '2px 8px', borderRadius: 20, fontSize: 12, fontWeight: 500,
-              }}>{r.result}</span>
-            ),
-          },
-          { title: '检测日期', dataIndex: 'date', render: v => <span className="num">{v}</span> },
-          { title: '下次复查', dataIndex: 'next', render: v => <span className="num" style={{ color: '#D97706' }}>{v}</span> },
-          {
-            title: '状态',
-            render: (_, r) => {
-              const s = r.status === 'normal'
-                ? { label: '正常', color: '#059669', bg: '#ECFDF5' }
-                : { label: '即将到期', color: '#D97706', bg: '#FFFBEB' };
-              return <span style={{ background: s.bg, color: s.color, padding: '2px 8px', borderRadius: 20, fontSize: 11.5 }}>{s.label}</span>;
-            },
-          },
-        ]}
-      />
-      <div style={{ marginTop: 16, padding: 14, background: '#F0F9FF', borderRadius: 8, border: '1px solid #BAE6FD', fontSize: 13 }}>
-        <span style={{ fontWeight: 600, color: '#0369A1' }}>📋 隔离分区：</span>
-        <span style={{ marginLeft: 8 }}>普通区（HBsAg、抗HCV 均为阴性）</span>
-      </div>
-    </Card>
-  );
-}
+const HEADER_STATUS: Record<string, { label: string; color: string; bg: string }> = {
+  active: { label: '在透', color: '#059669', bg: '#ECFDF5' },
+  suspended: { label: '暂停', color: '#D97706', bg: '#FFFBEB' },
+  transferred: { label: '转出', color: '#7B92BC', bg: '#F1F5F9' },
+  transplanted: { label: '肾移植', color: '#4338CA', bg: '#EEF2FF' },
+  deceased: { label: '死亡', color: '#64748B', bg: '#F8FAFC' },
+};
 
 // ── 主组件 ──────────────────────────────────────────────────
 export default function PatientDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams();
+  const hasRole = useAuthStore(s => s.hasRole);
   const [activeTab, setActiveTab] = useState('basic');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [patient, setPatient] = useState<PatientDetailRecord | null>(null);
+  const [infectionRows, setInfectionRows] = useState<InfectionScreeningLatestRow[]>([]);
+  const [recentLines, setRecentLines] = useState<{ date: string; text: string }[]>([]);
+  const [dialysisRows, setDialysisRows] = useState<DialysisRecordListRow[]>([]);
+  const [labRows, setLabRows] = useState<LabResult[]>([]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editForm] = Form.useForm<EditFormValues>();
+  const canEditPatient = hasRole(['admin', 'doctor']);
 
-  const p = MOCK_PATIENT;
+  const loadPatientData = async (patientId: string) => {
+    const [pr, ir, lr, dr] = await Promise.all([
+      patientsApi.get(patientId),
+      infectionApi.getLatestByPatient(patientId),
+      labsApi.list(patientId, { page_size: 50 }),
+      dialysisApi.list({ patient_id: patientId, page_size: 50 }),
+    ]);
+    if (pr.data.code !== 200 || !pr.data.data) {
+      throw new Error('患者档案加载失败');
+    }
+    const labList = lr.data.code === 200 && lr.data.data?.list ? lr.data.data.list : [];
+    const dialList = dr.data.code === 200 && dr.data.data?.list ? dr.data.data.list : [];
+    const infectionList = ir.data.code === 200 && Array.isArray(ir.data.data) ? ir.data.data : [];
+    return {
+      patient: pr.data.data,
+      infectionRows: infectionList,
+      labRows: labList,
+      dialysisRows: dialList,
+      recentLines: buildRecentChangeLines(labList, dialList),
+    };
+  };
+
+  useEffect(() => {
+    if (!id) {
+      setLoading(false);
+      setLoadError(true);
+      return;
+    }
+    if (!isValidUuid(id)) {
+      setLoading(false);
+      setLoadError(true);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setLoadError(false);
+      try {
+        if (cancelled) return;
+        const data = await loadPatientData(id);
+        if (cancelled) return;
+        setPatient(data.patient);
+        setInfectionRows(data.infectionRows);
+        setLabRows(data.labRows);
+        setDialysisRows(data.dialysisRows);
+        setRecentLines(data.recentLines);
+      } catch {
+        if (!cancelled) setLoadError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   const handlePrint = () => { message.info('打印功能开发中'); };
+  const p = patient;
+
+  const openEditModal = () => {
+    if (!p) return;
+    editForm.setFieldsValue({
+      name: p.name,
+      gender: p.gender,
+      dob: p.dob ? dayjs(p.dob) : dayjs(),
+      dialysis_start_date: p.dialysis_start_date ? dayjs(p.dialysis_start_date) : dayjs(),
+      primary_diagnosis: p.primary_diagnosis,
+      present_illness: p.present_illness || undefined,
+      past_history: p.past_history || undefined,
+      ckd_stage: p.ckd_stage ?? null,
+      comorbidities: p.comorbidities || [],
+      dialysis_mode: p.dialysis_mode || 'HD',
+      id_card: p.id_card || undefined,
+      phone: p.phone || undefined,
+      family_contact_name: p.family_contact?.name || undefined,
+      family_contact_phone: p.family_contact?.phone || undefined,
+      address: p.address || undefined,
+      consent_dialysis: p.consent_dialysis ?? false,
+      consent_dialysis_date: p.consent_dialysis_date ? dayjs(p.consent_dialysis_date) : null,
+      consent_cvc: p.consent_cvc ?? false,
+      consent_cvc_date: p.consent_cvc_date ? dayjs(p.consent_cvc_date) : null,
+      current_access_type: getCurrentAccessType(p),
+    });
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!id) return;
+    try {
+      const values = await editForm.validateFields();
+      setEditLoading(true);
+      const currentAccessRecord = p ? getCurrentAccessRecord(p) : null;
+      const currentAccessType = p ? getCurrentAccessType(p) : 'none';
+      const selectedAccessType = values.current_access_type || currentAccessType;
+      const familyName = values.family_contact_name?.trim();
+      const familyPhone = values.family_contact_phone?.trim();
+      const updatePayload = {
+        name: values.name.trim(),
+        gender: values.gender,
+        dob: values.dob.format('YYYY-MM-DD'),
+        primary_diagnosis: values.primary_diagnosis.trim(),
+        present_illness: values.present_illness?.trim() || undefined,
+        past_history: values.past_history?.trim() || undefined,
+        ckd_stage: values.ckd_stage ?? undefined,
+        comorbidities: values.comorbidities?.map(s => s.trim()).filter(Boolean) || [],
+        dialysis_mode: values.dialysis_mode || 'HD',
+        id_card: values.id_card?.trim() || undefined,
+        phone: values.phone?.trim() || undefined,
+        address: values.address?.trim() || undefined,
+        consent_dialysis: Boolean(values.consent_dialysis),
+        consent_dialysis_date: values.consent_dialysis && values.consent_dialysis_date
+          ? values.consent_dialysis_date.format('YYYY-MM-DD')
+          : null,
+        consent_cvc: Boolean(values.consent_cvc),
+        consent_cvc_date: values.consent_cvc && values.consent_cvc_date
+          ? values.consent_cvc_date.format('YYYY-MM-DD')
+          : null,
+        family_contact: familyName || familyPhone
+          ? {
+              ...(familyName ? { name: familyName } : {}),
+              ...(familyPhone ? { phone: familyPhone } : {}),
+            }
+          : undefined,
+      };
+      await patientsApi.update(id, updatePayload);
+
+      if (selectedAccessType !== currentAccessType) {
+        if (selectedAccessType === 'none') {
+          if (currentAccessRecord?.id) {
+            await vascularApi.abandon(
+              currentAccessRecord.id,
+              '患者档案编辑：调整为无需置管/暂无通路',
+              dayjs().format('YYYY-MM-DD'),
+            );
+          }
+        } else {
+          await vascularApi.create(id, {
+            access_type: selectedAccessType.toLowerCase() as 'avf' | 'avg' | 'tcc' | 'ncc',
+            location: '待完善',
+            established_date: dayjs().format('YYYY-MM-DD'),
+            notes: '由患者档案编辑窗口快速更新，请在血管通路管理完善详细信息',
+            is_current: true,
+          });
+        }
+      }
+
+      const data = await loadPatientData(id);
+      setPatient(data.patient);
+      setInfectionRows(data.infectionRows);
+      setLabRows(data.labRows);
+      setDialysisRows(data.dialysisRows);
+      setRecentLines(data.recentLines);
+      setEditOpen(false);
+      message.success('患者档案已更新');
+    } catch {
+      // 表单校验或请求错误由组件/拦截器处理
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <PageShell fullWidth>
+        <PageLoading tip="加载患者档案…" />
+      </PageShell>
+    );
+  }
+
+  if (loadError || !p) {
+    return (
+      <PageShell fullWidth>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/patients')} style={{ marginBottom: 16 }}>
+          返回列表
+        </Button>
+        <PageErrorResult title="无法加载患者" subTitle="患者不存在或网络异常，请返回列表重试。" />
+      </PageShell>
+    );
+  }
+
+  const st = HEADER_STATUS[p.status] || HEADER_STATUS.active;
+  const subtitle = `${formatGender(p.gender)} · ${p.age ?? '—'}岁 · ID: ${p.id} · ${p.primary_diagnosis}${p.ckd_stage ? ` · CKD ${p.ckd_stage} 期` : ''} · 透析龄 ${p.dialysis_age ?? '—'}`;
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 顶部操作栏 */}
       <div className="flex items-center" style={{ marginBottom: 16, gap: 12 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/patients')}>返回列表</Button>
-        <span style={{ fontSize: 13, color: '#7B92BC' }}>患者ID: {id || p.id}</span>
+        <span style={{ fontSize: 13, color: '#7B92BC' }}>患者ID: {id}</span>
       </div>
 
       {/* 患者基本信息条 */}
@@ -415,57 +849,264 @@ export default function PatientDetailPage() {
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-16">
-            <div className="hd-avatar hd-avatar-m" style={{ width: 52, height: 52, fontSize: 20, borderRadius: 12 }}>
-              {p.avatar}
+            <div
+              className={`hd-avatar ${p.gender === 'F' ? 'hd-avatar-f' : 'hd-avatar-m'}`}
+              style={{ width: 52, height: 52, fontSize: 20, borderRadius: 12 }}
+            >
+              {p.name.charAt(0)}
             </div>
             <div>
               <div className="flex items-center gap-8">
                 <span style={{ fontSize: 20, fontWeight: 700, color: '#0D1B3E' }}>{p.name}</span>
-                <span style={{ background: '#ECFDF5', color: '#059669', padding: '2px 9px', borderRadius: 20, fontSize: 13, fontWeight: 500 }}>在透</span>
-                <span style={{ background: '#E0F2FE', color: '#0369A1', border: '1px solid #7DD3FC', padding: '2px 9px', borderRadius: 20, fontSize: 13 }}>普通区</span>
+                <span style={{ background: st.bg, color: st.color, padding: '2px 9px', borderRadius: 20, fontSize: 13, fontWeight: 500 }}>
+                  {st.label}
+                </span>
+                <IsolationZoneTag zone={p.isolation_zone} />
               </div>
               <div style={{ fontSize: 13, color: '#7B92BC', marginTop: 4 }}>
-                {p.gender} · {p.age}岁 · ID: {p.id} · {p.diagnosis} · 透析龄 {p.dialysisAge}
+                {subtitle}
               </div>
             </div>
           </div>
           <Space size={8}>
+            {canEditPatient && <Button onClick={openEditModal}>编辑患者信息</Button>}
             <Button icon={<PrinterOutlined />} onClick={handlePrint}>打印档案</Button>
             <Button type="primary" onClick={() => navigate('/dialysis/entry')}>💉 录入今日透析</Button>
           </Space>
         </div>
       </Card>
 
-      {/* 知情同意书状态 */}
+      {/* 知情同意书状态（与患者档案 consent 字段同步） */}
       <div className="flex gap-8" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
-        {p.consents.map(c => (
-          <span key={c.name} style={{
-            background: c.status === 'signed' ? '#ECFDF5' : '#F1F5F9',
-            color: c.status === 'signed' ? '#059669' : '#64748B',
-            border: `1px solid ${c.status === 'signed' ? '#6EE7B7' : '#CBD5E1'}`,
-            padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 500,
-          }}>
-            {c.status === 'signed' ? `✅ ${c.name} 已签 (${c.date})` : `— ${c.name} 不适用`}
-          </span>
-        ))}
+        <span style={{
+          background: p.consent_dialysis ? '#ECFDF5' : '#F1F5F9',
+          color: p.consent_dialysis ? '#059669' : '#64748B',
+          border: `1px solid ${p.consent_dialysis ? '#6EE7B7' : '#CBD5E1'}`,
+          padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 500,
+        }}>
+          {p.consent_dialysis
+            ? `✅ 透析知情同意书已签${p.consent_dialysis_date ? ` (${p.consent_dialysis_date})` : ''}`
+            : '— 透析知情同意书未登记'}
+        </span>
+        <span style={{
+          background: p.consent_cvc ? '#ECFDF5' : '#F1F5F9',
+          color: p.consent_cvc ? '#059669' : '#64748B',
+          border: `1px solid ${p.consent_cvc ? '#6EE7B7' : '#CBD5E1'}`,
+          padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 500,
+        }}>
+          {p.consent_cvc
+            ? `✅ CVC置管同意书已签${p.consent_cvc_date ? ` (${p.consent_cvc_date})` : ''}`
+            : '— CVC置管同意书未登记 / 不适用'}
+        </span>
       </div>
 
-      {/* 7个标签页 */}
+      {/* 患者纵览标签页 */}
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: 'basic',     label: '📋 基本信息',  children: <TabBasic /> },
-          { key: 'rx',        label: '💊 透析处方',  children: <TabPrescription /> },
-          { key: 'vascular',  label: '🫀 血管通路',  children: <TabVascular /> },
-          { key: 'labs',      label: '🧪 检验结果',  children: <TabLabs /> },
-          { key: 'history',   label: '📖 透析历史',  children: <TabHistory /> },
-          { key: 'orders',    label: '📋 长期医嘱',  children: <TabOrders /> },
-          { key: 'infection', label: '🦠 传染病',    children: <TabInfection /> },
+          {
+            key: 'basic',
+            label: '📋 基本信息',
+            children: <TabBasic patient={p} infectionRows={infectionRows} recentLines={recentLines} />,
+          },
+          {
+            key: 'history',
+            label: '📖 透析历史',
+            children: <TabDialysisHistory rows={dialysisRows} />,
+          },
+          {
+            key: 'care',
+            label: '🧭 管理入口',
+            children: (
+              <TabCareCoordination
+                patient={p}
+                dialysisRows={dialysisRows}
+                infectionRows={infectionRows}
+                labRows={labRows}
+                onNavigate={navigate}
+                onOpenEditPatient={openEditModal}
+              />
+            ),
+          },
         ]}
         style={{ background: '#fff', padding: '0 0 16px', borderRadius: 10, border: '1px solid #DBEAFE' }}
         tabBarStyle={{ padding: '0 20px', borderBottom: '2px solid #DBEAFE' }}
       />
-    </div>
+
+      <Modal
+        title="编辑患者档案"
+        open={editOpen}
+        onCancel={() => setEditOpen(false)}
+        onOk={handleSaveEdit}
+        confirmLoading={editLoading}
+        okText="保存修改"
+        cancelText="取消"
+        width={760}
+        destroyOnClose
+      >
+        <Form<EditFormValues>
+          form={editForm}
+          layout="vertical"
+          initialValues={{ gender: 'M', dialysis_mode: 'HD' }}
+        >
+          <div className="grid-2" style={{ gap: '0 16px' }}>
+            <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
+              <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item name="gender" label="性别" rules={[{ required: true, message: '请选择性别' }]}>
+              <Select options={[{ value: 'M', label: '男' }, { value: 'F', label: '女' }]} />
+            </Form.Item>
+            <Form.Item name="dob" label="出生日期" rules={[{ required: true, message: '请选择出生日期' }]}>
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item name="dialysis_start_date" label="开始透析日期">
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" disabled />
+            </Form.Item>
+            <Form.Item
+              name="primary_diagnosis"
+              label="主要诊断"
+              style={{ gridColumn: 'span 2' }}
+              rules={[{ required: true, message: '请输入主要诊断' }]}
+            >
+              <Input maxLength={100} />
+            </Form.Item>
+            <Form.Item name="present_illness" label="现病史（可选）" style={{ gridColumn: 'span 2' }}>
+              <Input.TextArea rows={3} maxLength={500} showCount />
+            </Form.Item>
+            <Form.Item name="past_history" label="既往史（可选）" style={{ gridColumn: 'span 2' }}>
+              <Input.TextArea rows={3} maxLength={500} showCount />
+            </Form.Item>
+            <Form.Item name="ckd_stage" label="CKD 分期（可选）">
+              <InputNumber min={1} max={5} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="dialysis_mode" label="透析方式">
+              <Select options={[{ value: 'HD', label: 'HD' }, { value: 'HDF', label: 'HDF' }, { value: 'HP', label: 'HP' }]} />
+            </Form.Item>
+            <Form.Item name="comorbidities" label="合并症（可选）" style={{ gridColumn: 'span 2' }}>
+              <Select mode="tags" tokenSeparators={[',']} placeholder="输入后回车添加" />
+            </Form.Item>
+            <Form.Item name="id_card" label="身份证号（可选）">
+              <Input maxLength={18} />
+            </Form.Item>
+            <Form.Item name="phone" label="手机号（可选）">
+              <Input maxLength={20} />
+            </Form.Item>
+            <Form.Item name="family_contact_name" label="家属联系人姓名（可选）">
+              <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item name="family_contact_phone" label="家属联系电话（可选）">
+              <Input maxLength={20} />
+            </Form.Item>
+            <Form.Item name="address" label="家庭住址（可选）" style={{ gridColumn: 'span 2', marginBottom: 0 }}>
+              <Input.TextArea rows={2} />
+            </Form.Item>
+
+            <Form.Item
+              name="current_access_type"
+              label="血管通路（当前）"
+              style={{ gridColumn: 'span 2' }}
+              tooltip="用于本页提醒与知情同意联动；详细通路档案请在“血管通路管理”维护"
+            >
+              <Select
+                options={[
+                  { value: 'none', label: '无需置管/暂无通路记录' },
+                  { value: 'AVF', label: 'AVF（自体动静脉内瘘）' },
+                  { value: 'AVG', label: 'AVG（人工血管内瘘）' },
+                  { value: 'TCC', label: 'TCC（长期导管）' },
+                  { value: 'NCC', label: 'NCC（临时导管）' },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label="知情同意书"
+              style={{ gridColumn: 'span 2', marginTop: 8, marginBottom: 8 }}
+            >
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <div
+                  style={{
+                    border: '1px solid #DBEAFE',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    background: '#FAFCFF',
+                  }}
+                >
+                  <Form.Item name="consent_dialysis" valuePropName="checked" noStyle>
+                    <Checkbox>已签署透析知情同意书</Checkbox>
+                  </Form.Item>
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prev, cur) => prev.consent_dialysis !== cur.consent_dialysis}
+                  >
+                    {({ getFieldValue }) =>
+                      getFieldValue('consent_dialysis') ? (
+                        <Form.Item
+                          name="consent_dialysis_date"
+                          label="透析同意书签署日期"
+                          style={{ marginTop: 8, marginBottom: 0 }}
+                        >
+                          <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                        </Form.Item>
+                      ) : null
+                    }
+                  </Form.Item>
+                </div>
+
+                <div
+                  style={{
+                    border: '1px solid #DBEAFE',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    background: '#FAFCFF',
+                  }}
+                >
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prev, cur) => prev.current_access_type !== cur.current_access_type || prev.consent_cvc !== cur.consent_cvc}
+                  >
+                    {({ getFieldValue }) => {
+                      const accessType = getFieldValue('current_access_type');
+                      const showCvcConsent = accessType === 'TCC' || accessType === 'NCC';
+                      if (!showCvcConsent) {
+                        return (
+                          <div style={{ fontSize: 12.5, color: '#7B92BC', lineHeight: 1.7 }}>
+                            当前选择为非导管通路，无需签署 CVC 置管同意书。
+                          </div>
+                        );
+                      }
+                      const cvcLabel = accessType === 'TCC' ? '长期导管（TCC）置管同意书' : '临时导管（NCC）置管同意书';
+                      return (
+                        <>
+                          <Form.Item name="consent_cvc" valuePropName="checked" noStyle>
+                            <Checkbox>已签署{cvcLabel}</Checkbox>
+                          </Form.Item>
+                          <Form.Item
+                            noStyle
+                            shouldUpdate={(p, c) => p.consent_cvc !== c.consent_cvc}
+                          >
+                            {({ getFieldValue: getValue }) =>
+                              getValue('consent_cvc') ? (
+                                <Form.Item
+                                  name="consent_cvc_date"
+                                  label={`${cvcLabel}签署日期`}
+                                  style={{ marginTop: 8, marginBottom: 0 }}
+                                >
+                                  <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                                </Form.Item>
+                              ) : null
+                            }
+                          </Form.Item>
+                        </>
+                      );
+                    }}
+                  </Form.Item>
+                </div>
+              </Space>
+            </Form.Item>
+          </div>
+        </Form>
+      </Modal>
+    </PageShell>
   );
 }

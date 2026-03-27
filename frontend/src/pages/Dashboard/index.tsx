@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 // ── 静态演示数据 ──────────────────────────────────────────
 const STATS = {
@@ -200,7 +201,7 @@ export default function DashboardPage() {
       });
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* ── 4个统计卡 ── */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card teal">
@@ -326,7 +327,9 @@ export default function DashboardPage() {
                       size="small"
                       type={r.status === 'critical' ? 'default' : 'primary'}
                       danger={r.status === 'critical'}
-                      onClick={() => navigate('/dialysis/entry')}
+                      onClick={() =>
+                        navigate(r.status === 'critical' ? '/alerts' : '/dialysis/entry')
+                      }
                     >
                       {r.status === 'critical' ? '处理' : '记录'}
                     </Button>
@@ -693,6 +696,6 @@ export default function DashboardPage() {
           </div>
         )}
       </Card>
-    </div>
+    </PageShell>
   );
 }

@@ -10,6 +10,7 @@ import LoginPage from './pages/Login';
 import DashboardPage from './pages/Dashboard';
 import PatientListPage from './pages/Patients/PatientList';
 import PatientDetailPage from './pages/Patients/PatientDetail';
+import PatientCreatePage from './pages/Patients/PatientCreate';
 import DialysisEntryPage from './pages/Dialysis/DialysisEntry';
 import PrescriptionWorkspacePage from './pages/Prescription/PrescriptionWorkspace';
 import LongTermOrderListPage from './pages/Orders/LongTermOrderList';
@@ -21,6 +22,7 @@ import SchedulePage from './pages/Schedule/SchedulePage';
 import DevicesPage from './pages/Devices/DevicesPage';
 import InfectionPage from './pages/Infection/InfectionPage';
 import CQIPage from './pages/CQI/CQIPage';
+import PageShell from './components/PageShell/PageShell';
 
 dayjs.locale('zh-cn');
 
@@ -75,6 +77,7 @@ export default function App() {
             }>
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard"       element={<DashboardPage />} />
+              <Route path="patients/new"    element={<PatientCreatePage />} />
               <Route path="patients"        element={<PatientListPage />} />
               <Route path="patients/:id"    element={<PatientDetailPage />} />
               <Route path="dialysis/entry"  element={<DialysisEntryPage />} />
@@ -101,10 +104,12 @@ export default function App() {
 
 function AdminUsersPage() {
   return (
-    <div style={{ padding: 40, textAlign: 'center', color: '#7B92BC' }}>
-      <div style={{ fontSize: 48, marginBottom: 16 }}>👤</div>
-      <h3 style={{ color: '#0D1B3E' }}>用户管理</h3>
-      <p>此功能将在后续版本中上线</p>
-    </div>
+    <PageShell>
+      <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px 0' }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }} aria-hidden>👤</div>
+        <p style={{ fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>用户管理</p>
+        <p>此功能将在后续版本中上线</p>
+      </div>
+    </PageShell>
   );
 }

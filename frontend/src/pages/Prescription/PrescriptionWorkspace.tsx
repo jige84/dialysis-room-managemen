@@ -1,12 +1,33 @@
 import { useState } from 'react';
 import { Card, Select, Button, InputNumber, Input, Form, Divider, Table, Modal, message, Tag } from 'antd';
-import { PlusOutlined, HistoryOutlined } from '@ant-design/icons';
+import { HistoryOutlined } from '@ant-design/icons';
+import PageShell from '../../components/PageShell/PageShell';
 
 const PATIENTS = [
-  { value: 'zhang', label: '张国华 — 男/56岁/糖尿病肾病/AVF', info: '透析龄 4年7月 · 主管医生：任计阁' },
-  { value: 'wang',  label: '王建军 — 男/71岁/高血压肾病/AVF', info: '透析龄 8年3月 · 主管医生：任计阁' },
-  { value: 'liu',   label: '刘明远 — 男/65岁/多囊肾/LTCC',   info: '透析龄 6年0月 · 主管医生：任计阁' },
-  { value: 'zhao',  label: '赵丽萍 — 女/48岁/糖尿病肾病/AVF', info: '透析龄 1年9月 · 主管医生：任计阁' },
+  {
+    value: 'zhang',
+    label: '张国华 — 男/56岁/糖尿病肾病/AVF',
+    info: '透析龄 4年7月 · 主管医生：任计阁',
+    defaults: { frequency: 3, duration: 4.0, mode: 'HD', dialyzer: 'FX80', bloodFlow: 250, dialysateFlow: 500, anticoagulant: 'heparin', heparinFirst: 3000, heparinMaint: 500, na: 138, k: 2.0, ca: 1.5, temp: 36.5, dryWeight: 62.0, preAssessSbp: 140, preAssessDbp: 80, preAssessPulse: 78, preAssessTemp: 36.5, shift: 'pm', machineNo: '5号机' },
+  },
+  {
+    value: 'wang',
+    label: '王建军 — 男/71岁/高血压肾病/AVF',
+    info: '透析龄 8年3月 · 主管医生：任计阁',
+    defaults: { frequency: 3, duration: 4.0, mode: 'HD', dialyzer: 'FX80', bloodFlow: 240, dialysateFlow: 500, anticoagulant: 'heparin', heparinFirst: 3000, heparinMaint: 500, na: 138, k: 2.0, ca: 1.5, temp: 36.5, dryWeight: 60.0, preAssessSbp: 142, preAssessDbp: 82, preAssessPulse: 76, preAssessTemp: 36.6, shift: 'pm', machineNo: '8号机' },
+  },
+  {
+    value: 'liu',
+    label: '刘明远 — 男/65岁/多囊肾/LTCC',
+    info: '透析龄 6年0月 · 主管医生：任计阁',
+    defaults: { frequency: 3, duration: 4.0, mode: 'HD', dialyzer: 'FX80', bloodFlow: 220, dialysateFlow: 500, anticoagulant: 'heparin', heparinFirst: 3000, heparinMaint: 500, na: 140, k: 2.0, ca: 1.5, temp: 36.5, dryWeight: 50.0, preAssessSbp: 145, preAssessDbp: 82, preAssessPulse: 84, preAssessTemp: 36.7, shift: 'pm', machineNo: '7号机' },
+  },
+  {
+    value: 'zhao',
+    label: '赵丽萍 — 女/48岁/糖尿病肾病/AVF',
+    info: '透析龄 1年9月 · 主管医生：任计阁',
+    defaults: { frequency: 3, duration: 4.0, mode: 'HD', dialyzer: 'FX60', bloodFlow: 230, dialysateFlow: 500, anticoagulant: 'lmwh', heparinFirst: 3000, heparinMaint: 500, na: 138, k: 2.0, ca: 1.5, temp: 36.5, dryWeight: 52.0, preAssessSbp: 136, preAssessDbp: 76, preAssessPulse: 82, preAssessTemp: 36.6, shift: 'pm', machineNo: '6号机' },
+  },
 ];
 
 const PRESCRIPTION_HISTORY = [
@@ -22,6 +43,7 @@ export default function PrescriptionWorkspacePage() {
   const [showConfirm, setShowConfirm] = useState(false);
 
   const patientInfo = PATIENTS.find(p => p.value === selectedPatient);
+  const getPatientDefaults = (patientValue: string) => PATIENTS.find(p => p.value === patientValue)?.defaults;
 
   const handleSave = () => {
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
@@ -34,7 +56,7 @@ export default function PrescriptionWorkspacePage() {
   };
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 患者选择 */}
       <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
@@ -51,7 +73,13 @@ export default function PrescriptionWorkspacePage() {
             <Select
               placeholder="请选择患者…"
               value={selectedPatient || undefined}
-              onChange={v => { setSelectedPatient(v); form.resetFields(); }}
+              onChange={v => {
+                setSelectedPatient(v);
+                const defaults = getPatientDefaults(v);
+                if (defaults) {
+                  form.setFieldsValue(defaults);
+                }
+              }}
               options={PATIENTS.map(p => ({ value: p.value, label: p.label }))}
               style={{ width: '100%' }}
               showSearch
@@ -71,7 +99,7 @@ export default function PrescriptionWorkspacePage() {
 
       {selectedPatient && (
         <Form form={form} layout="vertical" size="middle"
-          initialValues={{ frequency: 3, duration: 4.0, mode: 'HD', dialyzer: 'FX80', bloodFlow: 250, dialysateFlow: 500, anticoagulant: 'heparin', heparinFirst: 3000, heparinMaint: 500, na: 138, k: 2.0, ca: 1.5, temp: 36.5, dryWeight: 62.0 }}
+          initialValues={getPatientDefaults(selectedPatient)}
         >
           {/* 基本处方参数 */}
           <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
@@ -150,6 +178,39 @@ export default function PrescriptionWorkspacePage() {
             </div>
           </Card>
 
+          {/* 透析前评估（由医生维护） */}
+          <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
+            styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
+            title={<span style={{ fontWeight: 600, color: '#0369A1' }}>📊 透析前评估（医生填写）</span>}
+          >
+            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
+              <Form.Item label="透前收缩压 (mmHg)" name="preAssessSbp">
+                <InputNumber min={60} max={250} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透前舒张压 (mmHg)" name="preAssessDbp">
+                <InputNumber min={40} max={160} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透前脉搏 (次/分)" name="preAssessPulse">
+                <InputNumber min={40} max={200} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透前体温 (℃)" name="preAssessTemp">
+                <InputNumber min={35} max={42} step={0.1} style={{ width: '100%' }} />
+              </Form.Item>
+            </div>
+            <div className="grid-4" style={{ gap: 16 }}>
+              <Form.Item label="班次" name="shift">
+                <Select options={[
+                  { value: 'am', label: '上午班' },
+                  { value: 'pm', label: '下午班' },
+                  { value: 'eve', label: '晚班' },
+                ]} />
+              </Form.Item>
+              <Form.Item label="默认机器编号" name="machineNo">
+                <Input placeholder="如：5号机" />
+              </Form.Item>
+            </div>
+          </Card>
+
           {/* 处方备注 */}
           <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
             styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
@@ -213,6 +274,6 @@ export default function PrescriptionWorkspacePage() {
           </div>
         </div>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

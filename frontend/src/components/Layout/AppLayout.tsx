@@ -7,6 +7,7 @@ import { authApi } from '../../api/auth';
 import alertsApi from '../../api/alerts';
 import { message } from 'antd';
 import dayjs from 'dayjs';
+import { getPageTitle } from '../../utils/pageTitle';
 
 const ROLE_LABELS: Record<string, string> = {
   admin: '超级管理员',
@@ -14,23 +15,6 @@ const ROLE_LABELS: Record<string, string> = {
   nurse: '责任护士',
   doctor: '主治医生',
   quality: '质控人员',
-};
-
-const PAGE_TITLES: Record<string, string> = {
-  '/dashboard': '今日概览',
-  '/patients': '患者档案',
-  '/dialysis/entry': '透析记录录入',
-  '/prescription': '透析处方管理',
-  '/orders': '长期医嘱单',
-  '/labs': '检验结果管理',
-  '/vascular': '血管通路管理',
-  '/infection': '传染病管理',
-  '/alerts': '预警中心',
-  '/reports': '质控上报报表',
-  '/cqi': 'CQI持续改进',
-  '/schedule': '排班管理',
-  '/devices': '设备耗材',
-  '/admin/users': '用户管理',
 };
 
 type NavItem = { key: string; icon: string; label: string; badge?: number };
@@ -123,9 +107,7 @@ export default function AppLayout() {
     return location.pathname.startsWith(key);
   };
 
-  const currentTitle = Object.entries(PAGE_TITLES).find(([key]) =>
-    location.pathname === key || (key !== '/' && location.pathname.startsWith(key))
-  )?.[1] ?? '血液透析室管理系统';
+  const currentTitle = getPageTitle(location.pathname);
 
   const userInitial = user?.real_name?.charAt(0) ?? '?';
 
@@ -139,7 +121,9 @@ export default function AppLayout() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
       {/* ── 侧边栏 ── */}
-      <aside style={{
+      <aside
+        aria-label="系统主导航侧栏"
+        style={{
         width: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH,
         background: 'linear-gradient(180deg, #0F1C3F 0%, #162352 60%, #0D2060 100%)',
         boxShadow: '2px 0 20px rgba(14,165,233,0.08)',
@@ -153,7 +137,8 @@ export default function AppLayout() {
         overflow: 'hidden',
         transition: 'width 0.25s',
         flexShrink: 0,
-      }}>
+      }}
+      >
         {/* 品牌标识 */}
         <div className="hd-sidebar-brand">
           <div className="hd-sidebar-brand-icon">🩸</div>
@@ -170,7 +155,7 @@ export default function AppLayout() {
         </div>
 
         {/* 导航菜单 */}
-        <nav className="hd-sidebar-nav">
+        <nav id="sidebar-nav" className="hd-sidebar-nav" aria-label="主导航">
           {navSectionsWithBadge.map(section => (
             <div key={section.title}>
               {!collapsed && (
@@ -182,8 +167,17 @@ export default function AppLayout() {
                 const navItem = (
                   <div
                     key={item.key}
+                    role="button"
+                    tabIndex={0}
                     className={`hd-nav-item${active ? ' active' : ''}`}
+                    aria-current={active ? 'page' : undefined}
                     onClick={() => navigate(item.key)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        navigate(item.key);
+                      }
+                    }}
                     style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}
                   >
                     <span className="hd-nav-icon">{item.icon}</span>
@@ -260,12 +254,28 @@ export default function AppLayout() {
           flexShrink: 0,
         }}>
           {/* 折叠按钮 */}
-          <span
-            style={{ fontSize: 18, cursor: 'pointer', color: '#3D5280', flexShrink: 0 }}
+          <button
+            type="button"
+            className="hd-focus-ring"
+            aria-expanded={!collapsed}
+            aria-controls="sidebar-nav"
+            aria-label={collapsed ? '展开侧边导航' : '收起侧边导航'}
+            style={{
+              fontSize: 18,
+              cursor: 'pointer',
+              color: '#3D5280',
+              flexShrink: 0,
+              background: 'none',
+              border: 'none',
+              padding: 4,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
             onClick={() => setCollapsed(!collapsed)}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-          </span>
+          </button>
 
           {/* 当前页标题 */}
           <h1 className="hd-topbar-title" style={{ flex: 1 }}>{currentTitle}</h1>
@@ -293,7 +303,10 @@ export default function AppLayout() {
               offset={[-2, 2]}
               classNames={{ indicator: pendingAlerts > 0 ? 'hd-bell-badge' : '' }}
             >
-              <div
+              <button
+                type="button"
+                className="hd-focus-ring"
+                aria-label={pendingAlerts > 0 ? `预警中心，${pendingAlerts} 条待处理` : '预警中心'}
                 style={{
                   width: 36, height: 36, borderRadius: '50%',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -305,7 +318,7 @@ export default function AppLayout() {
                 onClick={() => navigate('/alerts')}
               >
                 <BellOutlined style={{ color: pendingAlerts > 0 ? '#F43F5E' : '#0369A1' }} />
-              </div>
+              </button>
             </Badge>
 
             <div style={{ width: 1, height: 20, background: '#DBEAFE' }} />
@@ -334,12 +347,8 @@ export default function AppLayout() {
           </Space>
         </header>
 
-        {/* 页面内容 */}
-        <main style={{
-          padding: 24,
-          background: '#F0F7FF',
-          flex: 1,
-        }}>
+        {/* 页面内容：内边距由 PageShell 统一承担 */}
+        <main className="hd-main-outlet" id="main-content">
           <Outlet />
         </main>
       </div>

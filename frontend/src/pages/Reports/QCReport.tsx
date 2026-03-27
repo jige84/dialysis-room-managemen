@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Card, Select, Button, Table, Divider, message, Modal } from 'antd';
+import { Card, Select, Button, message, Modal } from 'antd';
 import { FileExcelOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => {
   const d = dayjs().subtract(11 - i, 'month');
@@ -107,7 +108,7 @@ export default function QCReportPage() {
   };
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 月份选择 + 操作 */}
       <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }} styles={{ body: { padding: '16px 20px' } }}>
         <div className="flex items-center gap-16">
@@ -252,6 +253,6 @@ export default function QCReportPage() {
           </div>
         </div>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

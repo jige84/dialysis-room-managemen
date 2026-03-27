@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Card, Select, Button, Table, Tabs, Modal, Form, Input, DatePicker, message, Checkbox } from 'antd';
+import { Card, Select, Button, Table, Tabs, Modal, Form, Input, DatePicker, message } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 const PATIENTS = [
   { value: 'zhang', label: '张国华', access: 'AVF', zone: 'normal' },
@@ -93,7 +94,13 @@ export default function VascularAccessPage() {
     : { label: '低风险', color: '#059669', bg: '#ECFDF5' }
     : null;
 
-  if (!detail) return <div style={{ padding: 40, textAlign: 'center', color: '#7B92BC' }}>暂无该患者的血管通路数据</div>;
+  if (!detail) {
+    return (
+      <PageShell>
+        <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px 0' }}>暂无该患者的血管通路数据</div>
+      </PageShell>
+    );
+  }
 
   const assessmentColumns = [
     { title: '评估日期', dataIndex: 'date' },
@@ -123,7 +130,7 @@ export default function VascularAccessPage() {
   ];
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 患者选择 */}
       <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }} styles={{ body: { padding: '16px 20px' } }}>
         <div className="flex items-center gap-16">
@@ -289,6 +296,6 @@ export default function VascularAccessPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

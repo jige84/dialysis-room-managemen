@@ -10,6 +10,28 @@ const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const { success, created, error, notFound } = require('../utils/response');
 
+/**
+ * 请求体中的别名 → 数据库 infection_screenings.test_type（见 migrations/013）
+ */
+function normalizeTestType(raw) {
+  if (!raw) return null;
+  const s = String(raw).toLowerCase();
+  const map = {
+    hbsag: 'hbsag',
+    hbvdna: 'hbvdna',
+    hcv: 'hcvab',
+    hcvab: 'hcvab',
+    hcvrna: 'hcvrna',
+    hiv: 'hiv',
+    tp: 'syphilis_tppa',
+    syphilis: 'syphilis_tppa',
+    syphilis_tppa: 'syphilis_tppa',
+    syphilis_rpr: 'syphilis_rpr',
+    chest_xray: 'chest_xray',
+  };
+  return map[s] || s;
+}
+
 // ── 感染筛查 ──────────────────────────────────────────────
 
 // GET /api/infection/screenings/:patientId - 某患者筛查历史
@@ -20,7 +42,7 @@ router.get('/screenings/:patientId', auth, async (req, res, next) => {
        FROM infection_screenings is2
        LEFT JOIN users u ON is2.entered_by = u.id
        WHERE is2.patient_id = $1
-       ORDER BY is2.screen_date DESC`,
+       ORDER BY is2.test_date DESC`,
       [req.params.patientId]
     );
     return success(res, rows);
@@ -31,11 +53,16 @@ router.get('/screenings/:patientId', auth, async (req, res, next) => {
 router.get('/screenings/:patientId/latest', auth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT DISTINCT ON (screen_type)
-         id, screen_type, screen_date, result, notes
+      `SELECT DISTINCT ON (test_type)
+         id,
+         test_type AS screen_type,
+         test_date AS screen_date,
+         result,
+         notes,
+         next_due_date
        FROM infection_screenings
        WHERE patient_id = $1
-       ORDER BY screen_type, screen_date DESC`,
+       ORDER BY test_type, test_date DESC`,
       [req.params.patientId]
     );
     return success(res, rows);
@@ -47,14 +74,14 @@ router.get('/screenings/overdue', auth, rbac(['admin','head_nurse']), async (req
   try {
     const { rows } = await pool.query(
       `WITH latest AS (
-         SELECT DISTINCT ON (is2.patient_id, is2.screen_type)
-           p.id as patient_id, p.name, is2.screen_type, is2.screen_date,
+         SELECT DISTINCT ON (is2.patient_id, is2.test_type)
+           p.id as patient_id, p.name, is2.test_type as screen_type, is2.test_date as screen_date,
            is2.result,
-           EXTRACT(DAY FROM NOW() - is2.screen_date) as days_since
+           EXTRACT(DAY FROM NOW() - is2.test_date) as days_since
          FROM patients p
          LEFT JOIN infection_screenings is2 ON is2.patient_id = p.id
          WHERE p.status = 'active'
-         ORDER BY is2.patient_id, is2.screen_type, is2.screen_date DESC
+         ORDER BY is2.patient_id, is2.test_type, is2.test_date DESC
        )
        SELECT * FROM latest WHERE days_since > 166 OR screen_date IS NULL
        ORDER BY days_since DESC NULLS FIRST`
@@ -71,22 +98,29 @@ router.post('/screenings/:patientId', auth, async (req, res, next) => {
 
     const results = [];
     for (const item of items) {
-      const { screen_type, result, screen_date, notes } = item;
-      if (!screen_type || !result) continue;
+      const { screen_type, test_type, result, screen_date, test_date, notes } = item;
+      const tt = normalizeTestType(test_type || screen_type);
+      if (!tt || !result) continue;
 
       const { rows } = await pool.query(
         `INSERT INTO infection_screenings
-           (patient_id, screen_type, result, screen_date, notes, entered_by)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [req.params.patientId, screen_type, result,
-         screen_date || new Date().toISOString().slice(0, 10),
-         notes, req.user.id]
+           (patient_id, test_type, result, test_date, notes, entered_by, is_positive)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [
+          req.params.patientId,
+          tt,
+          result,
+          test_date || screen_date || new Date().toISOString().slice(0, 10),
+          notes,
+          req.user.id,
+          result === 'positive',
+        ]
       );
       results.push(rows[0]);
 
       // 如果HBV/HCV阳性，自动更新患者隔离区
-      if ((screen_type === 'hbsag' || screen_type === 'hcv') && result === 'positive') {
-        const zone = screen_type === 'hbsag' ? 'hbv' : 'hcv';
+      if ((tt === 'hbsag' || tt === 'hcvab') && result === 'positive') {
+        const zone = tt === 'hbsag' ? 'hbv' : 'hcv';
         await pool.query(
           `UPDATE patients SET isolation_zone = $1 WHERE id = $2 AND isolation_zone = 'normal'`,
           [zone, req.params.patientId]

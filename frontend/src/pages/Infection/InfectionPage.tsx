@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Card, Button, Table, Input, Select, Modal, Form, DatePicker, message, Tabs } from 'antd';
 import { SearchOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 interface PatientInfection {
   key: string;
@@ -167,7 +168,7 @@ export default function InfectionPage() {
   const hcvPatients   = INFECTION_DATA.filter(p => p.zone === 'hcv');
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 概览 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card red">
@@ -363,6 +364,6 @@ export default function InfectionPage() {
           </div>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

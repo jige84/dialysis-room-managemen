@@ -4,6 +4,7 @@
  */
 import axios, { type AxiosResponse } from 'axios';
 import { message } from 'antd';
+import { getApiBaseUrl } from '../config/apiBaseUrl';
 
 export interface ApiResponse<T = unknown> {
   code: number;
@@ -19,7 +20,7 @@ export interface PagedData<T> {
 }
 
 const request = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: getApiBaseUrl(),
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 });

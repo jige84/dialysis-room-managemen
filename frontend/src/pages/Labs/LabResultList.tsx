@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Card, Select, Button, Table, Input, Tooltip, Modal, Form, DatePicker, InputNumber, message } from 'antd';
+import { Card, Select, Button, Table, Input, Tooltip, Modal, Form, DatePicker, message } from 'antd';
 import { SearchOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
+import { PageEmpty } from '../../components/PageStates/PageStates';
 
 interface LabItem {
   key: string;
@@ -113,7 +115,7 @@ export default function LabResultListPage() {
   ];
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 概览统计 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card red">
@@ -192,13 +194,16 @@ export default function LabResultListPage() {
 
       {/* 检验结果表格 */}
       <Card style={{ border: '1px solid #DBEAFE' }} styles={{ body: { padding: 0 } }}>
+        <div className="hd-table-responsive">
         <Table
           dataSource={filtered}
           columns={columns}
           size="small"
+          locale={{ emptyText: <PageEmpty description="无符合条件的检验记录" /> }}
           pagination={{ pageSize: 15, showTotal: total => `共 ${total} 条` }}
           rowClassName={r => r.status === 'critical' ? 'row-hcv' : r.status === 'high' ? 'row-hbv' : ''}
         />
+        </div>
       </Card>
 
       {/* 录入弹窗 */}
@@ -241,6 +246,6 @@ export default function LabResultListPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

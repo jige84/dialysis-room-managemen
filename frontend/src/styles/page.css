@@ -1,0 +1,67 @@
+/* =====================================================================
+   页面壳与内容区 — 与 AppLayout main 配合（main 无 padding，由 PageShell 承担）
+===================================================================== */
+:root {
+  --hd-page-padding: 24px;
+  --hd-content-max-width: 1600px;
+}
+
+.hd-main-outlet {
+  min-height: calc(100vh - var(--header-height));
+  background: var(--bg);
+}
+
+.hd-page-shell {
+  box-sizing: border-box;
+  padding: var(--hd-page-padding);
+  width: 100%;
+  max-width: var(--hd-content-max-width);
+  margin: 0 auto;
+}
+
+.hd-page-shell--full {
+  max-width: none;
+}
+
+.hd-page-shell__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.hd-page-shell__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.hd-page-shell__extra {
+  flex-shrink: 0;
+}
+
+/* 表格横向滚动：窄屏不出现布局撑破 */
+.hd-table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --hd-page-padding: 16px;
+  }
+
+  .hd-page-shell__header {
+    margin-bottom: 12px;
+  }
+}
+
+/* 焦点可见性（侧栏按钮等由组件加 class） */
+.hd-focus-ring:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

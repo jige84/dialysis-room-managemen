@@ -11,6 +11,9 @@ const { encrypt, decrypt, maskIdCard, maskPhone } = require('../utils/encrypt');
 const { calcAge, formatDuration } = require('../utils/dateUtils');
 const { success, created, paginated, error, notFound } = require('../utils/response');
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isValidUuid = (value) => typeof value === 'string' && UUID_REGEX.test(value);
+
 // GET /api/patients
 router.get('/', auth, async (req, res, next) => {
   try {
@@ -86,6 +89,8 @@ router.get('/stats', auth, async (req, res, next) => {
 // GET /api/patients/:id
 router.get('/:id', auth, async (req, res, next) => {
   try {
+    if (!isValidUuid(req.params.id)) return error(res, '患者ID格式无效', 400);
+
     const { rows } = await pool.query(
       `SELECT p.*,
               pr.id as rx_id, pr.frequency_per_week, pr.duration_hours, pr.dialyzer_model,
@@ -144,7 +149,7 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
   try {
     const {
       name, gender, dob, id_card, phone, family_contact, address,
-      primary_diagnosis, ckd_stage, comorbidities,
+      primary_diagnosis, present_illness, past_history, ckd_stage, comorbidities,
       dialysis_start_date, dialysis_mode, isolation_zone,
       consent_dialysis, consent_dialysis_date
     } = req.body;
@@ -158,12 +163,12 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
          name, gender, dob,
          id_card_encrypted, phone_encrypted,
          family_contact, address,
-         primary_diagnosis, ckd_stage, comorbidities,
+         primary_diagnosis, present_illness, past_history, ckd_stage, comorbidities,
          dialysis_start_date, dialysis_mode,
          isolation_zone,
          consent_dialysis, consent_dialysis_date,
          created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING id, name, gender, dob, primary_diagnosis, status, dialysis_start_date`,
       [
         name, gender, dob,
@@ -171,7 +176,7 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
         phone ? encrypt(phone) : null,
         family_contact ? JSON.stringify(family_contact) : null,
         address,
-        primary_diagnosis, ckd_stage,
+        primary_diagnosis, present_illness || null, past_history || null, ckd_stage,
         comorbidities || null,
         dialysis_start_date, dialysis_mode || 'HD',
         isolation_zone || 'normal',
@@ -188,9 +193,12 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
 // patients:update 权限：admin, doctor（规范不含 head_nurse）
 router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE'), async (req, res, next) => {
   try {
+    if (!isValidUuid(req.params.id)) return error(res, '患者ID格式无效', 400);
+
     const {
       name, gender, dob, id_card, phone, family_contact, address,
-      primary_diagnosis, ckd_stage, comorbidities, dialysis_mode
+      primary_diagnosis, present_illness, past_history, ckd_stage, comorbidities, dialysis_mode,
+      consent_dialysis, consent_dialysis_date, consent_cvc, consent_cvc_date
     } = req.body;
 
     const { rows } = await pool.query(
@@ -203,20 +211,38 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
          family_contact = COALESCE($6::jsonb, family_contact),
          address = COALESCE($7, address),
          primary_diagnosis = COALESCE($8, primary_diagnosis),
-         ckd_stage = COALESCE($9, ckd_stage),
-         comorbidities = COALESCE($10, comorbidities),
-         dialysis_mode = COALESCE($11, dialysis_mode),
+         present_illness = COALESCE($9, present_illness),
+         past_history = COALESCE($10, past_history),
+         ckd_stage = COALESCE($11, ckd_stage),
+         comorbidities = COALESCE($12, comorbidities),
+         dialysis_mode = COALESCE($13, dialysis_mode),
+         consent_dialysis = COALESCE($14, consent_dialysis),
+         consent_dialysis_date = CASE
+           WHEN $14 = false THEN NULL
+           WHEN $15::date IS NOT NULL THEN $15
+           ELSE consent_dialysis_date
+         END,
+         consent_cvc = COALESCE($16, consent_cvc),
+         consent_cvc_date = CASE
+           WHEN $16 = false THEN NULL
+           WHEN $17::date IS NOT NULL THEN $17
+           ELSE consent_cvc_date
+         END,
          updated_at = NOW()
-       WHERE id = $12
+       WHERE id = $18
        RETURNING id, name, gender, status`,
       [
         name, gender, dob,
         id_card ? encrypt(id_card) : null,
         phone ? encrypt(phone) : null,
         family_contact ? JSON.stringify(family_contact) : null,
-        address, primary_diagnosis, ckd_stage,
+        address, primary_diagnosis, present_illness || null, past_history || null, ckd_stage,
         comorbidities || null,
         dialysis_mode,
+        consent_dialysis ?? null,
+        consent_dialysis_date || null,
+        consent_cvc ?? null,
+        consent_cvc_date || null,
         req.params.id
       ]
     );
@@ -230,6 +256,8 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
 // patients:update 权限：admin, doctor
 router.patch('/:id/status', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE'), async (req, res, next) => {
   try {
+    if (!isValidUuid(req.params.id)) return error(res, '患者ID格式无效', 400);
+
     const { status, status_note, status_changed_at } = req.body;
     const validStatuses = ['active', 'suspended', 'transferred', 'transplanted', 'deceased'];
     if (!validStatuses.includes(status)) {
@@ -249,6 +277,8 @@ router.patch('/:id/status', auth, rbac(['admin', 'doctor']), auditLog('patients'
 // PATCH /api/patients/:id/isolation
 router.patch('/:id/isolation', auth, rbac(['admin', 'head_nurse']), auditLog('patients', 'UPDATE'), async (req, res, next) => {
   try {
+    if (!isValidUuid(req.params.id)) return error(res, '患者ID格式无效', 400);
+
     const { isolation_zone } = req.body;
     const valid = ['normal', 'hbv', 'hcv', 'observation', 'last_shift'];
     if (!valid.includes(isolation_zone)) return error(res, '无效的隔离区域');

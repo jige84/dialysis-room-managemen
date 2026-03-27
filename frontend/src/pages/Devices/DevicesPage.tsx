@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Card, Table, Button, Select, Input, Modal, Form, InputNumber, Tabs, Tag, message } from 'antd';
+import { Card, Table, Button, Select, Input, Modal, Form, InputNumber, Tabs, message } from 'antd';
 import { SearchOutlined, PlusOutlined, ToolOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 const MACHINES = [
   { key: '1',  no: '1号机',    brand: 'B.Braun',  model: 'Dialog+',  zone: 'normal', status: 'running',    lastMaint: '2026-02-15', nextMaint: '2026-05-15', sessions: 1248, compliant: true },
@@ -100,7 +101,7 @@ export default function DevicesPage() {
     },
     {
       title: '操作',
-      render: (_: unknown, r: typeof MACHINES[0]) => (
+      render: () => (
         <Button size="small" icon={<ToolOutlined />} onClick={() => setShowMaintModal(true)}>记录维护</Button>
       ),
     },
@@ -135,7 +136,7 @@ export default function DevicesPage() {
   ];
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 概览 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card teal">
@@ -270,6 +271,6 @@ export default function DevicesPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

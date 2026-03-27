@@ -223,13 +223,13 @@ router.post('/',
       }
 
       // 传染病初筛完整性校验（规程第3章第1节：新入患者必须4项全部完成）
-      const REQUIRED_SCREENS = ['hbsag', 'hcv', 'hiv', 'tp'];
+      const REQUIRED_SCREENS = ['hbsag', 'hcvab', 'hiv', 'syphilis_tppa'];
       const { rows: screenRows } = await pool.query(
-        `SELECT DISTINCT screen_type FROM infection_screenings
-         WHERE patient_id = $1 AND screen_type = ANY($2)`,
+        `SELECT DISTINCT test_type FROM infection_screenings
+         WHERE patient_id = $1 AND test_type = ANY($2)`,
         [patient_id, REQUIRED_SCREENS]
       );
-      const completedScreens = screenRows.map(r => r.screen_type);
+      const completedScreens = screenRows.map(r => r.test_type);
       const missingScreens = REQUIRED_SCREENS.filter(s => !completedScreens.includes(s));
       if (missingScreens.length > 0) {
         return error(res,

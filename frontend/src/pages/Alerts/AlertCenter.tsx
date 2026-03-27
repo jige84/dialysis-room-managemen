@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Card, Button, Select, Input, Table, Modal, Form, message } from 'antd';
+import { Card, Button, Select, Input, Modal, Form, message } from 'antd';
 import { SearchOutlined, CheckOutlined } from '@ant-design/icons';
+import PageShell from '../../components/PageShell/PageShell';
 
 interface AlertItem {
   key: string;
@@ -79,7 +80,7 @@ export default function AlertCenterPage() {
   const countActive = ALERT_DATA.filter(a => a.status === 'active').length;
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 概览数据 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card red">
@@ -206,7 +207,7 @@ export default function AlertCenterPage() {
           </div>
         )}
       </Modal>
-    </div>
+    </PageShell>
   );
 }
 

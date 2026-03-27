@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Card, Button, Select, Table, Tag, Modal, Form, Input, DatePicker, message, Tabs, Tooltip } from 'antd';
+import { Card, Button, Select, Modal, Form, Input, DatePicker, message, Tooltip } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
-import dayjs, { Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 const SHIFTS = ['上午班 (06:00-12:00)', '下午班 (12:00-18:00)', '晚班 (18:00-00:00)'];
 const DAYS_OF_WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -56,7 +57,7 @@ export default function SchedulePage() {
     sum + Object.values(shift).filter(day => !day.compliant && day.patients.length > 0).length, 0);
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 概览统计 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card teal">
@@ -222,6 +223,6 @@ export default function SchedulePage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 }

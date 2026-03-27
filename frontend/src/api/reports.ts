@@ -1,4 +1,5 @@
 import request, { type ApiResponse } from './request';
+import { getApiBaseUrl } from '../config/apiBaseUrl';
 
 export interface QCReport {
   id: string;
@@ -37,7 +38,8 @@ const reportsApi = {
     request.post<ApiResponse<QCReport>>(`/reports/qc-upload/${year}/${month}/confirm`),
 
   exportQCUpload: (year: number, month: number) => {
-    window.open(`${import.meta.env.VITE_API_BASE_URL}/reports/qc-upload/${year}/${month}/export`);
+    const base = getApiBaseUrl().replace(/\/$/, '');
+    window.open(`${base}/reports/qc-upload/${year}/${month}/export`);
   },
 
   getHistory: () =>

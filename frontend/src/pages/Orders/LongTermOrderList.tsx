@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Card, Select, Button, Table, Tag, Modal, Form, Input, InputNumber, Space, message, Divider } from 'antd';
+import { Card, Select, Button, Table, Tag, Modal, Form, Input, Space, message, Divider } from 'antd';
 import { PlusOutlined, StopOutlined } from '@ant-design/icons';
+import PageShell from '../../components/PageShell/PageShell';
 
 const PATIENTS = [
   { value: 'zhang', label: '张国华', info: '糖尿病肾病 · 透析龄4年7月 · 主管医生：任计阁' },
@@ -116,7 +117,7 @@ export default function LongTermOrderListPage() {
   };
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 患者选择 */}
       <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
         styles={{ body: { padding: '16px 20px' } }}>
@@ -263,6 +264,6 @@ export default function LongTermOrderListPage() {
           </div>
         )}
       </Modal>
-    </div>
+    </PageShell>
   );
 }

@@ -1,14 +1,33 @@
 import { useState, useCallback } from 'react';
-import { Form, Input, InputNumber, Select, Button, Checkbox, DatePicker, message, Alert } from 'antd';
+import { Form, Input, InputNumber, Select, Button, Checkbox, DatePicker, message, Alert, Radio } from 'antd';
 import { SaveOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 // ── 演示数据 ──────────────────────────────────────────────
 const PATIENTS_LIST = [
-  { value: 'zhang', label: '张国华 — 男/56岁/AVF/下午班/5号机', dryWeight: 62.0, prescription: { bloodFlow: 250, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 138, k: 2.0, ca: 1.5 } },
-  { value: 'zhao', label: '赵丽萍 — 女/48岁/AVF/下午班/6号机', dryWeight: 52.0, prescription: { bloodFlow: 230, duration: 4.0, dialysateFlow: 500, anticoagulant: '低分子肝素', dialyzer: 'FX60（低通量）', na: 138, k: 2.0, ca: 1.5 } },
-  { value: 'liu', label: '刘明远 — 男/65岁/LTCC/下午班/7号机', dryWeight: 50.0, prescription: { bloodFlow: 220, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 140, k: 2.0, ca: 1.5 } },
+  {
+    value: 'zhang',
+    label: '张国华 — 男/56岁/AVF/下午班/5号机',
+    dryWeight: 62.0,
+    prescription: { bloodFlow: 250, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 138, k: 2.0, ca: 1.5 },
+    preAssessment: { sbp: 140, dbp: 80, pulse: 78, temp: 36.5, shift: '下午班', machineNo: '5号机' },
+  },
+  {
+    value: 'zhao',
+    label: '赵丽萍 — 女/48岁/AVF/下午班/6号机',
+    dryWeight: 52.0,
+    prescription: { bloodFlow: 230, duration: 4.0, dialysateFlow: 500, anticoagulant: '低分子肝素', dialyzer: 'FX60（低通量）', na: 138, k: 2.0, ca: 1.5 },
+    preAssessment: { sbp: 136, dbp: 76, pulse: 82, temp: 36.6, shift: '下午班', machineNo: '6号机' },
+  },
+  {
+    value: 'liu',
+    label: '刘明远 — 男/65岁/LTCC/下午班/7号机',
+    dryWeight: 50.0,
+    prescription: { bloodFlow: 220, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 140, k: 2.0, ca: 1.5 },
+    preAssessment: { sbp: 145, dbp: 82, pulse: 84, temp: 36.7, shift: '下午班', machineNo: '7号机' },
+  },
 ];
 
 const COMPLICATIONS = [
@@ -29,13 +48,20 @@ const PENDING_ORDERS = [
   { key: '2', drug: '蔗糖铁注射液 200mg', detail: '静脉输注（透析中）· qw · 上次 2026-03-12', executed: false },
 ];
 
-const VITAL_SIGN_ROWS = [
-  { time: '上机即刻', row: 'start' },
-  { time: '透析1h',  row: 'h1' },
-  { time: '透析2h',  row: 'h2' },
-  { time: '透析3h',  row: 'h3' },
-  { time: '下机前',  row: 'end' },
-];
+type VitalSignRow = {
+  id: string;
+  time: string;
+  values: Record<string, string>;
+};
+
+function createVitalSignRow(): VitalSignRow {
+  const now = dayjs();
+  return {
+    id: `vital-${now.valueOf()}-${Math.random().toString(36).slice(2, 7)}`,
+    time: now.format('HH:mm:ss'),
+    values: {},
+  };
+}
 
 // ── Daugirdas II 公式 ────────────────────────────────────
 function calcKtv(preBun: number, postBun: number, t: number, uf: number, postWeight: number): number | null {
@@ -70,26 +96,27 @@ export default function DialysisEntryPage() {
 
   const [selectedPatient, setSelectedPatient] = useState<string>('');
   const [prescription, setPrescription] = useState<typeof PATIENTS_LIST[0]['prescription'] | null>(null);
+  const [preAssessment, setPreAssessment] = useState<typeof PATIENTS_LIST[0]['preAssessment'] | null>(null);
   const [dryWeight, setDryWeight] = useState<number | null>(null);
 
   const [preWeight, setPreWeight] = useState<number | null>(null);
   const [postWeight, setPostWeight] = useState<number | null>(null);
-  const [duration, setDuration] = useState<number | null>(null);
+  const [durationHours, setDurationHours] = useState<number | null>(null);
   const [preBun, setPreBun] = useState<number | null>(null);
   const [postBun, setPostBun] = useState<number | null>(null);
 
   const [complications, setComplications] = useState<string[]>([]);
   const [orders, setOrders] = useState<Record<string, boolean>>({});
-  const [vitals, setVitals] = useState<Record<string, Record<string, string>>>({});
+  const [vitalRows, setVitalRows] = useState<VitalSignRow[]>([createVitalSignRow()]);
 
   const handlePatientChange = useCallback((val: string) => {
     setSelectedPatient(val);
     const p = PATIENTS_LIST.find(p => p.value === val);
     if (p) {
       setPrescription(p.prescription);
+      setPreAssessment(p.preAssessment);
       setDryWeight(p.dryWeight);
-      form.setFieldValue('dryWeight', p.dryWeight);
-      form.setFieldValue('duration', p.prescription.duration);
+      setDurationHours(p.prescription.duration);
     }
   }, [form]);
 
@@ -100,15 +127,33 @@ export default function DialysisEntryPage() {
   const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;
 
   // Kt/V 计算
-  const ktv = preBun && postBun && duration && postWeight
-    ? calcKtv(preBun, postBun, duration, (ufToUse ?? 0) / 1000, postWeight)
+  const ktv = preBun && postBun && durationHours && postWeight
+    ? calcKtv(preBun, postBun, durationHours, (ufToUse ?? 0) / 1000, postWeight)
     : null;
   const urr = preBun && postBun ? calcUrr(preBun, postBun) : null;
   const ktvAdequate = ktv !== null ? ktv >= 1.2 : null;
   const urrAdequate = urr !== null ? urr >= 65 : null;
 
-  const handleVitalChange = (row: string, field: string, val: string) => {
-    setVitals(prev => ({ ...prev, [row]: { ...prev[row], [field]: val } }));
+  const handleVitalChange = (rowId: string, field: string, val: string) => {
+    setVitalRows(prev => prev.map(row => (
+      row.id === rowId
+        ? { ...row, values: { ...row.values, [field]: val } }
+        : row
+    )));
+  };
+
+  const handleAddVitalRow = () => {
+    setVitalRows(prev => [...prev, createVitalSignRow()]);
+  };
+
+  const handleRemoveVitalRow = (rowId: string) => {
+    setVitalRows(prev => {
+      if (prev.length <= 1) {
+        message.warning('至少保留 1 条生命体征记录');
+        return prev;
+      }
+      return prev.filter(row => row.id !== rowId);
+    });
   };
 
   const handleOrderToggle = (key: string, checked: boolean) => {
@@ -118,6 +163,11 @@ export default function DialysisEntryPage() {
   const handleSubmit = async () => {
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
     if (!preWeight) { message.warning('请填写透析前体重'); return; }
+    const hasUnsignedVitalRow = vitalRows.some(row => !row.values.signature?.trim());
+    if (hasUnsignedVitalRow) {
+      message.warning('透析中生命体征记录每行都需要护士签名');
+      return;
+    }
     setLoading(true);
     try {
       await new Promise(r => setTimeout(r, 800));
@@ -127,9 +177,10 @@ export default function DialysisEntryPage() {
       setLoading(false);
     }
   };
+  const autoGeneratedDate = dayjs().format('YYYY年M月D日');
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 顶部操作栏 */}
       <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
         <div className="flex items-center gap-12">
@@ -166,62 +217,53 @@ export default function DialysisEntryPage() {
               </Form.Item>
             </div>
             {prescription && (
-              <div style={{ marginTop: 16, padding: 14, background: '#F0F9FF', borderRadius: 8, border: '1px solid #BAE6FD', fontSize: 13 }}>
-                <span style={{ fontWeight: 600, color: '#0369A1', marginRight: 12 }}>📋 处方自动带入：</span>
-                血流速 <strong>{prescription.bloodFlow} mL/min</strong> ·
-                标准时长 <strong>{prescription.duration}h</strong> ·
-                透析器 <strong>{prescription.dialyzer}</strong> ·
-                抗凝 <strong>{prescription.anticoagulant}</strong> ·
-                干体重目标 <strong className="num">{dryWeight} kg</strong>
+              <div style={{ marginTop: 16, padding: 16, background: '#F8FAFC', borderRadius: 8, border: '1px solid #DBEAFE' }}>
+                <div style={{ fontWeight: 700, color: '#1D4ED8', marginBottom: 10 }}>
+                  📋 当前生效透析处方（自动导入，仅查看不可修改）
+                </div>
+                <div className="grid-4" style={{ gap: 12 }}>
+                  <div style={{ fontSize: 13, color: '#334155' }}>血流速：<strong>{prescription.bloodFlow} mL/min</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>标准时长：<strong>{prescription.duration} h</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透析液流速：<strong>{prescription.dialysateFlow} mL/min</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透析器：<strong>{prescription.dialyzer}</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>抗凝方案：<strong>{prescription.anticoagulant}</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>干体重目标：<strong>{dryWeight} kg</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透析液 Na：<strong>{prescription.na} mmol/L</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透析液 K/Ca：<strong>{prescription.k} / {prescription.ca} mmol/L</strong></div>
+                </div>
+              </div>
+            )}
+            {preAssessment && (
+              <div style={{ marginTop: 12, padding: 16, background: '#F8FAFC', borderRadius: 8, border: '1px solid #DBEAFE' }}>
+                <div style={{ fontWeight: 700, color: '#1D4ED8', marginBottom: 10 }}>
+                  📊 透前评估（来自处方，仅查看不可修改）
+                </div>
+                <div className="grid-4" style={{ gap: 12 }}>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透前收缩压：<strong>{preAssessment.sbp} mmHg</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透前舒张压：<strong>{preAssessment.dbp} mmHg</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透前脉搏：<strong>{preAssessment.pulse} 次/分</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>透前体温：<strong>{preAssessment.temp} ℃</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>班次：<strong>{preAssessment.shift}</strong></div>
+                  <div style={{ fontSize: 13, color: '#334155' }}>默认机器：<strong>{preAssessment.machineNo}</strong></div>
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* ② 透析前评估 */}
+        {/* ② 护士签名信息 */}
         <div className="hd-form-section">
-          <SectionHeader icon="📊" title="透析前评估" />
+          <SectionHeader icon="🖊️" title="护士签名信息" />
           <div style={{ padding: 20 }}>
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="透析前体重 (kg)" required style={{ marginBottom: 0 }}>
-                <InputNumber
-                  min={20} max={200} step={0.1} precision={1}
-                  style={{ width: '100%' }}
-                  value={preWeight}
-                  onChange={v => setPreWeight(v)}
-                  placeholder="如：64.5"
-                />
-              </Form.Item>
-              <Form.Item label="干体重目标 (kg)" style={{ marginBottom: 0 }}>
-                <InputNumber
-                  name="dryWeight" min={20} max={200} step={0.1} precision={1}
-                  value={dryWeight} onChange={v => setDryWeight(v)}
-                  style={{ width: '100%', background: '#F0F9FF', fontWeight: 600 }}
-                />
-              </Form.Item>
-              <Form.Item label="透前收缩压 (mmHg)" style={{ marginBottom: 0 }}>
-                <InputNumber min={60} max={250} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item label="透前舒张压 (mmHg)" style={{ marginBottom: 0 }}>
-                <InputNumber min={40} max={160} style={{ width: '100%' }} />
-              </Form.Item>
-            </div>
             <div className="grid-4" style={{ gap: 16 }}>
-              <Form.Item label="透前脉搏 (次/分)" style={{ marginBottom: 0 }}>
-                <InputNumber min={40} max={200} style={{ width: '100%' }} />
+              <Form.Item label="穿刺护士" style={{ marginBottom: 0 }}>
+                <Input placeholder="请输入穿刺护士姓名" />
               </Form.Item>
-              <Form.Item label="透前体温 (℃)" style={{ marginBottom: 0 }}>
-                <InputNumber min={35} max={42} step={0.1} style={{ width: '100%' }} />
+              <Form.Item label="上机护士" style={{ marginBottom: 0 }}>
+                <Input placeholder="请输入上机护士姓名" />
               </Form.Item>
-              <Form.Item label="班次" style={{ marginBottom: 0 }}>
-                <Select defaultValue="pm" options={[
-                  { value: 'am', label: '上午班' },
-                  { value: 'pm', label: '下午班' },
-                  { value: 'eve', label: '晚班' },
-                ]} />
-              </Form.Item>
-              <Form.Item label="机器编号" style={{ marginBottom: 0 }}>
-                <Input placeholder="如：5号机" />
+              <Form.Item label="二次核对护士" style={{ marginBottom: 0 }}>
+                <Input placeholder="请输入二次核对护士姓名" />
               </Form.Item>
             </div>
           </div>
@@ -231,11 +273,17 @@ export default function DialysisEntryPage() {
         <div className="hd-form-section">
           <SectionHeader icon="💊" title="透析中生命体征记录（每50分钟记录一次）" />
           <div style={{ padding: 20 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#64748B' }}>
+                时间点由系统按当前时间自动记录，不可修改；可根据病情随时增减记录行。每行操作需护士签名。
+              </div>
+              <Button onClick={handleAddVitalRow}>新增记录（自动时间）</Button>
+            </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr>
-                    {['时间点', '收缩压(mmHg)', '舒张压(mmHg)', '脉搏(次/分)', '动脉压(mmHg)', '静脉压(mmHg)', '跨膜压(mmHg)', '血流速(mL/min)', '备注'].map(h => (
+                    {['记录时间', '收缩压(mmHg)', '舒张压(mmHg)', '脉搏(次/分)', '动脉压(mmHg)', '静脉压(mmHg)', '跨膜压(mmHg)', '血流速(mL/min)', '备注', '护士签名', '操作'].map(h => (
                       <th key={h} style={{ background: 'linear-gradient(90deg,#E0F2FE,#ECFEFF)', color: '#0369A1', padding: '8px 10px', fontSize: 11.5, fontWeight: 600, textAlign: 'center', border: '1px solid #BAE6FD', whiteSpace: 'nowrap' }}>
                         {h}
                       </th>
@@ -243,23 +291,29 @@ export default function DialysisEntryPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {VITAL_SIGN_ROWS.map(({ time, row }) => (
-                    <tr key={row}>
+                  {vitalRows.map((row) => (
+                    <tr key={row.id}>
                       <td style={{ padding: '6px 10px', border: '1px solid #DBEAFE', fontWeight: 600, color: '#3D5280', whiteSpace: 'nowrap', background: '#F8FBFF' }}>
-                        {time}
+                        {row.time}
                       </td>
-                      {['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark'].map(field => (
+                      {['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark', 'signature'].map(field => (
                         <td key={field} style={{ padding: 4, border: '1px solid #DBEAFE', textAlign: 'center' }}>
                           <input
-                            type={field === 'remark' ? 'text' : 'number'}
-                            value={vitals[row]?.[field] || ''}
-                            onChange={e => handleVitalChange(row, field, e.target.value)}
-                            style={{ width: '100%', padding: '5px', border: 'none', textAlign: 'center', fontSize: 13, background: 'transparent', outline: 'none', fontFamily: 'DM Mono, monospace' }}
+                            type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
+                            value={row.values[field] || ''}
+                            onChange={e => handleVitalChange(row.id, field, e.target.value)}
+                            placeholder={field === 'signature' ? '护士签名' : undefined}
+                            style={{ width: '100%', padding: '5px', border: 'none', textAlign: 'center', fontSize: 13, background: 'transparent', outline: 'none', fontFamily: field === 'signature' ? 'inherit' : 'DM Mono, monospace' }}
                             onFocus={e => { e.currentTarget.style.background = '#E0F2FE'; e.currentTarget.style.borderRadius = '4px'; }}
                             onBlur={e => { e.currentTarget.style.background = 'transparent'; }}
                           />
                         </td>
                       ))}
+                      <td style={{ padding: 4, border: '1px solid #DBEAFE', textAlign: 'center' }}>
+                        <Button danger size="small" onClick={() => handleRemoveVitalRow(row.id)}>
+                          删除
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -345,10 +399,90 @@ export default function DialysisEntryPage() {
           </div>
         </div>
 
-        {/* ⑥ 透析后数据 + Kt/V 计算 */}
+        {/* ⑥ 透析后评估（含 Kt/V 计算） */}
         <div className="hd-form-section">
-          <SectionHeader icon="📉" title="透析后数据 & Kt/V 计算（Daugirdas II 公式）" />
+          <SectionHeader icon="🔚" title="透析后评估（含 Kt/V 计算）" />
           <div style={{ padding: 20 }}>
+            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
+              <Form.Item label="实际透析时长-小时" style={{ marginBottom: 0 }}>
+                <InputNumber min={0} max={8} step={0.1} precision={1} style={{ width: '100%' }} placeholder="小时" value={durationHours ?? undefined} onChange={v => setDurationHours(v)} />
+              </Form.Item>
+              <Form.Item label="透析期间入量 (mL)" style={{ marginBottom: 0 }}>
+                <InputNumber min={0} max={10000} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透析期间出量 (mL)" style={{ marginBottom: 0 }}>
+                <InputNumber min={0} max={10000} style={{ width: '100%' }} />
+              </Form.Item>
+            </div>
+
+            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
+              <Form.Item label="实际脱水 (mL)" style={{ marginBottom: 0 }}>
+                <InputNumber min={0} max={10000} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="滤器凝血级别" style={{ marginBottom: 0 }}>
+                <Select defaultValue="1" options={[
+                  { value: '0', label: '0级（无凝血）' },
+                  { value: '1', label: 'Ⅰ级' },
+                  { value: '2', label: 'Ⅱ级' },
+                  { value: '3', label: 'Ⅲ级' },
+                ]} />
+              </Form.Item>
+              <Form.Item label="置管封管用药-动脉端" style={{ marginBottom: 0 }}>
+                <Input placeholder="如：肝素钠 1mL" />
+              </Form.Item>
+              <Form.Item label="置管封管用药-静脉端" style={{ marginBottom: 0 }}>
+                <Input placeholder="如：肝素钠 1mL" />
+              </Form.Item>
+            </div>
+
+            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
+              <Form.Item label="凝血分级" style={{ marginBottom: 0 }}>
+                <Select defaultValue="0" options={[
+                  { value: '0', label: '0级（无凝血）' },
+                  { value: '1', label: 'Ⅰ级（<20%变黑）' },
+                  { value: '2', label: 'Ⅱ级（静脉壶明显）' },
+                  { value: '3', label: 'Ⅲ级（>50%或停机）' },
+                ]} />
+              </Form.Item>
+              <Form.Item label="穿刺结果（AVF/AVG）" style={{ marginBottom: 0 }}>
+                <Select defaultValue="success" options={[
+                  { value: 'success', label: '一针成功' },
+                  { value: 'second',  label: '二次穿刺' },
+                  { value: 'difficult', label: '穿刺困难' },
+                ]} />
+              </Form.Item>
+              <Form.Item label="渗血部位" style={{ marginBottom: 0 }}>
+                <Input placeholder="如：动脉穿刺点" />
+              </Form.Item>
+              <Form.Item label="透析后用药是否执行" style={{ marginBottom: 0 }}>
+                <Radio.Group defaultValue="yes">
+                  <Radio value="yes">是</Radio>
+                  <Radio value="no">否</Radio>
+                </Radio.Group>
+              </Form.Item>
+            </div>
+
+            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
+              <Form.Item label="透后收缩压 (mmHg)" style={{ marginBottom: 0 }}>
+                <InputNumber min={60} max={250} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透后舒张压 (mmHg)" style={{ marginBottom: 0 }}>
+                <InputNumber min={40} max={160} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透后脉搏 P (次/分)" style={{ marginBottom: 0 }}>
+                <InputNumber min={30} max={220} style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item label="透析前体重 (kg)" required style={{ marginBottom: 0 }}>
+                <InputNumber
+                  min={20} max={200} step={0.1} precision={1}
+                  style={{ width: '100%' }}
+                  value={preWeight}
+                  onChange={v => setPreWeight(v)}
+                  placeholder="如：64.5"
+                />
+              </Form.Item>
+            </div>
+
             <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
               <Form.Item label="透析后体重 (kg)" style={{ marginBottom: 0 }}>
                 <InputNumber
@@ -357,15 +491,6 @@ export default function DialysisEntryPage() {
                   value={postWeight}
                   onChange={v => setPostWeight(v)}
                   placeholder="如：62.0"
-                />
-              </Form.Item>
-              <Form.Item label="实际透析时长 (h)" style={{ marginBottom: 0 }}>
-                <InputNumber
-                  min={1} max={8} step={0.1} precision={1}
-                  style={{ width: '100%' }}
-                  value={duration}
-                  onChange={v => setDuration(v)}
-                  placeholder="如：4.0"
                 />
               </Form.Item>
               <Form.Item label="透前BUN (mmol/L)" style={{ marginBottom: 0 }}>
@@ -386,11 +511,46 @@ export default function DialysisEntryPage() {
                   placeholder="透析后BUN"
                 />
               </Form.Item>
+              <Form.Item label="下机后机器运行情况" style={{ marginBottom: 0 }}>
+                <Select defaultValue="normal" options={[
+                  { value: 'normal', label: '正常' },
+                  { value: 'abnormal', label: '异常' },
+                ]} />
+              </Form.Item>
+              <Form.Item label="下机后消毒方式" style={{ marginBottom: 0 }}>
+                <Select defaultValue="thermal-chemical" options={[
+                  { value: 'thermal-chemical', label: '热化学消毒' },
+                  { value: 'chemical', label: '化学消毒' },
+                  { value: 'other', label: '其他' },
+                ]} />
+              </Form.Item>
+              <Form.Item label="局部皮肤完好" style={{ marginBottom: 0 }}>
+                <Radio.Group defaultValue="yes">
+                  <Radio value="yes">是</Radio>
+                  <Radio value="no">否</Radio>
+                </Radio.Group>
+              </Form.Item>
+              <Form.Item label="透析期间患者状态" style={{ marginBottom: 0 }}>
+                <Select defaultValue="stable" options={[
+                  { value: 'stable', label: '平稳' },
+                  { value: 'general', label: '一般' },
+                  { value: 'unstable', label: '不稳定' },
+                ]} />
+              </Form.Item>
+            </div>
+
+            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
+              <Form.Item label="透析后用药是否执行" style={{ marginBottom: 0 }}>
+                <Radio.Group defaultValue="yes">
+                  <Radio value="yes">是</Radio>
+                  <Radio value="no">否</Radio>
+                </Radio.Group>
+              </Form.Item>
             </div>
 
             {/* 超滤量显示 */}
             {ufToUse !== null && (
-              <div style={{ marginBottom: 16, padding: 12, background: ufAlert ? '#FFF1F2' : '#F0F9FF', border: `1px solid ${ufAlert ? '#FECDD3' : '#BAE6FD'}`, borderRadius: 8 }}>
+              <div style={{ marginTop: 16, marginBottom: 16, padding: 12, background: ufAlert ? '#FFF1F2' : '#F0F9FF', border: `1px solid ${ufAlert ? '#FECDD3' : '#BAE6FD'}`, borderRadius: 8 }}>
                 <div className="flex items-center gap-16">
                   <div>
                     <span style={{ fontSize: 12, color: '#7B92BC' }}>实际超滤量</span>
@@ -412,22 +572,20 @@ export default function DialysisEntryPage() {
                     </div>
                   )}
                 </div>
-                {ufToUse !== null && (
-                  <div style={{ marginTop: 8, background: '#EFF6FF', borderRadius: 4, height: 8, overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%', borderRadius: 4,
-                      width: `${Math.min(100, parseFloat(ufPercent || '0') * 10)}%`,
-                      background: ufAlert ? 'linear-gradient(90deg,#F43F5E,#FB7185)' : 'linear-gradient(90deg,#0EA5E9,#06B6D4)',
-                      transition: 'width 0.3s',
-                    }} />
-                  </div>
-                )}
+                <div style={{ marginTop: 8, background: '#EFF6FF', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 4,
+                    width: `${Math.min(100, parseFloat(ufPercent || '0') * 10)}%`,
+                    background: ufAlert ? 'linear-gradient(90deg,#F43F5E,#FB7185)' : 'linear-gradient(90deg,#0EA5E9,#06B6D4)',
+                    transition: 'width 0.3s',
+                  }} />
+                </div>
               </div>
             )}
 
             {/* Kt/V 计算结果 */}
             {ktv !== null ? (
-              <div className="grid-2" style={{ gap: 16 }}>
+              <div className="grid-2" style={{ gap: 16, marginBottom: 16 }}>
                 <div style={{
                   padding: '14px',
                   background: ktvAdequate ? 'linear-gradient(135deg,#ECFDF5,#F0FDF4)' : 'linear-gradient(135deg,#FFFBEB,#FFF9EC)',
@@ -459,49 +617,30 @@ export default function DialysisEntryPage() {
               </div>
             ) : (
               preBun && postBun ? (
-                <div style={{ padding: 12, background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: 6, fontSize: 13, color: '#BE123C' }}>
+                <div style={{ marginBottom: 16, padding: 12, background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: 6, fontSize: 13, color: '#BE123C' }}>
                   ⚠️ BUN 数值异常（透后BUN应小于透前BUN），请核查数据。
                 </div>
               ) : (
-                <div style={{ padding: 12, background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 6, fontSize: 13, color: '#0369A1' }}>
+                <div style={{ marginBottom: 16, padding: 12, background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 6, fontSize: 13, color: '#0369A1' }}>
                   ℹ️ 填写透析前后 BUN 值后，系统将自动计算 spKt/V 和 URR（Daugirdas II 公式）。
                 </div>
               )
             )}
-          </div>
-        </div>
 
-        {/* ⑦ 透析后记录 */}
-        <div className="hd-form-section">
-          <SectionHeader icon="🔚" title="透析后评估" />
-          <div style={{ padding: 20 }}>
-            <div className="grid-4" style={{ gap: 16 }}>
-              <Form.Item label="透后收缩压 (mmHg)" style={{ marginBottom: 0 }}>
-                <InputNumber min={60} max={250} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item label="透后舒张压 (mmHg)" style={{ marginBottom: 0 }}>
-                <InputNumber min={40} max={160} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item label="凝血分级" style={{ marginBottom: 0 }}>
-                <Select defaultValue="0" options={[
-                  { value: '0', label: '0级（无凝血）' },
-                  { value: '1', label: 'Ⅰ级（<20%变黑）' },
-                  { value: '2', label: 'Ⅱ级（静脉壶明显）' },
-                  { value: '3', label: 'Ⅲ级（>50%或停机）' },
-                ]} />
-              </Form.Item>
-              <Form.Item label="穿刺结果（AVF/AVG）" style={{ marginBottom: 0 }}>
-                <Select defaultValue="success" options={[
-                  { value: 'success', label: '一针成功' },
-                  { value: 'second',  label: '二次穿刺' },
-                  { value: 'difficult', label: '穿刺困难' },
-                ]} />
-              </Form.Item>
-            </div>
             <div style={{ marginTop: 16 }}>
               <Form.Item label="护士备注" style={{ marginBottom: 0 }}>
                 <Input.TextArea rows={3} placeholder="记录本次透析特殊情况、护理观察、患者反馈等…" />
               </Form.Item>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <div style={{ width: 360 }}>
+                <Form.Item style={{ marginBottom: 10 }}>
+                  <Input addonBefore="护士签名：" placeholder="请输入护士姓名" />
+                </Form.Item>
+                <Form.Item style={{ marginBottom: 0 }}>
+                  <Input addonBefore="日期：" value={autoGeneratedDate} readOnly />
+                </Form.Item>
+              </div>
             </div>
           </div>
         </div>
@@ -514,6 +653,6 @@ export default function DialysisEntryPage() {
           </Button>
         </div>
       </Form>
-    </div>
+    </PageShell>
   );
 }

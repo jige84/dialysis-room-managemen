@@ -1,0 +1,32 @@
+/** 与 AppLayout 顶栏标题一致的路由标题解析 */
+
+const PAGE_TITLES: Record<string, string> = {
+  '/dashboard': '今日概览',
+  '/patients': '患者档案',
+  '/dialysis/entry': '透析记录录入',
+  '/prescription': '透析处方管理',
+  '/orders': '长期医嘱单',
+  '/labs': '检验结果管理',
+  '/vascular': '血管通路管理',
+  '/infection': '传染病管理',
+  '/alerts': '预警中心',
+  '/reports': '质控上报报表',
+  '/cqi': 'CQI持续改进',
+  '/schedule': '排班管理',
+  '/devices': '设备耗材',
+  '/admin/users': '用户管理',
+};
+
+export function getPageTitle(pathname: string): string {
+  if (pathname === '/patients') return PAGE_TITLES['/patients'];
+  if (pathname === '/patients/new') return '新建患者档案';
+  if (/^\/patients\/[^/]+$/.test(pathname)) return '患者详情';
+
+  const exact = PAGE_TITLES[pathname];
+  if (exact) return exact;
+
+  const match = Object.entries(PAGE_TITLES).find(
+    ([key]) => key !== '/' && pathname.startsWith(key),
+  );
+  return match?.[1] ?? '血液透析室管理系统';
+}

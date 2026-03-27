@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Card, Button, Table, Select, Modal, Form, Input, DatePicker, message, Tabs, Progress } from 'antd';
+import { Card, Button, Select, Modal, Form, Input, DatePicker, message, Progress } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import dayjs from 'dayjs';
+import PageShell from '../../components/PageShell/PageShell';
 
 interface CQIPlan {
   key: string;
@@ -112,7 +112,7 @@ export default function CQIPage() {
   const planningCount  = CQI_DATA.filter(p => p.status === 'planning').length;
 
   return (
-    <div>
+    <PageShell fullWidth>
       {/* 概览 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card teal">
@@ -299,6 +299,6 @@ export default function CQIPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 }
