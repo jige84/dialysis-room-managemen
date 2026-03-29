@@ -1,6 +1,14 @@
 import { useState, useCallback } from 'react';
-import { Form, Input, InputNumber, Select, Button, Checkbox, DatePicker, message, Alert, Radio } from 'antd';
-import { SaveOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import {
+  Form, Input, InputNumber, Select, Button, Checkbox,
+  DatePicker, message, Alert, Radio, Tag, Tooltip, Modal,
+} from 'antd';
+import {
+  SaveOutlined, ArrowLeftOutlined, PlusOutlined,
+  DeleteOutlined, ClockCircleOutlined, CheckCircleFilled,
+  WarningFilled, InfoCircleFilled, EditOutlined, CloseOutlined,
+  FileTextOutlined, PrinterOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
@@ -13,6 +21,7 @@ const PATIENTS_LIST = [
     dryWeight: 62.0,
     prescription: { bloodFlow: 250, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 138, k: 2.0, ca: 1.5 },
     preAssessment: { sbp: 140, dbp: 80, pulse: 78, temp: 36.5, shift: '下午班', machineNo: '5号机' },
+    vascular: { accessType: 'AVF' as const, catheterLocation: '', catheterPlacedDate: null as string | null },
   },
   {
     value: 'zhao',
@@ -20,50 +29,322 @@ const PATIENTS_LIST = [
     dryWeight: 52.0,
     prescription: { bloodFlow: 230, duration: 4.0, dialysateFlow: 500, anticoagulant: '低分子肝素', dialyzer: 'FX60（低通量）', na: 138, k: 2.0, ca: 1.5 },
     preAssessment: { sbp: 136, dbp: 76, pulse: 82, temp: 36.6, shift: '下午班', machineNo: '6号机' },
+    vascular: { accessType: 'AVG' as const, catheterLocation: '', catheterPlacedDate: null as string | null },
   },
   {
     value: 'liu',
-    label: '刘明远 — 男/65岁/LTCC/下午班/7号机',
+    label: '刘明远 — 男/65岁/TCC/下午班/7号机',
     dryWeight: 50.0,
     prescription: { bloodFlow: 220, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 140, k: 2.0, ca: 1.5 },
     preAssessment: { sbp: 145, dbp: 82, pulse: 84, temp: 36.7, shift: '下午班', machineNo: '7号机' },
+    vascular: { accessType: 'TCC' as const, catheterLocation: 'right_jugular', catheterPlacedDate: '2025-12-01' },
   },
 ];
 
 const COMPLICATIONS = [
-  { value: 'hypotension',   label: '低血压',     emergency: false },
-  { value: 'cramp',         label: '肌肉痉挛',   emergency: false },
-  { value: 'nausea',        label: '恶心/呕吐',  emergency: false },
-  { value: 'headache',      label: '头痛',       emergency: false },
-  { value: 'fever',         label: '发热/寒战',  emergency: false },
-  { value: 'pruritus',      label: '皮肤瘙痒',   emergency: false },
-  { value: 'coagulation',   label: '体外循环凝血', emergency: false },
-  { value: 'air_embolism',  label: '空气栓塞',   emergency: true },
-  { value: 'blood_leak',    label: '透析器漏血',  emergency: true },
-  { value: 'hemolysis',     label: '急性溶血',   emergency: true },
+  { value: 'hypotension',  label: '低血压',       emergency: false },
+  { value: 'cramp',        label: '肌肉痉挛',     emergency: false },
+  { value: 'nausea',       label: '恶心/呕吐',    emergency: false },
+  { value: 'headache',     label: '头痛',         emergency: false },
+  { value: 'fever',        label: '发热/寒战',    emergency: false },
+  { value: 'pruritus',     label: '皮肤瘙痒',     emergency: false },
+  { value: 'coagulation',  label: '体外循环凝血', emergency: false },
+  { value: 'air_embolism', label: '空气栓塞',     emergency: true },
+  { value: 'blood_leak',   label: '透析器漏血',   emergency: true },
+  { value: 'hemolysis',    label: '急性溶血',     emergency: true },
 ];
+
+type FieldDef = {
+  key: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+} & (
+  | { type: 'text' | 'textarea' | 'number' }
+  | { type: 'select' | 'radio'; options: { value: string; label: string }[] }
+  | { type: 'checkbox-group'; options: { value: string; label: string }[] }
+);
+
+type ComplicationConfig = {
+  title: string;
+  color: string;
+  fields: FieldDef[];
+};
+
+const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
+  hypotension: {
+    title: '低血压处理记录',
+    color: '#DC2626',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'eventBp', label: '发生时血压', type: 'text', placeholder: '如：85/50 mmHg', required: true },
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', required: true, options: [
+        { value: 'stop_uf', label: '停超滤' },
+        { value: 'trendelenburg', label: '头低脚高位' },
+        { value: 'saline_200', label: '输注生理盐水 200mL' },
+        { value: 'slow_blood', label: '降低血流速' },
+        { value: 'reduce_temp', label: '降低透析液温度' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'afterBp', label: '处理后血压', type: 'text', placeholder: '如：110/70 mmHg' },
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理措施或观察记录…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  cramp: {
+    title: '肌肉痉挛处理记录',
+    color: '#D97706',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'location', label: '痉挛部位', type: 'select', required: true, options: [
+        { value: 'lower_limb', label: '下肢' },
+        { value: 'upper_limb', label: '上肢' },
+        { value: 'abdomen', label: '腹部' },
+        { value: 'other', label: '其他' },
+      ]},
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'reduce_uf', label: '减少超滤速率' },
+        { value: 'saline_100', label: '输注生理盐水 100mL' },
+        { value: 'massage', label: '局部按摩' },
+        { value: 'heat', label: '局部热敷' },
+        { value: 'hypertonic', label: '输注高渗盐水' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理情况…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  nausea: {
+    title: '恶心/呕吐处理记录',
+    color: '#D97706',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'vomitAmount', label: '呕吐量估计', type: 'text', placeholder: '如：约50mL，或"无呕吐"' },
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'slow_blood', label: '降低血流速' },
+        { value: 'reduce_uf', label: '减少超滤量' },
+        { value: 'head_up', label: '头部抬高' },
+        { value: 'antiemetic', label: '遵医嘱给予止吐药' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他观察记录…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  headache: {
+    title: '头痛处理记录',
+    color: '#D97706',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'severity', label: '头痛程度', type: 'radio', required: true, options: [
+        { value: 'mild', label: '轻度' },
+        { value: 'moderate', label: '中度' },
+        { value: 'severe', label: '重度' },
+      ]},
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'reduce_na', label: '降低透析液钠浓度' },
+        { value: 'slow_blood', label: '降低血流速' },
+        { value: 'analgesic', label: '遵医嘱给予镇痛药' },
+        { value: 'observe', label: '加强观察' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理及观察…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  fever: {
+    title: '发热/寒战处理记录',
+    color: '#DC2626',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'temperature', label: '体温（℃）', type: 'number', placeholder: '如：38.5', required: true },
+      { key: 'symptoms', label: '伴随症状', type: 'checkbox-group', options: [
+        { value: 'chills', label: '寒战' },
+        { value: 'sweat', label: '大汗' },
+        { value: 'fatigue', label: '乏力' },
+        { value: 'other', label: '其他' },
+      ]},
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'stop_dialysis', label: '停止透析' },
+        { value: 'blood_culture', label: '遵医嘱抽血培养' },
+        { value: 'antipyretic', label: '遵医嘱给予退热药' },
+        { value: 'warm', label: '保暖' },
+        { value: 'observe', label: '加强观察' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', required: true, options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理或体温变化记录…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  pruritus: {
+    title: '皮肤瘙痒处理记录',
+    color: '#7C3AED',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'location', label: '瘙痒部位', type: 'text', placeholder: '如：背部、四肢等' },
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'antihistamine', label: '遵医嘱给予抗组胺药' },
+        { value: 'cool_compress', label: '局部冷敷' },
+        { value: 'observe', label: '加强观察' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他情况…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  coagulation: {
+    title: '体外循环凝血处理记录',
+    color: '#DC2626',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'grade', label: '凝血分级', type: 'radio', required: true, options: [
+        { value: '1', label: 'Ⅰ级（<20%变黑）' },
+        { value: '2', label: 'Ⅱ级（静脉壶明显）' },
+        { value: '3', label: 'Ⅲ级（>50%或停机）' },
+      ]},
+      { key: 'isCompleteStopped', label: '是否停机更换管路', type: 'radio', required: true, options: [
+        { value: 'yes', label: '是（完全凝血，计入质控）' },
+        { value: 'no', label: '否' },
+      ]},
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'increase_heparin', label: '追加肝素剂量' },
+        { value: 'saline_flush', label: '生理盐水冲管' },
+        { value: 'replace_circuit', label: '更换管路/透析器' },
+        { value: 'stop_dialysis', label: '终止透析' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', required: true, options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '凝血情况详细描述…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  air_embolism: {
+    title: '空气栓塞应急处理记录',
+    color: '#DC2626',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'symptoms', label: '患者症状', type: 'checkbox-group', required: true, options: [
+        { value: 'cough', label: '咳嗽' },
+        { value: 'dyspnea', label: '呼吸困难' },
+        { value: 'chest_pain', label: '胸痛' },
+        { value: 'cyanosis', label: '发绀' },
+        { value: 'unconscious', label: '意识障碍' },
+      ]},
+      { key: 'emergencyMeasures', label: '应急处理措施', type: 'checkbox-group', required: true, options: [
+        { value: 'stop_blood_pump', label: '立即关闭血泵' },
+        { value: 'clamp_tube', label: '钳夹静脉管路' },
+        { value: 'left_lateral', label: '取左侧卧位+头低脚高' },
+        { value: 'oxygen', label: '高流量吸氧（10L/min）' },
+        { value: 'call_doctor', label: '呼叫医生/抢救' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorArrivalTime', label: '医生到达时间', type: 'text', placeholder: '如：14:35' },
+      { key: 'outcome', label: '处置结果', type: 'select', required: true, options: [
+        { value: 'stable', label: '病情稳定' },
+        { value: 'transferred', label: '转科处理' },
+        { value: 'emergency', label: '紧急抢救' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '事件经过详细记录…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  blood_leak: {
+    title: '透析器漏血处理记录',
+    color: '#DC2626',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'detectionMethod', label: '发现方式', type: 'radio', options: [
+        { value: 'alarm', label: '机器漏血报警' },
+        { value: 'visual', label: '肉眼观察' },
+      ]},
+      { key: 'replacedDialyzer', label: '是否更换透析器', type: 'radio', required: true, options: [
+        { value: 'yes', label: '是（已更换）' },
+        { value: 'no', label: '否（停止透析）' },
+      ]},
+      { key: 'measures', label: '处理措施', type: 'checkbox-group', options: [
+        { value: 'stop_blood_pump', label: '停止血泵' },
+        { value: 'replace_dialyzer', label: '更换透析器' },
+        { value: 'stop_dialysis', label: '终止本次透析' },
+        { value: 'blood_test', label: '遵医嘱抽血检查' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorNotified', label: '通知医生', type: 'radio', required: true, options: [
+        { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
+      ]},
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '事件经过及处理结果…' },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+  hemolysis: {
+    title: '急性溶血应急处理记录',
+    color: '#DC2626',
+    fields: [
+      { key: 'occurrenceTime', label: '发生时间', type: 'text', placeholder: '如：14:30', required: true },
+      { key: 'symptoms', label: '患者症状', type: 'checkbox-group', required: true, options: [
+        { value: 'chest_pain', label: '胸痛' },
+        { value: 'back_pain', label: '腰背痛' },
+        { value: 'dyspnea', label: '呼吸困难' },
+        { value: 'nausea', label: '恶心呕吐' },
+        { value: 'fever', label: '发热' },
+        { value: 'hypotension', label: '低血压' },
+      ]},
+      { key: 'plasmaColor', label: '静脉血颜色', type: 'select', required: true, options: [
+        { value: 'pink', label: '粉红色（轻度溶血）' },
+        { value: 'red', label: '红色（中度溶血）' },
+        { value: 'dark_red', label: '暗红/棕红（重度溶血）' },
+      ]},
+      { key: 'emergencyMeasures', label: '应急处置', type: 'checkbox-group', required: true, options: [
+        { value: 'stop_return', label: '停止回血（丢弃体外血液）' },
+        { value: 'stop_dialysis', label: '立即终止透析' },
+        { value: 'oxygen', label: '给予吸氧' },
+        { value: 'blood_sample', label: '抽血样送检' },
+        { value: 'call_doctor', label: '呼叫医生/抢救' },
+        { value: 'other', label: '其他（见备注）' },
+      ]},
+      { key: 'doctorArrivalTime', label: '医生到达时间', type: 'text', placeholder: '如：14:35' },
+      { key: 'remark', label: '备注', type: 'textarea', placeholder: '事件经过详细记录…', required: true },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
+    ],
+  },
+};
 
 const PENDING_ORDERS = [
   { key: '1', drug: '重组人促红素注射液 6000 IU', detail: '皮下注射 · tiw · 今日应执行', executed: false },
   { key: '2', drug: '蔗糖铁注射液 200mg', detail: '静脉输注（透析中）· qw · 上次 2026-03-12', executed: false },
 ];
 
-type VitalSignRow = {
-  id: string;
-  time: string;
-  values: Record<string, string>;
-};
+type VitalSignRow = { id: string; time: string; values: Record<string, string> };
 
 function createVitalSignRow(): VitalSignRow {
   const now = dayjs();
   return {
     id: `vital-${now.valueOf()}-${Math.random().toString(36).slice(2, 7)}`,
-    time: now.format('HH:mm:ss'),
+    time: now.format('HH:mm'),
     values: {},
   };
 }
 
-// ── Daugirdas II 公式 ────────────────────────────────────
+// Daugirdas II 公式 — 来源：《血液净化标准化操作规程（2021版）》第11章
 function calcKtv(preBun: number, postBun: number, t: number, uf: number, postWeight: number): number | null {
   if (!preBun || !postBun || postBun >= preBun) return null;
   if (t < 1 || t > 8 || postWeight < 20 || postWeight > 200) return null;
@@ -78,13 +359,391 @@ function calcUrr(preBun: number, postBun: number): number | null {
   return Math.round((1 - postBun / preBun) * 100);
 }
 
-// ── 表单区块标题 ──────────────────────────────────────────
-function SectionHeader({ icon, title }: { icon: string; title: string }) {
-  return (
-    <div className="hd-form-section-header">
-      <span>{icon}</span>
-      <span>{title}</span>
+// ── A4 打印单 HTML 生成 ───────────────────────────────────
+interface PrintData {
+  patientLabel: string;
+  printDate: string;
+  prescription: typeof PATIENTS_LIST[0]['prescription'] | null;
+  preAssessment: typeof PATIENTS_LIST[0]['preAssessment'] | null;
+  dryWeight: number | null;
+  preWeight: number | null;
+  postWeight: number | null;
+  durationHours: number | null;
+  preBun: number | null;
+  postBun: number | null;
+  rxUF: number | null;
+  ufRate: string | null;
+  computedUF: number | null;
+  ufPercent: string | null;
+  ufAlert: boolean;
+  accessType: string;
+  catheterLocation: string;
+  catheterDays: number | null;
+  complications: string[];
+  complicationRecords: Record<string, Record<string, unknown>>;
+  orders: Record<string, boolean>;
+  vitalRows: VitalSignRow[];
+  ktv: number | null;
+  urr: number | null;
+  ktvAdequate: boolean | null;
+  urrAdequate: boolean | null;
+  formValues: Record<string, unknown>;
+}
+
+function generatePrintHtml(d: PrintData): string {
+  const v = (val: unknown, unit = '', fallback = '—') =>
+    val !== null && val !== undefined && val !== '' ? `${val}${unit}` : fallback;
+
+  // 生命体征表格行
+  const vitalTableRows = d.vitalRows.map(row => `
+    <tr>
+      <td>${row.time}</td>
+      <td>${row.values.sbp || ''}</td>
+      <td>${row.values.dbp || ''}</td>
+      <td>${row.values.pulse || ''}</td>
+      <td>${row.values.ap || ''}</td>
+      <td>${row.values.vp || ''}</td>
+      <td>${row.values.tmp || ''}</td>
+      <td>${row.values.bloodflow || ''}</td>
+      <td style="text-align:left">${row.values.remark || ''}</td>
+      <td>${row.values.signature || ''}</td>
+    </tr>`).join('');
+
+  // 并发症列表
+  const compItems = d.complications.length === 0
+    ? '<span style="color:#666">无</span>'
+    : d.complications.map(cv => {
+      const comp = COMPLICATIONS.find(c => c.value === cv);
+      const rec = d.complicationRecords[cv];
+      const measuresArr = rec?.measures as string[] | undefined;
+      const measuresText = measuresArr?.length
+        ? measuresArr.map(m => {
+          const cfg = COMPLICATION_CONFIG[cv];
+          const opt = cfg?.fields.find(f => f.key === 'measures') as { options?: { value: string; label: string }[] } | undefined;
+          return opt?.options?.find(o => o.value === m)?.label ?? m;
+        }).join('、')
+        : '';
+      return `<div style="margin-bottom:3px">
+        <b>${comp?.emergency ? '⚡ ' : ''}${comp?.label ?? cv}</b>
+        ${rec?.occurrenceTime ? `&nbsp;${rec.occurrenceTime}` : ''}
+        ${measuresText ? `<br><span style="color:#444">处置：${measuresText}</span>` : ''}
+        ${rec?.doctorNotified === 'yes' ? '&nbsp;<b>[已通知医生]</b>' : ''}
+        ${rec?.nurse ? `&nbsp;护士：${rec.nurse}` : ''}
+      </div>`;
+    }).join('');
+
+  // 医嘱执行情况
+  const orderItems = PENDING_ORDERS.map(o =>
+    `<div style="margin-bottom:2px">${d.orders[o.key] ? '☑' : '☐'} ${o.drug} <span style="color:${d.orders[o.key] ? '#008000' : '#CC6600'}">${d.orders[o.key] ? '已执行' : '未执行'}</span></div>`
+  ).join('');
+
+  // Kt/V 区域
+  const ktvSection = d.ktv !== null ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px">
+      <div style="border:2px solid ${d.ktvAdequate ? '#008000' : '#CC6600'};text-align:center;padding:5px;border-radius:4px">
+        <div style="font-size:7pt;color:#555">spKt/V（Daugirdas II）</div>
+        <div style="font-size:20pt;font-weight:bold;color:${d.ktvAdequate ? '#008000' : '#CC6600'}">${d.ktv}</div>
+        <div style="font-size:8pt;font-weight:bold;color:${d.ktvAdequate ? '#008000' : '#CC6600'}">${d.ktvAdequate ? '✓ 达标 ≥1.2' : '✗ 不达标 <1.2'}</div>
+      </div>
+      <div style="border:2px solid ${d.urrAdequate ? '#008000' : '#CC6600'};text-align:center;padding:5px;border-radius:4px">
+        <div style="font-size:7pt;color:#555">URR（尿素清除率）</div>
+        <div style="font-size:20pt;font-weight:bold;color:${d.urrAdequate ? '#008000' : '#CC6600'}">${d.urr}%</div>
+        <div style="font-size:8pt;font-weight:bold;color:${d.urrAdequate ? '#008000' : '#CC6600'}">${d.urrAdequate ? '✓ 达标 ≥65%' : '✗ 不达标 <65%'}</div>
+      </div>
+      <div style="border:2px solid ${d.ufAlert ? '#CC0000' : '#0066CC'};text-align:center;padding:5px;border-radius:4px">
+        <div style="font-size:7pt;color:#555">实际超滤量</div>
+        <div style="font-size:16pt;font-weight:bold;color:${d.ufAlert ? '#CC0000' : '#0066CC'}">${v(d.computedUF, ' mL')}</div>
+        <div style="font-size:8pt;color:${d.ufAlert ? '#CC0000' : '#444'}">${d.ufPercent ? `占干体重 ${d.ufPercent}%${d.ufAlert ? ' ⚠超限' : ''}` : '—'}</div>
+      </div>
+    </div>` : `<div style="color:#888;font-style:italic">BUN 数据未填写，Kt/V 未计算</div>`;
+
+  const CATHETER_LOCATION_MAP: Record<string, string> = {
+    right_jugular: '右颈内静脉', left_jugular: '左颈内静脉',
+    right_femoral: '右股静脉', left_femoral: '左股静脉',
+    right_subclavian: '右锁骨下静脉', left_subclavian: '左锁骨下静脉',
+  };
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>血液透析记录单 — ${d.patientLabel} — ${d.printDate}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Microsoft YaHei','微软雅黑',SimSun,sans-serif;font-size:9pt;color:#000;background:#fff}
+  .page{width:210mm;min-height:297mm;padding:7mm 9mm;margin:0 auto}
+  .hd-title{text-align:center;border-bottom:2.5px solid #000;padding-bottom:5px;margin-bottom:6px}
+  .hd-title h1{font-size:15pt;font-weight:bold;letter-spacing:2px}
+  .hd-title .meta{font-size:8.5pt;margin-top:3px;display:flex;justify-content:space-between}
+  .block{border:1px solid #333;margin-bottom:5px;border-radius:2px;overflow:hidden}
+  .block-hd{background:#EAECF0;font-weight:bold;font-size:8pt;padding:2px 6px;border-bottom:1px solid #333}
+  .block-bd{padding:4px 6px}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:5px}
+  .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:5px}
+  .kv{display:flex;flex-wrap:wrap;gap:2px 14px;line-height:1.8}
+  .kv .item{white-space:nowrap}
+  .kv .item b{font-weight:bold}
+  table{width:100%;border-collapse:collapse;font-size:7.5pt}
+  th,td{border:1px solid #555;padding:2px 3px;text-align:center;vertical-align:middle}
+  th{background:#EAECF0;font-weight:bold}
+  .sign-line{display:flex;gap:0;margin-top:4px;border-top:1px solid #333;padding-top:4px}
+  .sign-cell{flex:1;text-align:center;border-right:1px solid #ccc;padding:2px 4px;font-size:8pt}
+  .sign-cell:last-child{border-right:none}
+  .sign-cell .lbl{color:#555;font-size:7.5pt}
+  .sign-cell .val{border-bottom:1px solid #333;min-height:16px;margin-top:1px}
+  @media print{
+    body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .no-print{display:none!important}
+    @page{size:A4 portrait;margin:0}
+    .page{margin:0;padding:7mm 9mm}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- 页眉 -->
+  <div class="hd-title">
+    <h1>血 液 透 析 记 录 单</h1>
+    <div class="meta">
+      <span>患者：<b>${d.patientLabel}</b></span>
+      <span>班次：<b>${d.preAssessment?.shift ?? '—'}</b>&emsp;机器：<b>${d.preAssessment?.machineNo ?? '—'}</b></span>
+      <span>通路：<b>${d.accessType}</b></span>
+      <span>透析日期：<b>${d.printDate}</b></span>
     </div>
+  </div>
+
+  <!-- 第一行：处方参数 + 透前评估 -->
+  <div class="g2">
+    <div class="block">
+      <div class="block-hd">透析处方参数（来自医生处方）</div>
+      <div class="block-bd kv">
+        <div class="item">血流速：<b>${v(d.prescription?.bloodFlow, ' mL/min')}</b></div>
+        <div class="item">透析液流速：<b>${v(d.prescription?.dialysateFlow, ' mL/min')}</b></div>
+        <div class="item">标准时长：<b>${v(d.prescription?.duration, ' h')}</b></div>
+        <div class="item">透析器：<b>${v(d.prescription?.dialyzer)}</b></div>
+        <div class="item">抗凝方案：<b>${v(d.prescription?.anticoagulant)}</b></div>
+        <div class="item">Na：<b>${v(d.prescription?.na, ' mmol/L')}</b></div>
+        <div class="item">K：<b>${v(d.prescription?.k, ' mmol/L')}</b></div>
+        <div class="item">Ca：<b>${v(d.prescription?.ca, ' mmol/L')}</b></div>
+        <div class="item">干体重：<b>${v(d.dryWeight, ' kg')}</b></div>
+      </div>
+    </div>
+    <div class="block">
+      <div class="block-hd">透前评估 &amp; 体重超滤</div>
+      <div class="block-bd kv">
+        <div class="item">透前收缩压：<b>${v(d.preAssessment?.sbp, ' mmHg')}</b></div>
+        <div class="item">舒张压：<b>${v(d.preAssessment?.dbp, ' mmHg')}</b></div>
+        <div class="item">脉搏：<b>${v(d.preAssessment?.pulse, ' 次/分')}</b></div>
+        <div class="item">体温：<b>${v(d.preAssessment?.temp, ' ℃')}</b></div>
+        <div class="item">上机前体重：<b>${v(d.preWeight, ' kg')}</b></div>
+        <div class="item">处方超滤量：<b>${v(d.rxUF, ' mL')}</b></div>
+        <div class="item">超滤率：<b>${v(d.ufRate, ' mL/h')}</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 第二行：通路信息 + 护士签名 -->
+  <div class="g2">
+    <div class="block">
+      <div class="block-hd">血管通路信息</div>
+      <div class="block-bd kv">
+        <div class="item">通路类型：<b>${d.accessType}</b></div>
+        ${(d.accessType === 'TCC' || d.accessType === 'NCC') ? `
+          <div class="item">导管位置：<b>${CATHETER_LOCATION_MAP[d.catheterLocation] ?? d.catheterLocation ?? '—'}</b></div>
+          <div class="item">留置天数：<b>${v(d.catheterDays, ' 天')}</b></div>
+        ` : ''}
+        <div class="item">穿刺结果：<b>${(d.formValues.puncture_result as string) ?? '—'}</b></div>
+        <div class="item">震颤：<b>${(d.formValues.thrill as string) ?? '—'}</b></div>
+        <div class="item">杂音：<b>${(d.formValues.bruit as string) ?? '—'}</b></div>
+      </div>
+    </div>
+    <div class="block">
+      <div class="block-hd">护士签名（上机前）</div>
+      <div class="block-bd">
+        <div class="sign-line">
+          <div class="sign-cell"><div class="lbl">穿刺护士</div><div class="val">&nbsp;</div></div>
+          <div class="sign-cell"><div class="lbl">上机护士</div><div class="val">&nbsp;</div></div>
+          <div class="sign-cell"><div class="lbl">二次核对</div><div class="val">&nbsp;</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 第三行：生命体征表格 -->
+  <div class="block" style="margin-bottom:5px">
+    <div class="block-hd">透析中生命体征记录（每50分钟记录一次）</div>
+    <div class="block-bd" style="padding:3px 4px">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:42px">时间</th>
+            <th style="width:50px">收缩压<br>(mmHg)</th>
+            <th style="width:50px">舒张压<br>(mmHg)</th>
+            <th style="width:50px">脉搏<br>(次/分)</th>
+            <th style="width:50px">动脉压<br>(mmHg)</th>
+            <th style="width:50px">静脉压<br>(mmHg)</th>
+            <th style="width:50px">跨膜压<br>(mmHg)</th>
+            <th style="width:52px">血流速<br>(mL/min)</th>
+            <th>备注</th>
+            <th style="width:54px">护士签名</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${vitalTableRows}
+          <tr><td colspan="10" style="height:16px"></td></tr>
+          <tr><td colspan="10" style="height:16px"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 第四行：医嘱执行 + 并发症 -->
+  <div class="g2">
+    <div class="block">
+      <div class="block-hd">今日医嘱执行</div>
+      <div class="block-bd" style="font-size:8.5pt">${orderItems}</div>
+    </div>
+    <div class="block">
+      <div class="block-hd">并发症记录</div>
+      <div class="block-bd" style="font-size:8.5pt">${compItems}</div>
+    </div>
+  </div>
+
+  <!-- 第五行：透析后评估 -->
+  <div class="block" style="margin-bottom:5px">
+    <div class="block-hd">透析后评估</div>
+    <div class="block-bd">
+      <div class="kv" style="margin-bottom:4px">
+        <div class="item">实际时长：<b>${v(d.durationHours, ' h')}</b></div>
+        <div class="item">透后体重：<b>${v(d.postWeight, ' kg')}</b></div>
+        <div class="item">实际脱水量：<b>${v(d.computedUF, ' mL')}${d.ufAlert ? ' ⚠超限' : ''}</b></div>
+        <div class="item">期间入量：<b>${v(d.formValues.input_volume, ' mL')}</b></div>
+        <div class="item">透后收缩压：<b>${v(d.formValues.post_sbp, ' mmHg')}</b></div>
+        <div class="item">透后舒张压：<b>${v(d.formValues.post_dbp, ' mmHg')}</b></div>
+        <div class="item">透后脉搏：<b>${v(d.formValues.post_pulse, ' 次/分')}</b></div>
+        <div class="item">凝血分级：<b>${v(d.formValues.coagulation)}</b></div>
+        <div class="item">渗血部位：<b>${v(d.formValues.bleed_site)}</b></div>
+        <div class="item">封管用药：<b>${v(d.formValues.lock_drug)}</b></div>
+        <div class="item">患者状态：<b>${v(d.formValues.patient_status)}</b></div>
+        <div class="item">机器运行：<b>${v(d.formValues.machine_status)}</b></div>
+        <div class="item">消毒方式：<b>${v(d.formValues.disinfect)}</b></div>
+        <div class="item">皮肤完好：<b>${v(d.formValues.skin_intact)}</b></div>
+        <div class="item">透前BUN：<b>${v(d.preBun, ' mmol/L')}</b></div>
+        <div class="item">透后BUN：<b>${v(d.postBun, ' mmol/L')}</b></div>
+      </div>
+      ${ktvSection}
+    </div>
+  </div>
+
+  <!-- 第六行：备注 + 签名 -->
+  <div class="block">
+    <div class="block-hd">护士备注 &amp; 记录签名</div>
+    <div class="block-bd">
+      <div style="border-bottom:1px solid #333;min-height:22px;margin-bottom:6px;font-size:8.5pt;color:#555">
+        ${(d.formValues.remark as string) ? (d.formValues.remark as string) : '&nbsp;'}
+      </div>
+      <div class="sign-line" style="border-top:none;padding-top:0">
+        <div class="sign-cell"><div class="lbl">记录护士签名</div><div class="val">&nbsp;</div></div>
+        <div class="sign-cell"><div class="lbl">穿刺护士签名</div><div class="val">&nbsp;</div></div>
+        <div class="sign-cell"><div class="lbl">上机护士签名</div><div class="val">&nbsp;</div></div>
+        <div class="sign-cell" style="flex:1.5"><div class="lbl">记录日期</div><div class="val" style="font-weight:bold">${d.printDate}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 页脚 -->
+  <div style="text-align:center;font-size:7pt;color:#888;margin-top:4px;border-top:1px solid #ccc;padding-top:3px">
+    本记录单由血液透析室管理系统自动生成 · 打印时间：${dayjs().format('YYYY-MM-DD HH:mm')} · 打印后请核对并签字确认
+  </div>
+
+</div>
+<script>window.onload=function(){window.print()}</script>
+</body>
+</html>`;
+}
+
+// ── 区块标题组件 ──────────────────────────────────────────
+function SectionTitle({ step, color, title, extra }: {
+  step: number; color: string; title: string; extra?: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '10px 16px',
+      background: '#FAFBFC',
+      borderBottom: '1px solid #EAECF0',
+    }}>
+      <div style={{
+        width: 24, height: 24, borderRadius: '50%',
+        background: color, color: '#fff',
+        fontSize: 12, fontWeight: 700,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+      }}>{step}</div>
+      <span style={{ fontWeight: 600, fontSize: 14, color: '#0D1B3E', flex: 1 }}>{title}</span>
+      {extra}
+    </div>
+  );
+}
+
+// ── 只读值展示格（带背景色） ──────────────────────────────
+function ReadonlyValue({ label, value, color = '#0369A1', bg = '#F0F9FF', border = '#BAE6FD', mono = false }: {
+  label: string; value: React.ReactNode; color?: string; bg?: string; border?: string; mono?: boolean;
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 3, fontWeight: 500 }}>{label}</div>
+      <div style={{
+        padding: '5px 10px', background: bg, border: `1px solid ${border}`,
+        borderRadius: 6, fontSize: 14, fontWeight: 700, color,
+        fontFamily: mono ? 'DM Mono, monospace' : 'inherit',
+      }}>{value}</div>
+    </div>
+  );
+}
+
+// ── 表单项标签 ────────────────────────────────────────────
+function FieldLabel({ text, required }: { text: string; required?: boolean }) {
+  return (
+    <span style={{ fontSize: 12, color: '#475569', fontWeight: 500 }}>
+      {text}{required && <span style={{ color: '#EF4444', marginLeft: 2 }}>*</span>}
+    </span>
+  );
+}
+
+// ── 区块容器 ──────────────────────────────────────────────
+function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{
+      background: '#fff',
+      borderRadius: 10,
+      border: '1px solid #E2E8F0',
+      marginBottom: 12,
+      overflow: 'hidden',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+      ...style,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function SectionBody({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <div style={{ padding: '16px 18px', ...style }}>{children}</div>;
+}
+
+// ── 网格布局辅助 ──────────────────────────────────────────
+function Grid({ cols = 4, gap = 14, children, style }: {
+  cols?: number; gap?: number; children: React.ReactNode; style?: React.CSSProperties;
+}) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: `repeat(${cols}, 1fr)`,
+      gap,
+      ...style,
+    }}>{children}</div>
   );
 }
 
@@ -105,7 +764,15 @@ export default function DialysisEntryPage() {
   const [preBun, setPreBun] = useState<number | null>(null);
   const [postBun, setPostBun] = useState<number | null>(null);
 
+  const [accessType, setAccessType] = useState<'AVF' | 'AVG' | 'TCC' | 'NCC'>('AVF');
+  const [catheterLocation, setCatheterLocation] = useState<string>('');
+  const [catheterPlacedDate, setCatheterPlacedDate] = useState<string | null>(null);
+  const catheterDays = catheterPlacedDate ? dayjs().diff(dayjs(catheterPlacedDate), 'day') : null;
+
   const [complications, setComplications] = useState<string[]>([]);
+  const [complicationRecords, setComplicationRecords] = useState<Record<string, Record<string, unknown>>>({});
+  const [treatmentModalTarget, setTreatmentModalTarget] = useState<string | null>(null);
+  const [treatmentForm] = Form.useForm();
   const [orders, setOrders] = useState<Record<string, boolean>>({});
   const [vitalRows, setVitalRows] = useState<VitalSignRow[]>([createVitalSignRow()]);
 
@@ -117,57 +784,46 @@ export default function DialysisEntryPage() {
       setPreAssessment(p.preAssessment);
       setDryWeight(p.dryWeight);
       setDurationHours(p.prescription.duration);
+      setAccessType(p.vascular.accessType);
+      setCatheterLocation(p.vascular.catheterLocation);
+      setCatheterPlacedDate(p.vascular.catheterPlacedDate);
     }
   }, [form]);
 
-  // 计算超滤量
   const computedUF = preWeight && postWeight ? Math.round((preWeight - postWeight) * 1000) : null;
-  const ufToUse = computedUF;
-  const ufPercent = dryWeight && ufToUse ? ((ufToUse / (dryWeight * 1000)) * 100).toFixed(1) : null;
+  const ufPercent = dryWeight && computedUF ? ((computedUF / (dryWeight * 1000)) * 100).toFixed(1) : null;
   const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;
 
-  // Kt/V 计算
   const ktv = preBun && postBun && durationHours && postWeight
-    ? calcKtv(preBun, postBun, durationHours, (ufToUse ?? 0) / 1000, postWeight)
+    ? calcKtv(preBun, postBun, durationHours, (computedUF ?? 0) / 1000, postWeight)
     : null;
   const urr = preBun && postBun ? calcUrr(preBun, postBun) : null;
   const ktvAdequate = ktv !== null ? ktv >= 1.2 : null;
   const urrAdequate = urr !== null ? urr >= 65 : null;
 
   const handleVitalChange = (rowId: string, field: string, val: string) => {
-    setVitalRows(prev => prev.map(row => (
-      row.id === rowId
-        ? { ...row, values: { ...row.values, [field]: val } }
-        : row
-    )));
+    setVitalRows(prev => prev.map(row =>
+      row.id === rowId ? { ...row, values: { ...row.values, [field]: val } } : row
+    ));
   };
 
-  const handleAddVitalRow = () => {
-    setVitalRows(prev => [...prev, createVitalSignRow()]);
-  };
+  const handleAddVitalRow = () => setVitalRows(prev => [...prev, createVitalSignRow()]);
 
   const handleRemoveVitalRow = (rowId: string) => {
     setVitalRows(prev => {
-      if (prev.length <= 1) {
-        message.warning('至少保留 1 条生命体征记录');
-        return prev;
-      }
+      if (prev.length <= 1) { message.warning('至少保留 1 条生命体征记录'); return prev; }
       return prev.filter(row => row.id !== rowId);
     });
   };
 
-  const handleOrderToggle = (key: string, checked: boolean) => {
+  const handleOrderToggle = (key: string, checked: boolean) =>
     setOrders(prev => ({ ...prev, [key]: checked }));
-  };
 
   const handleSubmit = async () => {
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
     if (!preWeight) { message.warning('请填写透析前体重'); return; }
     const hasUnsignedVitalRow = vitalRows.some(row => !row.values.signature?.trim());
-    if (hasUnsignedVitalRow) {
-      message.warning('透析中生命体征记录每行都需要护士签名');
-      return;
-    }
+    if (hasUnsignedVitalRow) { message.warning('透析中生命体征记录每行都需要护士签名'); return; }
     setLoading(true);
     try {
       await new Promise(r => setTimeout(r, 800));
@@ -177,266 +833,722 @@ export default function DialysisEntryPage() {
       setLoading(false);
     }
   };
+
   const autoGeneratedDate = dayjs().format('YYYY年M月D日');
+  const hasEmergency = complications.some(c => COMPLICATIONS.find(co => co.value === c)?.emergency);
+  const rxUF = preWeight && dryWeight ? Math.round((preWeight - dryWeight) * 1000) : null;
+  const ufRate = rxUF !== null && prescription?.duration ? (rxUF / prescription.duration).toFixed(0) : null;
+
+  const handlePrint = useCallback(() => {
+    if (!selectedPatient) { message.warning('请先选择患者后再打印'); return; }
+    const patient = PATIENTS_LIST.find(p => p.value === selectedPatient);
+    const formValues = form.getFieldsValue() as Record<string, unknown>;
+    const html = generatePrintHtml({
+      patientLabel: patient?.label?.split(' — ').join(' ') ?? selectedPatient,
+      printDate: dayjs().format('YYYY年MM月DD日'),
+      prescription,
+      preAssessment,
+      dryWeight,
+      preWeight,
+      postWeight,
+      durationHours,
+      preBun,
+      postBun,
+      rxUF,
+      ufRate,
+      computedUF,
+      ufPercent,
+      ufAlert,
+      accessType,
+      catheterLocation,
+      catheterDays,
+      complications,
+      complicationRecords,
+      orders,
+      vitalRows,
+      ktv,
+      urr,
+      ktvAdequate,
+      urrAdequate,
+      formValues,
+    });
+    const win = window.open('', '_blank', 'width=900,height=1000');
+    if (!win) { message.error('请允许弹出窗口以进行打印'); return; }
+    win.document.write(html);
+    win.document.close();
+  }, [
+    selectedPatient, prescription, preAssessment, dryWeight, preWeight, postWeight,
+    durationHours, preBun, postBun, rxUF, ufRate, computedUF, ufPercent, ufAlert,
+    accessType, catheterLocation, catheterDays, complications, complicationRecords,
+    orders, vitalRows, ktv, urr, ktvAdequate, urrAdequate, form,
+  ]);
 
   return (
     <PageShell fullWidth>
-      {/* 顶部操作栏 */}
-      <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
-        <div className="flex items-center gap-12">
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 15, color: '#0D1B3E' }}>录入透析记录</div>
-            <div style={{ fontSize: 12, color: '#7B92BC' }}>{dayjs().format('YYYY年MM月DD日 dddd')}</div>
+      {/* ═══════════════════════ 顶部操作栏（固定） ═══════════════════════ */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '10px 0 14px',
+        borderBottom: '2px solid #EDF0F7',
+        marginBottom: 16,
+      }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} size="small">返回</Button>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <span style={{ fontWeight: 700, fontSize: 16, color: '#0D1B3E' }}>录入透析记录</span>
+            <span style={{ fontSize: 12, color: '#94A3B8' }}>{dayjs().format('YYYY年MM月DD日 dddd')}</span>
           </div>
         </div>
-        <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit}>
-          保存透析记录
+
+        {/* 患者快选 + 日期 内联到顶栏 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Select
+            placeholder="选择患者…"
+            value={selectedPatient || undefined}
+            onChange={handlePatientChange}
+            options={PATIENTS_LIST.map(p => ({ value: p.value, label: p.label }))}
+            style={{ width: 230 }}
+            showSearch
+            size="middle"
+          />
+          <DatePicker defaultValue={dayjs()} style={{ width: 130 }} format="YYYY-MM-DD" size="middle" />
+        </div>
+
+        <Button icon={<PrinterOutlined />} onClick={handlePrint} size="middle">
+          打印记录单
+        </Button>
+        <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit} size="middle">
+          保存记录
         </Button>
       </div>
 
       <Form form={form} layout="vertical" size="middle">
 
-        {/* ① 患者选择 + 基本信息 */}
-        <div className="hd-form-section">
-          <SectionHeader icon="👤" title="患者选择" />
-          <div style={{ padding: 20 }}>
-            <div className="grid-2" style={{ gap: 20 }}>
-              <Form.Item label="选择患者" required style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="请选择患者…"
-                  value={selectedPatient || undefined}
-                  onChange={handlePatientChange}
-                  options={PATIENTS_LIST.map(p => ({ value: p.value, label: p.label }))}
-                  style={{ width: '100%' }}
-                  showSearch
-                />
-              </Form.Item>
-              <Form.Item label="透析日期" required style={{ marginBottom: 0 }}>
-                <DatePicker defaultValue={dayjs()} style={{ width: '100%' }} format="YYYY-MM-DD" />
-              </Form.Item>
-            </div>
-            {prescription && (
-              <div style={{ marginTop: 16, padding: 16, background: '#F8FAFC', borderRadius: 8, border: '1px solid #DBEAFE' }}>
-                <div style={{ fontWeight: 700, color: '#1D4ED8', marginBottom: 10 }}>
-                  📋 当前生效透析处方（自动导入，仅查看不可修改）
-                </div>
-                <div className="grid-4" style={{ gap: 12 }}>
-                  <div style={{ fontSize: 13, color: '#334155' }}>血流速：<strong>{prescription.bloodFlow} mL/min</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>标准时长：<strong>{prescription.duration} h</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透析液流速：<strong>{prescription.dialysateFlow} mL/min</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透析器：<strong>{prescription.dialyzer}</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>抗凝方案：<strong>{prescription.anticoagulant}</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>干体重目标：<strong>{dryWeight} kg</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透析液 Na：<strong>{prescription.na} mmol/L</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透析液 K/Ca：<strong>{prescription.k} / {prescription.ca} mmol/L</strong></div>
-                </div>
+        {/* ══════════════════ ① 患者信息 + 处方 + 体重 ══════════════════ */}
+        <Section>
+          <SectionTitle step={1} color="#1D4ED8" title="患者信息 · 处方参数 · 体重超滤" />
+          <SectionBody>
+            {!selectedPatient && (
+              <div style={{
+                padding: '20px', textAlign: 'center',
+                color: '#94A3B8', background: '#F8FAFC', borderRadius: 8,
+                border: '1px dashed #CBD5E1', fontSize: 13,
+              }}>
+                请在顶部选择患者，系统将自动带入处方与评估信息
               </div>
             )}
-            {preAssessment && (
-              <div style={{ marginTop: 12, padding: 16, background: '#F8FAFC', borderRadius: 8, border: '1px solid #DBEAFE' }}>
-                <div style={{ fontWeight: 700, color: '#1D4ED8', marginBottom: 10 }}>
-                  📊 透前评估（来自处方，仅查看不可修改）
+
+            {prescription && preAssessment && (
+              <>
+                {/* 患者基础信息条 */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  padding: '8px 12px',
+                  background: 'linear-gradient(90deg,#EFF6FF,#F0F9FF)',
+                  borderRadius: 8, marginBottom: 14,
+                  border: '1px solid #BFDBFE',
+                }}>
+                  <span style={{ fontWeight: 700, fontSize: 15, color: '#1E40AF' }}>
+                    {PATIENTS_LIST.find(p => p.value === selectedPatient)?.label?.split(' — ')[0]}
+                  </span>
+                  <Tag color="blue">{preAssessment.shift}</Tag>
+                  <Tag color="geekblue">{preAssessment.machineNo}</Tag>
+                  <Tag color={accessType === 'AVF' || accessType === 'AVG' ? 'green' : 'orange'}>
+                    {accessType}
+                  </Tag>
+                  <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
+                    📋 处方与评估信息自动导入，仅查看不可修改
+                  </span>
                 </div>
-                <div className="grid-4" style={{ gap: 12 }}>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透前收缩压：<strong>{preAssessment.sbp} mmHg</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透前舒张压：<strong>{preAssessment.dbp} mmHg</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透前脉搏：<strong>{preAssessment.pulse} 次/分</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>透前体温：<strong>{preAssessment.temp} ℃</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>班次：<strong>{preAssessment.shift}</strong></div>
-                  <div style={{ fontSize: 13, color: '#334155' }}>默认机器：<strong>{preAssessment.machineNo}</strong></div>
+
+                {/* 处方参数 + 透前生命体征 两列 */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                  {/* 左：处方参数 */}
+                  <div style={{
+                    padding: 12, background: '#F8FAFC', borderRadius: 8,
+                    border: '1px solid #DBEAFE',
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                      处方参数
+                    </div>
+                    <Grid cols={3} gap={10}>
+                      <ReadonlyValue label="血流速" value={`${prescription.bloodFlow} mL/min`} />
+                      <ReadonlyValue label="透析液流速" value={`${prescription.dialysateFlow} mL/min`} />
+                      <ReadonlyValue label="标准时长" value={`${prescription.duration} h`} />
+                      <ReadonlyValue label="透析器" value={prescription.dialyzer} />
+                      <ReadonlyValue label="Na / K / Ca" value={`${prescription.na} / ${prescription.k} / ${prescription.ca}`} />
+                      <ReadonlyValue label="抗凝方案" value={prescription.anticoagulant} />
+                    </Grid>
+                  </div>
+
+                  {/* 右：透前生命体征 */}
+                  <div style={{
+                    padding: 12, background: '#F8FAFC', borderRadius: 8,
+                    border: '1px solid #DBEAFE',
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                      透前评估
+                    </div>
+                    <Grid cols={3} gap={10}>
+                      <ReadonlyValue label="收缩压" value={`${preAssessment.sbp} mmHg`} />
+                      <ReadonlyValue label="舒张压" value={`${preAssessment.dbp} mmHg`} />
+                      <ReadonlyValue label="脉搏" value={`${preAssessment.pulse} 次/分`} />
+                      <ReadonlyValue label="体温" value={`${preAssessment.temp} ℃`} />
+                    </Grid>
+                  </div>
                 </div>
-              </div>
+
+                {/* 体重 & 超滤目标 */}
+                <div style={{
+                  padding: '12px 14px', background: '#FFFDF0', borderRadius: 8,
+                  border: '1px solid #FDE68A',
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 10, letterSpacing: 0.5 }}>
+                    ⚖️ 体重与超滤目标（干体重来自处方；超滤量/超滤率自动计算）
+                  </div>
+                  <Grid cols={4} gap={14}>
+                    <ReadonlyValue label="干体重（处方）" value={`${dryWeight} kg`} color="#1D4ED8" bg="#EFF6FF" border="#BFDBFE" />
+                    <div>
+                      <FieldLabel text="上机前体重" required />
+                      <InputNumber
+                        min={20} max={200} step={0.1} precision={1}
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={preWeight ?? undefined}
+                        onChange={v => setPreWeight(v)}
+                        placeholder="如：64.5"
+                        addonAfter="kg"
+                      />
+                    </div>
+                    <ReadonlyValue
+                      label="处方超滤量 = (前-干)×1000"
+                      value={rxUF !== null ? `${rxUF} mL${rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? ' ⚠️' : ''}` : '—'}
+                      color={rxUF !== null && rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? '#BE123C' : '#15803D'}
+                      bg={rxUF !== null && rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? '#FFF1F2' : '#F0FDF4'}
+                      border={rxUF !== null && rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? '#FECDD3' : '#BBF7D0'}
+                    />
+                    <ReadonlyValue
+                      label="超滤率 = 超滤量 ÷ 时长"
+                      value={ufRate !== null ? `${ufRate} mL/h` : '—'}
+                      color="#0369A1"
+                      bg="#F0F9FF"
+                      border="#BAE6FD"
+                    />
+                  </Grid>
+                </div>
+              </>
             )}
-          </div>
-        </div>
+          </SectionBody>
+        </Section>
 
-        {/* ② 护士签名信息 */}
-        <div className="hd-form-section">
-          <SectionHeader icon="🖊️" title="护士签名信息" />
-          <div style={{ padding: 20 }}>
-            <div className="grid-4" style={{ gap: 16 }}>
-              <Form.Item label="穿刺护士" style={{ marginBottom: 0 }}>
-                <Input placeholder="请输入穿刺护士姓名" />
-              </Form.Item>
-              <Form.Item label="上机护士" style={{ marginBottom: 0 }}>
-                <Input placeholder="请输入上机护士姓名" />
-              </Form.Item>
-              <Form.Item label="二次核对护士" style={{ marginBottom: 0 }}>
-                <Input placeholder="请输入二次核对护士姓名" />
-              </Form.Item>
+        {/* ══════════════════ ② 通路信息 ══════════════════ */}
+        <Section>
+          <SectionTitle step={2} color="#0891B2" title="血管通路信息" />
+          <SectionBody>
+            {/* 通路类型选择条 */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '8px 12px', background: '#F0F9FF',
+              borderRadius: 8, border: '1px solid #BAE6FD', marginBottom: 14,
+            }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#0369A1', whiteSpace: 'nowrap' }}>通路类型</span>
+              <Radio.Group value={accessType} onChange={e => setAccessType(e.target.value)} optionType="button" buttonStyle="solid">
+                <Radio.Button value="AVF">AVF 自体内瘘</Radio.Button>
+                <Radio.Button value="AVG">AVG 人工血管</Radio.Button>
+                <Radio.Button value="TCC">TCC 长期导管</Radio.Button>
+                <Radio.Button value="NCC">NCC 临时导管</Radio.Button>
+              </Radio.Group>
+              {selectedPatient && (
+                <Tag color="blue" style={{ marginLeft: 'auto', fontSize: 11 }}>已从通路管理同步</Tag>
+              )}
             </div>
-          </div>
-        </div>
 
-        {/* ③ 生命体征记录 */}
-        <div className="hd-form-section">
-          <SectionHeader icon="💊" title="透析中生命体征记录（每50分钟记录一次）" />
-          <div style={{ padding: 20 }}>
-            <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: '#64748B' }}>
-                时间点由系统按当前时间自动记录，不可修改；可根据病情随时增减记录行。每行操作需护士签名。
+            {/* AVF / AVG 字段 */}
+            {(accessType === 'AVF' || accessType === 'AVG') && (
+              <>
+                <Grid cols={4} gap={14} style={{ marginBottom: 12 }}>
+                  <Form.Item label={<FieldLabel text="震颤" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="strong" options={[
+                      { value: 'strong', label: '强' },
+                      { value: 'weak', label: '弱' },
+                      { value: 'none', label: '无' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="杂音" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="strong" options={[
+                      { value: 'strong', label: '强' },
+                      { value: 'weak', label: '弱' },
+                      { value: 'none', label: '无' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="动脉端血流" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="full" options={[
+                      { value: 'full', label: '饱满' },
+                      { value: 'weak', label: '减弱' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="静脉端血流" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="full" options={[
+                      { value: 'full', label: '饱满' },
+                      { value: 'weak', label: '减弱' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="局部红肿" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="none" options={[
+                      { value: 'none', label: '无' },
+                      { value: 'yes', label: '有' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="血管瘤" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="none" options={[
+                      { value: 'none', label: '无' },
+                      { value: 'yes', label: '有' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="穿刺结果" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="success" options={[
+                      { value: 'success', label: '一针成功' },
+                      { value: 'second', label: '二次穿刺' },
+                      { value: 'difficult', label: '穿刺困难' },
+                    ]} />
+                  </Form.Item>
+                  <Form.Item label={<FieldLabel text="固定情况" />} style={{ marginBottom: 0 }}>
+                    <Select defaultValue="firm" options={[
+                      { value: 'firm', label: '固定牢固' },
+                      { value: 'loose', label: '需重新固定' },
+                    ]} />
+                  </Form.Item>
+                </Grid>
+                <Form.Item label={<FieldLabel text="通知医生" />} style={{ marginBottom: 0 }}>
+                  <Radio.Group defaultValue="no">
+                    <Radio value="yes">已通知</Radio>
+                    <Radio value="no">无需通知</Radio>
+                  </Radio.Group>
+                </Form.Item>
+              </>
+            )}
+
+            {/* TCC / NCC 字段 */}
+            {(accessType === 'TCC' || accessType === 'NCC') && (
+              <Grid cols={4} gap={14}>
+                <Form.Item label={<FieldLabel text="导管位置" />} style={{ marginBottom: 0 }}>
+                  <Select
+                    value={catheterLocation || undefined}
+                    onChange={setCatheterLocation}
+                    options={[
+                      { value: 'right_jugular', label: '右颈内静脉' },
+                      { value: 'left_jugular', label: '左颈内静脉' },
+                      { value: 'right_femoral', label: '右股静脉' },
+                      { value: 'left_femoral', label: '左股静脉' },
+                      { value: 'right_subclavian', label: '右锁骨下静脉' },
+                      { value: 'left_subclavian', label: '左锁骨下静脉' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <Tooltip title={catheterPlacedDate ? `置管日期：${catheterPlacedDate}（来自通路管理）` : '未找到置管日期'}>
+                      <FieldLabel text="留置天数 ℹ" />
+                    </Tooltip>
+                  }
+                  style={{ marginBottom: 0 }}
+                >
+                  <Input
+                    value={catheterDays !== null ? `${catheterDays} 天` : '—'}
+                    readOnly
+                    style={{
+                      background: '#F0F9FF',
+                      color: catheterDays !== null && catheterDays > 90 ? '#D97706' : '#0369A1',
+                      fontWeight: 700, cursor: 'default',
+                    }}
+                    suffix={catheterDays !== null && catheterDays > 90 ? <WarningFilled style={{ color: '#D97706' }} /> : undefined}
+                  />
+                </Form.Item>
+                <Form.Item label={<FieldLabel text="导管出口情况" />} style={{ marginBottom: 0 }}>
+                  <Select defaultValue="normal" options={[
+                    { value: 'normal', label: '正常' },
+                    { value: 'erythema', label: '红肿' },
+                    { value: 'discharge', label: '渗液' },
+                    { value: 'crust', label: '结痂' },
+                  ]} />
+                </Form.Item>
+                <Form.Item label={<FieldLabel text="分泌物" />} style={{ marginBottom: 0 }}>
+                  <Select defaultValue="none" options={[
+                    { value: 'none', label: '无' },
+                    { value: 'serous', label: '有（浆液性）' },
+                    { value: 'purulent', label: '有（脓性）' },
+                    { value: 'bloody', label: '有（血性）' },
+                  ]} />
+                </Form.Item>
+                <Form.Item label={<FieldLabel text="导管固定" />} style={{ marginBottom: 0 }}>
+                  <Select defaultValue="firm" options={[
+                    { value: 'firm', label: '固定牢固' },
+                    { value: 'loose', label: '松动需处理' },
+                    { value: 'replaced', label: '已更换敷料' },
+                  ]} />
+                </Form.Item>
+                <Form.Item label={<FieldLabel text="通知医生" />} style={{ marginBottom: 0 }}>
+                  <Radio.Group defaultValue="no">
+                    <Radio value="yes">已通知</Radio>
+                    <Radio value="no">无需通知</Radio>
+                  </Radio.Group>
+                </Form.Item>
+              </Grid>
+            )}
+          </SectionBody>
+        </Section>
+
+        {/* ══════════════════ ③ 护士签名 ══════════════════ */}
+        <Section>
+          <SectionTitle step={3} color="#7C3AED" title="护士签名（上机前）" />
+          <SectionBody>
+            <Grid cols={3} gap={14}>
+              <Form.Item label={<FieldLabel text="穿刺护士" required />} style={{ marginBottom: 0 }}>
+                <Input placeholder="请输入护士姓名" />
+              </Form.Item>
+              <Form.Item label={<FieldLabel text="上机护士" required />} style={{ marginBottom: 0 }}>
+                <Input placeholder="请输入护士姓名" />
+              </Form.Item>
+              <Form.Item label={<FieldLabel text="二次核对护士" />} style={{ marginBottom: 0 }}>
+                <Input placeholder="请输入护士姓名" />
+              </Form.Item>
+            </Grid>
+          </SectionBody>
+        </Section>
+
+        {/* ══════════════════ ④ 生命体征记录 ══════════════════ */}
+        <Section>
+          <SectionTitle
+            step={4}
+            color="#059669"
+            title="透析中生命体征记录"
+            extra={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: '#64748B' }}>
+                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间由系统自动生成
+                </span>
+                <Button
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={handleAddVitalRow}
+                  type="primary"
+                  ghost
+                >
+                  新增记录
+                </Button>
               </div>
-              <Button onClick={handleAddVitalRow}>新增记录（自动时间）</Button>
-            </div>
+            }
+          />
+          <SectionBody style={{ padding: '12px 18px' }}>
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>
                   <tr>
-                    {['记录时间', '收缩压(mmHg)', '舒张压(mmHg)', '脉搏(次/分)', '动脉压(mmHg)', '静脉压(mmHg)', '跨膜压(mmHg)', '血流速(mL/min)', '备注', '护士签名', '操作'].map(h => (
-                      <th key={h} style={{ background: 'linear-gradient(90deg,#E0F2FE,#ECFEFF)', color: '#0369A1', padding: '8px 10px', fontSize: 11.5, fontWeight: 600, textAlign: 'center', border: '1px solid #BAE6FD', whiteSpace: 'nowrap' }}>
-                        {h}
+                    {[
+                      { label: '时间', width: 60 },
+                      { label: '收缩压\n(mmHg)', width: 70 },
+                      { label: '舒张压\n(mmHg)', width: 70 },
+                      { label: '脉搏\n(次/分)', width: 70 },
+                      { label: '动脉压\n(mmHg)', width: 70 },
+                      { label: '静脉压\n(mmHg)', width: 70 },
+                      { label: '跨膜压\n(mmHg)', width: 70 },
+                      { label: '血流速\n(mL/min)', width: 76 },
+                      { label: '备注', width: 100 },
+                      { label: '护士签名', width: 90 },
+                      { label: '', width: 44 },
+                    ].map((h, i) => (
+                      <th key={i} style={{
+                        background: '#F1F5F9', color: '#475569',
+                        padding: '7px 6px', fontSize: 11, fontWeight: 600,
+                        textAlign: 'center', border: '1px solid #E2E8F0',
+                        whiteSpace: 'pre-line', lineHeight: 1.3,
+                        width: h.width,
+                      }}>
+                        {h.label}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {vitalRows.map((row) => (
-                    <tr key={row.id}>
-                      <td style={{ padding: '6px 10px', border: '1px solid #DBEAFE', fontWeight: 600, color: '#3D5280', whiteSpace: 'nowrap', background: '#F8FBFF' }}>
+                  {vitalRows.map((row, idx) => (
+                    <tr key={row.id} style={{ background: idx % 2 === 0 ? '#fff' : '#FAFBFC' }}>
+                      <td style={{
+                        padding: '5px 8px', border: '1px solid #E2E8F0',
+                        fontWeight: 600, color: '#1D4ED8', textAlign: 'center',
+                        fontSize: 12, whiteSpace: 'nowrap',
+                        fontFamily: 'DM Mono, monospace',
+                      }}>
                         {row.time}
                       </td>
                       {['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark', 'signature'].map(field => (
-                        <td key={field} style={{ padding: 4, border: '1px solid #DBEAFE', textAlign: 'center' }}>
+                        <td key={field} style={{ padding: 3, border: '1px solid #E2E8F0', textAlign: 'center' }}>
                           <input
                             type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
-                            placeholder={field === 'signature' ? '护士签名' : undefined}
-                            style={{ width: '100%', padding: '5px', border: 'none', textAlign: 'center', fontSize: 13, background: 'transparent', outline: 'none', fontFamily: field === 'signature' ? 'inherit' : 'DM Mono, monospace' }}
-                            onFocus={e => { e.currentTarget.style.background = '#E0F2FE'; e.currentTarget.style.borderRadius = '4px'; }}
-                            onBlur={e => { e.currentTarget.style.background = 'transparent'; }}
+                            placeholder={field === 'signature' ? '签名' : ''}
+                            style={{
+                              width: '100%', padding: '4px 6px',
+                              border: '1px solid transparent',
+                              borderRadius: 4, textAlign: 'center',
+                              fontSize: 12.5, background: 'transparent',
+                              outline: 'none',
+                              fontFamily: field === 'signature' ? 'inherit' : 'DM Mono, monospace',
+                              color: field === 'signature' ? '#7C3AED' : '#0D1B3E',
+                            }}
+                            onFocus={e => {
+                              e.currentTarget.style.background = '#EFF6FF';
+                              e.currentTarget.style.borderColor = '#93C5FD';
+                            }}
+                            onBlur={e => {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.borderColor = 'transparent';
+                            }}
                           />
                         </td>
                       ))}
-                      <td style={{ padding: 4, border: '1px solid #DBEAFE', textAlign: 'center' }}>
-                        <Button danger size="small" onClick={() => handleRemoveVitalRow(row.id)}>
-                          删除
-                        </Button>
+                      <td style={{ padding: 3, border: '1px solid #E2E8F0', textAlign: 'center' }}>
+                        <Button
+                          danger size="small"
+                          icon={<DeleteOutlined />}
+                          onClick={() => handleRemoveVitalRow(row.id)}
+                          type="text"
+                        />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
+          </SectionBody>
+        </Section>
 
-        {/* ④ 医嘱执行确认 */}
-        <div className="hd-form-section">
-          <SectionHeader icon="✅" title="今日医嘱执行确认" />
-          <div style={{ padding: 20 }}>
-            {PENDING_ORDERS.map(o => (
-              <div
-                key={o.key}
-                className={`hd-order-exec-item ${orders[o.key] ? 'executed' : ''}`}
-                style={{ marginBottom: 10 }}
-              >
-                <Checkbox
-                  checked={!!orders[o.key]}
-                  onChange={e => handleOrderToggle(o.key, e.target.checked)}
-                  style={{ flexShrink: 0 }}
+        {/* ══════════════════ ⑤ 医嘱执行 + 并发症（并排） ══════════════════ */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+
+          {/* 医嘱执行 */}
+          <Section style={{ marginBottom: 0 }}>
+            <SectionTitle step={5} color="#D97706" title="今日医嘱执行确认" />
+            <SectionBody>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {PENDING_ORDERS.map(o => (
+                  <div
+                    key={o.key}
+                    onClick={() => handleOrderToggle(o.key, !orders[o.key])}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '10px 12px',
+                      border: `1.5px solid ${orders[o.key] ? '#6EE7B7' : '#FDE68A'}`,
+                      borderRadius: 8, cursor: 'pointer',
+                      background: orders[o.key] ? '#F0FDF4' : '#FFFBEB',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <Checkbox checked={!!orders[o.key]} onChange={() => {}} onClick={e => e.stopPropagation()} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: '#0D1B3E', fontSize: 13 }}>{o.drug}</div>
+                      <div style={{ fontSize: 11, color: '#7B92BC', marginTop: 1 }}>{o.detail}</div>
+                    </div>
+                    {orders[o.key]
+                      ? <Tag color="success" icon={<CheckCircleFilled />}>已执行</Tag>
+                      : <Tag color="warning">待执行</Tag>
+                    }
+                  </div>
+                ))}
+              </div>
+            </SectionBody>
+          </Section>
+
+          {/* 并发症记录 */}
+          <Section style={{ marginBottom: 0 }}>
+            <SectionTitle step={6} color={hasEmergency ? '#DC2626' : '#64748B'} title="并发症记录（点击选中后填写处理记录）" />
+            <SectionBody>
+              {hasEmergency && (
+                <Alert
+                  type="error" showIcon
+                  message="检测到紧急并发症！请立即通知值班医生并按应急流程处理。"
+                  style={{ marginBottom: 10, padding: '6px 10px', fontSize: 12 }}
                 />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, color: '#0D1B3E' }}>{o.drug}</div>
-                  <div style={{ fontSize: 12, color: '#7B92BC', marginTop: 2 }}>{o.detail}</div>
-                </div>
-                {orders[o.key] ? (
-                  <span style={{ background: '#ECFDF5', color: '#059669', padding: '3px 9px', borderRadius: 20, fontSize: 12, fontWeight: 500 }}>✓ 已执行</span>
-                ) : (
-                  <span style={{ background: '#FFFBEB', color: '#D97706', padding: '3px 9px', borderRadius: 20, fontSize: 12, fontWeight: 500 }}>待执行</span>
-                )}
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {COMPLICATIONS.map(c => {
+                  const active = complications.includes(c.value);
+                  const record = complicationRecords[c.value];
+                  const hasFilled = active && record && Object.keys(record).length > 0;
+                  return (
+                    <div key={c.value} style={{
+                      border: `1.5px solid ${active ? (c.emergency ? '#F43F5E' : '#0EA5E9') : '#E2E8F0'}`,
+                      borderRadius: 8,
+                      background: active ? (c.emergency ? '#FFF1F2' : '#EFF9FF') : '#FAFBFC',
+                      overflow: 'hidden',
+                      transition: 'all 0.12s',
+                    }}>
+                      {/* 主行：勾选 + 标签 + 操作 */}
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '8px 10px', cursor: 'pointer',
+                      }}
+                        onClick={() => {
+                          if (active) return; // 已选中时只能通过右侧X取消
+                          setComplications(prev => [...prev, c.value]);
+                          setTreatmentModalTarget(c.value);
+                          treatmentForm.resetFields();
+                          treatmentForm.setFieldValue('occurrenceTime', dayjs().format('HH:mm'));
+                        }}
+                      >
+                        <Checkbox
+                          checked={active}
+                          onChange={() => {}}
+                          style={{ pointerEvents: 'none', flexShrink: 0 }}
+                        />
+                        {c.emergency && <WarningFilled style={{ color: '#F43F5E', fontSize: 12, flexShrink: 0 }} />}
+                        <span style={{
+                          flex: 1, fontSize: 13,
+                          color: c.emergency ? '#BE123C' : '#1E293B',
+                          fontWeight: c.emergency ? 600 : 500,
+                        }}>
+                          {c.label}
+                        </span>
+                        {c.emergency && !active && (
+                          <Tag color="error" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px', flexShrink: 0 }}>紧急</Tag>
+                        )}
+                        {active && (
+                          <div style={{ display: 'flex', gap: 5, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                            <Button
+                              size="small" type="link"
+                              icon={hasFilled ? <EditOutlined /> : <FileTextOutlined />}
+                              style={{ padding: '0 4px', fontSize: 12, color: c.emergency ? '#DC2626' : '#0369A1' }}
+                              onClick={() => {
+                                setTreatmentModalTarget(c.value);
+                                treatmentForm.setFieldsValue(record ?? { occurrenceTime: dayjs().format('HH:mm') });
+                              }}
+                            >
+                              {hasFilled ? '编辑记录' : '填写处理记录'}
+                            </Button>
+                            <Button
+                              size="small" type="text" danger
+                              icon={<CloseOutlined />}
+                              style={{ padding: '0 4px', fontSize: 11 }}
+                              onClick={() => {
+                                setComplications(prev => prev.filter(x => x !== c.value));
+                                setComplicationRecords(prev => {
+                                  const next = { ...prev };
+                                  delete next[c.value];
+                                  return next;
+                                });
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                      {/* 已填写记录摘要 */}
+                      {hasFilled && (
+                        <div style={{
+                          padding: '5px 10px 7px 36px',
+                          borderTop: `1px dashed ${c.emergency ? '#FECDD3' : '#BAE6FD'}`,
+                          background: c.emergency ? '#FFF5F5' : '#F0F9FF',
+                          fontSize: 11, color: '#64748B', lineHeight: 1.6,
+                        }}>
+                          {!!record.occurrenceTime && <span style={{ marginRight: 12 }}>⏱ {record.occurrenceTime as string}</span>}
+                          {!!record.nurse && <span style={{ marginRight: 12 }}>✍ {record.nurse as string}</span>}
+                          {record.doctorNotified === 'yes' && <Tag color="orange" style={{ fontSize: 10, lineHeight: '16px' }}>已通知医生</Tag>}
+                          {record.isCompleteStopped === 'yes' && <Tag color="red" style={{ fontSize: 10, lineHeight: '16px' }}>计入质控</Tag>}
+                          {(record.remark as string) && (
+                            <div style={{ marginTop: 2, color: '#475569', fontStyle: 'italic' }}>
+                              备注：{(record.remark as string).slice(0, 40)}{(record.remark as string).length > 40 ? '…' : ''}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {/* 未填写提示 */}
+                      {active && !hasFilled && (
+                        <div style={{
+                          padding: '4px 10px 6px 36px',
+                          borderTop: `1px dashed ${c.emergency ? '#FECDD3' : '#BAE6FD'}`,
+                          fontSize: 11, color: '#F59E0B', fontStyle: 'italic',
+                        }}>
+                          ⚠ 请点击「填写处理记录」完善本次并发症记录
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            </SectionBody>
+          </Section>
         </div>
 
-        {/* ⑤ 并发症记录 */}
-        <div className="hd-form-section">
-          <SectionHeader icon="⚠️" title="并发症记录（可多选）" />
-          <div style={{ padding: 20 }}>
-            <div className="grid-4" style={{ gap: 10 }}>
-              {COMPLICATIONS.map(c => (
-                <div
-                  key={c.value}
-                  onClick={() => setComplications(prev =>
-                    prev.includes(c.value)
-                      ? prev.filter(x => x !== c.value)
-                      : [...prev, c.value]
-                  )}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '9px 12px',
-                    border: `1.5px solid ${complications.includes(c.value) ? (c.emergency ? '#F43F5E' : '#0EA5E9') : '#DBEAFE'}`,
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                    background: complications.includes(c.value) ? (c.emergency ? '#FFF1F2' : '#E0F2FE') : '#fff',
-                    transition: 'all 0.15s',
-                    fontSize: 13,
-                  }}
-                >
-                  <Checkbox checked={complications.includes(c.value)} onChange={() => {}} />
-                  <span style={{ color: c.emergency ? '#BE123C' : '#0D1B3E' }}>
-                    {c.emergency ? '⚡ ' : ''}{c.label}
-                  </span>
+        {/* ══════════════════ ⑦ 透析后评估 ══════════════════ */}
+        <Section>
+          <SectionTitle step={7} color="#0D1B3E" title="透析后评估 · 充分性计算（Kt/V）" />
+          <SectionBody>
+
+            {/* 第一行：时长、体重、脱水、入量 */}
+            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
+              <Form.Item label={<FieldLabel text="实际透析时长" required />} style={{ marginBottom: 0 }}>
+                <InputNumber
+                  min={0} max={8} step={0.1} precision={1}
+                  style={{ width: '100%' }} addonAfter="h"
+                  value={durationHours ?? undefined}
+                  onChange={v => setDurationHours(v)}
+                />
+              </Form.Item>
+              <Form.Item label={<FieldLabel text="透析后体重" required />} style={{ marginBottom: 0 }}>
+                <InputNumber
+                  min={20} max={200} step={0.1} precision={1}
+                  style={{ width: '100%' }} addonAfter="kg"
+                  value={postWeight ?? undefined}
+                  onChange={v => setPostWeight(v)}
+                  placeholder="如：62.0"
+                />
+              </Form.Item>
+              <div>
+                <FieldLabel text="实际脱水量（自动）" />
+                <div style={{
+                  marginTop: 4, padding: '5px 11px',
+                  background: computedUF !== null ? (ufAlert ? '#FFF1F2' : '#F0FDF4') : '#F8FAFC',
+                  border: `1px solid ${computedUF !== null ? (ufAlert ? '#FECDD3' : '#BBF7D0') : '#E2E8F0'}`,
+                  borderRadius: 6, fontWeight: 700, fontSize: 15,
+                  color: computedUF !== null ? (ufAlert ? '#BE123C' : '#15803D') : '#94A3B8',
+                  fontFamily: 'DM Mono, monospace',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  height: 32,
+                }}>
+                  {computedUF !== null
+                    ? <>{computedUF} mL {ufPercent && <span style={{ fontSize: 12, fontWeight: 400 }}>({ufPercent}%)</span>}{ufAlert && <WarningFilled />}</>
+                    : '—'
+                  }
                 </div>
-              ))}
-            </div>
-            {complications.some(c => COMPLICATIONS.find(co => co.value === c)?.emergency) && (
-              <Alert
-                type="error"
-                showIcon
-                message="检测到紧急并发症！请立即通知值班医生并按应急流程处理。"
-                style={{ marginTop: 12 }}
-              />
-            )}
-            {complications.includes('hypotension') && (
-              <div style={{ marginTop: 12, padding: 12, background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: 6, fontSize: 13 }}>
-                <div style={{ fontWeight: 600, color: '#BE123C', marginBottom: 4 }}>低血压处理记录</div>
-                <Input.TextArea rows={2} placeholder="请记录处理措施（如：停超滤、头低脚高位、输注生理盐水200mL…）" style={{ fontSize: 13 }} />
               </div>
-            )}
-          </div>
-        </div>
+              <Form.Item label={<FieldLabel text="透析期间入量" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={0} max={10000} style={{ width: '100%' }} addonAfter="mL" />
+              </Form.Item>
+            </Grid>
 
-        {/* ⑥ 透析后评估（含 Kt/V 计算） */}
-        <div className="hd-form-section">
-          <SectionHeader icon="🔚" title="透析后评估（含 Kt/V 计算）" />
-          <div style={{ padding: 20 }}>
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="实际透析时长-小时" style={{ marginBottom: 0 }}>
-                <InputNumber min={0} max={8} step={0.1} precision={1} style={{ width: '100%' }} placeholder="小时" value={durationHours ?? undefined} onChange={v => setDurationHours(v)} />
+            {/* 第二行：BUN + 透后生命体征 */}
+            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
+              <Form.Item label={<FieldLabel text="透前 BUN" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
+                  value={preBun ?? undefined} onChange={v => setPreBun(v)} placeholder="透析前" addonAfter="mmol/L" />
               </Form.Item>
-              <Form.Item label="透析期间入量 (mL)" style={{ marginBottom: 0 }}>
-                <InputNumber min={0} max={10000} style={{ width: '100%' }} />
+              <Form.Item label={<FieldLabel text="透后 BUN" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
+                  value={postBun ?? undefined} onChange={v => setPostBun(v)} placeholder="透析后" addonAfter="mmol/L" />
               </Form.Item>
-              <Form.Item label="透析期间出量 (mL)" style={{ marginBottom: 0 }}>
-                <InputNumber min={0} max={10000} style={{ width: '100%' }} />
+              <Form.Item label={<FieldLabel text="透后收缩压" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={60} max={250} style={{ width: '100%' }} addonAfter="mmHg" />
               </Form.Item>
-            </div>
+              <Form.Item label={<FieldLabel text="透后舒张压" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={40} max={160} style={{ width: '100%' }} addonAfter="mmHg" />
+              </Form.Item>
+            </Grid>
 
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="实际脱水 (mL)" style={{ marginBottom: 0 }}>
-                <InputNumber min={0} max={10000} style={{ width: '100%' }} />
+            {/* 第三行：脉搏、凝血、渗血、封管 */}
+            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
+              <Form.Item label={<FieldLabel text="透后脉搏" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={30} max={220} style={{ width: '100%' }} addonAfter="次/分" />
               </Form.Item>
-              <Form.Item label="滤器凝血级别" style={{ marginBottom: 0 }}>
-                <Select defaultValue="1" options={[
-                  { value: '0', label: '0级（无凝血）' },
-                  { value: '1', label: 'Ⅰ级' },
-                  { value: '2', label: 'Ⅱ级' },
-                  { value: '3', label: 'Ⅲ级' },
-                ]} />
-              </Form.Item>
-              <Form.Item label="置管封管用药-动脉端" style={{ marginBottom: 0 }}>
-                <Input placeholder="如：肝素钠 1mL" />
-              </Form.Item>
-              <Form.Item label="置管封管用药-静脉端" style={{ marginBottom: 0 }}>
-                <Input placeholder="如：肝素钠 1mL" />
-              </Form.Item>
-            </div>
-
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="凝血分级" style={{ marginBottom: 0 }}>
+              <Form.Item label={<FieldLabel text="凝血分级" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="0" options={[
                   { value: '0', label: '0级（无凝血）' },
                   { value: '1', label: 'Ⅰ级（<20%变黑）' },
@@ -444,213 +1556,340 @@ export default function DialysisEntryPage() {
                   { value: '3', label: 'Ⅲ级（>50%或停机）' },
                 ]} />
               </Form.Item>
-              <Form.Item label="穿刺结果（AVF/AVG）" style={{ marginBottom: 0 }}>
-                <Select defaultValue="success" options={[
-                  { value: 'success', label: '一针成功' },
-                  { value: 'second',  label: '二次穿刺' },
-                  { value: 'difficult', label: '穿刺困难' },
-                ]} />
+              <Form.Item label={<FieldLabel text="渗血部位" />} style={{ marginBottom: 0 }}>
+                <Input placeholder="如：动脉穿刺点（无则留空）" />
               </Form.Item>
-              <Form.Item label="渗血部位" style={{ marginBottom: 0 }}>
-                <Input placeholder="如：动脉穿刺点" />
+              <Form.Item label={<FieldLabel text="置管封管用药" />} style={{ marginBottom: 0 }}>
+                <Input placeholder="如：肝素钠 1mL" />
               </Form.Item>
-              <Form.Item label="透析后用药是否执行" style={{ marginBottom: 0 }}>
-                <Radio.Group defaultValue="yes">
-                  <Radio value="yes">是</Radio>
-                  <Radio value="no">否</Radio>
-                </Radio.Group>
-              </Form.Item>
-            </div>
+            </Grid>
 
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="透后收缩压 (mmHg)" style={{ marginBottom: 0 }}>
-                <InputNumber min={60} max={250} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item label="透后舒张压 (mmHg)" style={{ marginBottom: 0 }}>
-                <InputNumber min={40} max={160} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item label="透后脉搏 P (次/分)" style={{ marginBottom: 0 }}>
-                <InputNumber min={30} max={220} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item label="透析前体重 (kg)" required style={{ marginBottom: 0 }}>
-                <InputNumber
-                  min={20} max={200} step={0.1} precision={1}
-                  style={{ width: '100%' }}
-                  value={preWeight}
-                  onChange={v => setPreWeight(v)}
-                  placeholder="如：64.5"
-                />
-              </Form.Item>
-            </div>
-
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="透析后体重 (kg)" style={{ marginBottom: 0 }}>
-                <InputNumber
-                  min={20} max={200} step={0.1} precision={1}
-                  style={{ width: '100%' }}
-                  value={postWeight}
-                  onChange={v => setPostWeight(v)}
-                  placeholder="如：62.0"
-                />
-              </Form.Item>
-              <Form.Item label="透前BUN (mmol/L)" style={{ marginBottom: 0 }}>
-                <InputNumber
-                  min={1} max={100} step={0.1} precision={1}
-                  style={{ width: '100%' }}
-                  value={preBun}
-                  onChange={v => setPreBun(v)}
-                  placeholder="透析前BUN"
-                />
-              </Form.Item>
-              <Form.Item label="透后BUN (mmol/L)" style={{ marginBottom: 0 }}>
-                <InputNumber
-                  min={1} max={100} step={0.1} precision={1}
-                  style={{ width: '100%' }}
-                  value={postBun}
-                  onChange={v => setPostBun(v)}
-                  placeholder="透析后BUN"
-                />
-              </Form.Item>
-              <Form.Item label="下机后机器运行情况" style={{ marginBottom: 0 }}>
-                <Select defaultValue="normal" options={[
-                  { value: 'normal', label: '正常' },
-                  { value: 'abnormal', label: '异常' },
-                ]} />
-              </Form.Item>
-              <Form.Item label="下机后消毒方式" style={{ marginBottom: 0 }}>
-                <Select defaultValue="thermal-chemical" options={[
-                  { value: 'thermal-chemical', label: '热化学消毒' },
-                  { value: 'chemical', label: '化学消毒' },
-                  { value: 'other', label: '其他' },
-                ]} />
-              </Form.Item>
-              <Form.Item label="局部皮肤完好" style={{ marginBottom: 0 }}>
-                <Radio.Group defaultValue="yes">
-                  <Radio value="yes">是</Radio>
-                  <Radio value="no">否</Radio>
-                </Radio.Group>
-              </Form.Item>
-              <Form.Item label="透析期间患者状态" style={{ marginBottom: 0 }}>
+            {/* 第四行：状态、机器、消毒、皮肤 */}
+            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
+              <Form.Item label={<FieldLabel text="透析期间患者状态" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="stable" options={[
                   { value: 'stable', label: '平稳' },
                   { value: 'general', label: '一般' },
                   { value: 'unstable', label: '不稳定' },
                 ]} />
               </Form.Item>
-            </div>
-
-            <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
-              <Form.Item label="透析后用药是否执行" style={{ marginBottom: 0 }}>
-                <Radio.Group defaultValue="yes">
-                  <Radio value="yes">是</Radio>
-                  <Radio value="no">否</Radio>
-                </Radio.Group>
+              <Form.Item label={<FieldLabel text="下机后机器运行" />} style={{ marginBottom: 0 }}>
+                <Select defaultValue="normal" options={[
+                  { value: 'normal', label: '正常' },
+                  { value: 'abnormal', label: '异常' },
+                ]} />
               </Form.Item>
+              <Form.Item label={<FieldLabel text="下机消毒方式" />} style={{ marginBottom: 0 }}>
+                <Select defaultValue="thermal-chemical" options={[
+                  { value: 'thermal-chemical', label: '热化学消毒' },
+                  { value: 'chemical', label: '化学消毒' },
+                  { value: 'other', label: '其他' },
+                ]} />
+              </Form.Item>
+              <div style={{ display: 'flex', gap: 20 }}>
+                <Form.Item label={<FieldLabel text="局部皮肤完好" />} style={{ marginBottom: 0, flex: 1 }}>
+                  <Radio.Group defaultValue="yes">
+                    <Radio value="yes">是</Radio>
+                    <Radio value="no">否</Radio>
+                  </Radio.Group>
+                </Form.Item>
+                <Form.Item label={<FieldLabel text="透后用药执行" />} style={{ marginBottom: 0, flex: 1 }}>
+                  <Radio.Group defaultValue="yes">
+                    <Radio value="yes">是</Radio>
+                    <Radio value="no">否</Radio>
+                  </Radio.Group>
+                </Form.Item>
+              </div>
+            </Grid>
+
+            {/* Kt/V + URR + 超滤 结果卡片 */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 12, marginBottom: 14,
+            }}>
+              {/* spKt/V */}
+              <div style={{
+                padding: '14px 16px', borderRadius: 10, textAlign: 'center',
+                background: ktv === null
+                  ? '#F8FAFC'
+                  : ktvAdequate ? 'linear-gradient(135deg,#ECFDF5,#D1FAE5)' : 'linear-gradient(135deg,#FFFBEB,#FEF3C7)',
+                border: `2px solid ${ktv === null ? '#E2E8F0' : ktvAdequate ? '#34D399' : '#FCD34D'}`,
+              }}>
+                <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4, fontWeight: 500 }}>
+                  spKt/V（Daugirdas II）
+                </div>
+                {ktv !== null ? (
+                  <>
+                    <div style={{
+                      fontFamily: 'DM Mono, monospace', fontSize: 32, fontWeight: 700, lineHeight: 1.1,
+                      color: ktvAdequate ? '#059669' : '#D97706',
+                    }}>{ktv}</div>
+                    <Tag
+                      color={ktvAdequate ? 'success' : 'warning'}
+                      icon={ktvAdequate ? <CheckCircleFilled /> : <WarningFilled />}
+                      style={{ marginTop: 6, fontSize: 12 }}
+                    >
+                      {ktvAdequate ? '达标 ≥ 1.2' : '不达标 < 1.2'}
+                    </Tag>
+                  </>
+                ) : (
+                  <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 8 }}>
+                    <InfoCircleFilled style={{ marginRight: 4 }} />
+                    填写 BUN 后自动计算
+                  </div>
+                )}
+              </div>
+
+              {/* URR */}
+              <div style={{
+                padding: '14px 16px', borderRadius: 10, textAlign: 'center',
+                background: urr === null
+                  ? '#F8FAFC'
+                  : urrAdequate ? 'linear-gradient(135deg,#ECFDF5,#D1FAE5)' : 'linear-gradient(135deg,#FFFBEB,#FEF3C7)',
+                border: `2px solid ${urr === null ? '#E2E8F0' : urrAdequate ? '#34D399' : '#FCD34D'}`,
+              }}>
+                <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4, fontWeight: 500 }}>
+                  URR（尿素清除率）
+                </div>
+                {urr !== null ? (
+                  <>
+                    <div style={{
+                      fontFamily: 'DM Mono, monospace', fontSize: 32, fontWeight: 700, lineHeight: 1.1,
+                      color: urrAdequate ? '#059669' : '#D97706',
+                    }}>{urr}%</div>
+                    <Tag
+                      color={urrAdequate ? 'success' : 'warning'}
+                      icon={urrAdequate ? <CheckCircleFilled /> : <WarningFilled />}
+                      style={{ marginTop: 6, fontSize: 12 }}
+                    >
+                      {urrAdequate ? '达标 ≥ 65%' : '不达标 < 65%'}
+                    </Tag>
+                  </>
+                ) : (
+                  <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 8 }}>
+                    <InfoCircleFilled style={{ marginRight: 4 }} />
+                    填写 BUN 后自动计算
+                  </div>
+                )}
+              </div>
+
+              {/* 超滤量 */}
+              <div style={{
+                padding: '14px 16px', borderRadius: 10, textAlign: 'center',
+                background: computedUF === null
+                  ? '#F8FAFC'
+                  : ufAlert ? 'linear-gradient(135deg,#FFF1F2,#FFE4E6)' : 'linear-gradient(135deg,#F0F9FF,#E0F2FE)',
+                border: `2px solid ${computedUF === null ? '#E2E8F0' : ufAlert ? '#FB7185' : '#7DD3FC'}`,
+              }}>
+                <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4, fontWeight: 500 }}>
+                  实际超滤量
+                </div>
+                {computedUF !== null ? (
+                  <>
+                    <div style={{
+                      fontFamily: 'DM Mono, monospace', fontSize: 28, fontWeight: 700, lineHeight: 1.1,
+                      color: ufAlert ? '#BE123C' : '#0284C7',
+                    }}>{computedUF} <span style={{ fontSize: 16 }}>mL</span></div>
+                    <div style={{ marginTop: 4 }}>
+                      {ufPercent && (
+                        <Tag
+                          color={ufAlert ? 'error' : 'processing'}
+                          icon={ufAlert ? <WarningFilled /> : undefined}
+                          style={{ fontSize: 12 }}
+                        >
+                          {ufPercent}% 干体重 {ufAlert ? '— 超限！' : ''}
+                        </Tag>
+                      )}
+                    </div>
+                    {ufAlert && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: '#BE123C', fontWeight: 500 }}>
+                        超滤量超过干体重5%，需通知医生
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 8 }}>
+                    <InfoCircleFilled style={{ marginRight: 4 }} />
+                    填写前后体重后自动计算
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* 超滤量显示 */}
-            {ufToUse !== null && (
-              <div style={{ marginTop: 16, marginBottom: 16, padding: 12, background: ufAlert ? '#FFF1F2' : '#F0F9FF', border: `1px solid ${ufAlert ? '#FECDD3' : '#BAE6FD'}`, borderRadius: 8 }}>
-                <div className="flex items-center gap-16">
-                  <div>
-                    <span style={{ fontSize: 12, color: '#7B92BC' }}>实际超滤量</span>
-                    <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 22, fontWeight: 700, color: ufAlert ? '#BE123C' : '#0284C7' }}>
-                      {ufToUse} mL
-                    </div>
-                  </div>
-                  {ufPercent && (
-                    <div>
-                      <span style={{ fontSize: 12, color: '#7B92BC' }}>占干体重比例</span>
-                      <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 22, fontWeight: 700, color: ufAlert ? '#BE123C' : '#0D1B3E' }}>
-                        {ufPercent}%{ufAlert ? ' ⚠️' : ''}
-                      </div>
-                    </div>
-                  )}
-                  {ufAlert && (
-                    <div style={{ background: '#FFF1F2', color: '#BE123C', padding: '8px 14px', borderRadius: 6, fontSize: 13, fontWeight: 500, flex: 1 }}>
-                      ⚠️ 超滤量超过干体重5%（{ufPercent}%），需通知医生！
-                    </div>
-                  )}
-                </div>
-                <div style={{ marginTop: 8, background: '#EFF6FF', borderRadius: 4, height: 8, overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%', borderRadius: 4,
-                    width: `${Math.min(100, parseFloat(ufPercent || '0') * 10)}%`,
-                    background: ufAlert ? 'linear-gradient(90deg,#F43F5E,#FB7185)' : 'linear-gradient(90deg,#0EA5E9,#06B6D4)',
-                    transition: 'width 0.3s',
-                  }} />
-                </div>
-              </div>
+            {/* BUN 数据异常提示 */}
+            {preBun && postBun && ktv === null && (
+              <Alert
+                type="error" showIcon
+                message="BUN 数值异常（透后BUN应小于透前BUN），请核查数据。"
+                style={{ marginBottom: 14 }}
+              />
             )}
 
-            {/* Kt/V 计算结果 */}
-            {ktv !== null ? (
-              <div className="grid-2" style={{ gap: 16, marginBottom: 16 }}>
-                <div style={{
-                  padding: '14px',
-                  background: ktvAdequate ? 'linear-gradient(135deg,#ECFDF5,#F0FDF4)' : 'linear-gradient(135deg,#FFFBEB,#FFF9EC)',
-                  border: `1.5px solid ${ktvAdequate ? '#6EE7B7' : '#FDE68A'}`,
-                  borderRadius: 8, textAlign: 'center',
-                }}>
-                  <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>spKt/V（Daugirdas II）</div>
-                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 28, fontWeight: 700, color: ktvAdequate ? '#059669' : '#D97706' }}>
-                    {ktv}
-                  </div>
-                  <div style={{ fontSize: 12, color: ktvAdequate ? '#059669' : '#D97706', marginTop: 4, fontWeight: 500 }}>
-                    {ktvAdequate ? '✅ 达标（≥1.2）' : '⚠️ 不达标（<1.2）'}
-                  </div>
-                </div>
-                <div style={{
-                  padding: '14px',
-                  background: urrAdequate ? 'linear-gradient(135deg,#ECFDF5,#F0FDF4)' : 'linear-gradient(135deg,#FFFBEB,#FFF9EC)',
-                  border: `1.5px solid ${urrAdequate ? '#6EE7B7' : '#FDE68A'}`,
-                  borderRadius: 8, textAlign: 'center',
-                }}>
-                  <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 4 }}>URR（尿素清除率）</div>
-                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 28, fontWeight: 700, color: urrAdequate ? '#059669' : '#D97706' }}>
-                    {urr}%
-                  </div>
-                  <div style={{ fontSize: 12, color: urrAdequate ? '#059669' : '#D97706', marginTop: 4, fontWeight: 500 }}>
-                    {urrAdequate ? '✅ 达标（≥65%）' : '⚠️ 不达标（<65%）'}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              preBun && postBun ? (
-                <div style={{ marginBottom: 16, padding: 12, background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: 6, fontSize: 13, color: '#BE123C' }}>
-                  ⚠️ BUN 数值异常（透后BUN应小于透前BUN），请核查数据。
-                </div>
-              ) : (
-                <div style={{ marginBottom: 16, padding: 12, background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 6, fontSize: 13, color: '#0369A1' }}>
-                  ℹ️ 填写透析前后 BUN 值后，系统将自动计算 spKt/V 和 URR（Daugirdas II 公式）。
-                </div>
-              )
-            )}
-
-            <div style={{ marginTop: 16 }}>
-              <Form.Item label="护士备注" style={{ marginBottom: 0 }}>
+            {/* 备注 + 签名 */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'flex-start' }}>
+              <Form.Item label={<FieldLabel text="护士备注" />} style={{ marginBottom: 0 }}>
                 <Input.TextArea rows={3} placeholder="记录本次透析特殊情况、护理观察、患者反馈等…" />
               </Form.Item>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-              <div style={{ width: 360 }}>
-                <Form.Item style={{ marginBottom: 10 }}>
-                  <Input addonBefore="护士签名：" placeholder="请输入护士姓名" />
+              <div style={{ width: 280 }}>
+                <Form.Item label={<FieldLabel text="护士签名" required />} style={{ marginBottom: 10 }}>
+                  <Input placeholder="请输入护士姓名" prefix={<span style={{ color: '#7C3AED' }}>✍</span>} />
                 </Form.Item>
-                <Form.Item style={{ marginBottom: 0 }}>
-                  <Input addonBefore="日期：" value={autoGeneratedDate} readOnly />
+                <Form.Item label={<FieldLabel text="记录日期" />} style={{ marginBottom: 0 }}>
+                  <Input value={autoGeneratedDate} readOnly style={{ background: '#F8FAFC', color: '#475569' }} />
                 </Form.Item>
               </div>
             </div>
-          </div>
-        </div>
+          </SectionBody>
+        </Section>
 
-        {/* 底部操作 */}
-        <div className="flex justify-between items-center" style={{ padding: '16px 0' }}>
-          <Button onClick={() => navigate(-1)}>取消</Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit} size="large">
-            保存透析记录
-          </Button>
+        {/* ══════════════ 并发症处理记录弹框 ══════════════ */}
+        {treatmentModalTarget && (() => {
+          const cfg = COMPLICATION_CONFIG[treatmentModalTarget];
+          const comp = COMPLICATIONS.find(c => c.value === treatmentModalTarget);
+          if (!cfg || !comp) return null;
+          return (
+            <Modal
+              open
+              title={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {comp.emergency && <WarningFilled style={{ color: '#DC2626', fontSize: 16 }} />}
+                  <span style={{ color: cfg.color, fontWeight: 700 }}>{cfg.title}</span>
+                </div>
+              }
+              width={620}
+              okText="保存处理记录"
+              cancelText="取消"
+              onOk={() => {
+                treatmentForm.validateFields().then(values => {
+                  setComplicationRecords(prev => ({ ...prev, [treatmentModalTarget]: values }));
+                  setTreatmentModalTarget(null);
+                  treatmentForm.resetFields();
+                  message.success(`${comp.label}处理记录已保存`);
+                }).catch(() => {
+                  message.warning('请填写必填项');
+                });
+              }}
+              onCancel={() => setTreatmentModalTarget(null)}
+              styles={{
+                header: {
+                  background: comp.emergency ? '#FFF1F2' : '#F0F9FF',
+                  borderBottom: `2px solid ${comp.emergency ? '#FECDD3' : '#BFDBFE'}`,
+                  paddingBottom: 12,
+                },
+              }}
+            >
+              {comp.emergency && (
+                <Alert
+                  type="error" showIcon
+                  message="紧急并发症：请严格按应急流程操作，并立即通知值班医生！"
+                  style={{ marginBottom: 14, fontSize: 12 }}
+                />
+              )}
+              <Form form={treatmentForm} layout="vertical" size="middle">
+                {cfg.fields.map(field => {
+                  if (field.type === 'text') return (
+                    <Form.Item
+                      key={field.key} name={field.key} label={field.label}
+                      rules={field.required ? [{ required: true, message: `请填写${field.label}` }] : []}
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Input placeholder={field.placeholder} />
+                    </Form.Item>
+                  );
+                  if (field.type === 'number') return (
+                    <Form.Item
+                      key={field.key} name={field.key} label={field.label}
+                      rules={field.required ? [{ required: true, message: `请填写${field.label}` }] : []}
+                      style={{ marginBottom: 12 }}
+                    >
+                      <InputNumber
+                        placeholder={field.placeholder}
+                        style={{ width: '100%' }}
+                        step={0.1} precision={1}
+                      />
+                    </Form.Item>
+                  );
+                  if (field.type === 'textarea') return (
+                    <Form.Item
+                      key={field.key} name={field.key} label={field.label}
+                      rules={field.required ? [{ required: true, message: `请填写${field.label}` }] : []}
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Input.TextArea rows={2} placeholder={field.placeholder} />
+                    </Form.Item>
+                  );
+                  if (field.type === 'select') return (
+                    <Form.Item
+                      key={field.key} name={field.key} label={field.label}
+                      rules={field.required ? [{ required: true, message: `请选择${field.label}` }] : []}
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Select options={field.options} placeholder={`请选择${field.label}`} />
+                    </Form.Item>
+                  );
+                  if (field.type === 'radio') return (
+                    <Form.Item
+                      key={field.key} name={field.key} label={field.label}
+                      rules={field.required ? [{ required: true, message: `请选择${field.label}` }] : []}
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Radio.Group>
+                        {field.options.map(o => <Radio key={o.value} value={o.value}>{o.label}</Radio>)}
+                      </Radio.Group>
+                    </Form.Item>
+                  );
+                  if (field.type === 'checkbox-group') return (
+                    <Form.Item
+                      key={field.key} name={field.key} label={field.label}
+                      rules={field.required ? [{ required: true, message: `请至少选择一项${field.label}` }] : []}
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Checkbox.Group style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {field.options.map(o => (
+                          <Checkbox key={o.value} value={o.value}
+                            style={{
+                              marginInlineStart: 0,
+                              padding: '3px 10px',
+                              border: '1px solid #E2E8F0',
+                              borderRadius: 5,
+                              fontSize: 12.5,
+                              background: '#FAFBFC',
+                            }}
+                          >
+                            {o.label}
+                          </Checkbox>
+                        ))}
+                      </Checkbox.Group>
+                    </Form.Item>
+                  );
+                  return null;
+                })}
+              </Form>
+            </Modal>
+          );
+        })()}
+
+        {/* 底部操作栏 */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '14px 0 6px',
+          borderTop: '1px solid #EDF0F7',
+        }}>
+          <Button onClick={() => navigate(-1)}>取消，返回上页</Button>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {hasEmergency && (
+              <span style={{ color: '#DC2626', fontSize: 13, fontWeight: 600 }}>
+                <WarningFilled /> 存在紧急并发症，请确认已通知医生
+              </span>
+            )}
+            <Button icon={<PrinterOutlined />} onClick={handlePrint} size="large">
+              打印记录单
+            </Button>
+            <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit} size="large">
+              保存透析记录
+            </Button>
+          </div>
         </div>
       </Form>
     </PageShell>
