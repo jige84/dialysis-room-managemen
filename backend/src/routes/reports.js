@@ -1,6 +1,7 @@
 /**
- * 质控报表路由
- * 核心：自动汇总5项质控指标，生成月度上报报表
+ * 质控报表 REST 路由
+ * 主要作用：生成与查询月度质控上报数据，对接 ReportGenerator 与护士长确认流程。
+ * 主要功能：触发或读取月度五项指标汇总；报表状态；导出相关接口（若启用）。
  */
 const express = require('express');
 const router = express.Router();

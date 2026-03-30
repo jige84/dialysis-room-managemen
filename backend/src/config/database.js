@@ -1,3 +1,8 @@
+/**
+ * PostgreSQL 连接池配置与导出
+ * 主要作用：为全项目提供共享的数据库连接池，避免重复建连。
+ * 主要功能：按环境变量创建 pg.Pool；连接错误监听；提供 testConnection 供启动时自检。
+ */
 const { Pool } = require('pg');
 require('dotenv').config();
 

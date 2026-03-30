@@ -1,3 +1,8 @@
+/**
+ * 临床预警中心 API
+ * 主要作用：对接 /api/alerts，供预警列表、筛选与处理状态更新。
+ * 主要功能：分页查询；单条操作；Alert 类型定义与后端一致。
+ */
 import request, { type ApiResponse } from './request';
 
 export interface Alert {

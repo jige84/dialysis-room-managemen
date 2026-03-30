@@ -1,3 +1,8 @@
+/**
+ * 页面通用状态组件（加载中 / 空数据 / 错误结果）
+ * 主要作用：统一列表页与详情页的 Spin、Empty、Result 样式与文案。
+ * 主要功能：PageLoading、PageEmpty、PageErrorResult 等可复用封装。
+ */
 import { Empty, Result, Spin } from 'antd';
 import type { ReactNode } from 'react';
 

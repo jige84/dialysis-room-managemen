@@ -1,3 +1,8 @@
+/**
+ * 血管通路 API 与通路档案类型
+ * 主要作用：对接 /api/vascular，供通路页维护 AVF/AVG/TCC/NCC 及风险评分展示。
+ * 主要功能：CRUD 请求；VascularAccess 等实体类型与后端字段对齐。
+ */
 import request, { type ApiResponse } from './request';
 
 export interface VascularAccess {

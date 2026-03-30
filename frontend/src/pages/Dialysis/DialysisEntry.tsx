@@ -1,4 +1,9 @@
-import { useState, useCallback } from 'react';
+/**
+ * 透析记录录入核心页（处方带入、医嘱、Kt/V、生命体征等）
+ * 主要作用：护士/授权角色完成当次透析全流程数据录入与保存。
+ * 主要功能：选患者与日期；自动加载处方与医嘱；并发症与凝血；Kt/V 计算与预警联动。
+ */
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Form, Input, InputNumber, Select, Button, Checkbox,
   DatePicker, message, Alert, Radio, Tag, Tooltip, Modal,
@@ -12,34 +17,27 @@ import {
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
+import { DIALYSIS_DEMO_PATIENTS, type DialysisDemoPatient } from '../../constants/dialysisDemoPatients';
+import {
+  mergePrescriptionDefaultsForPatient,
+  shiftCodeToChinese,
+  computePrescriptionUltrafiltrationMl,
+  dialyzerShortFromFormValue,
+  anticoagulantLabelFromCode,
+  frequencyPresetLabel,
+  dialysisModeLabel,
+  formatSodiumCurveSummary,
+  yesNoAssessLabel,
+} from '../../utils/prescriptionFormFromDemo';
+import {
+  readPostDialysisSync,
+  writePostDialysisSync,
+  POST_DIALYSIS_SYNC_EVENT,
+  type PostDialysisSyncPayload,
+} from '../../utils/postDialysisAssessmentSync';
 
-// ── 演示数据 ──────────────────────────────────────────────
-const PATIENTS_LIST = [
-  {
-    value: 'zhang',
-    label: '张国华 — 男/56岁/AVF/下午班/5号机',
-    dryWeight: 62.0,
-    prescription: { bloodFlow: 250, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 138, k: 2.0, ca: 1.5 },
-    preAssessment: { sbp: 140, dbp: 80, pulse: 78, temp: 36.5, shift: '下午班', machineNo: '5号机' },
-    vascular: { accessType: 'AVF' as const, catheterLocation: '', catheterPlacedDate: null as string | null },
-  },
-  {
-    value: 'zhao',
-    label: '赵丽萍 — 女/48岁/AVF/下午班/6号机',
-    dryWeight: 52.0,
-    prescription: { bloodFlow: 230, duration: 4.0, dialysateFlow: 500, anticoagulant: '低分子肝素', dialyzer: 'FX60（低通量）', na: 138, k: 2.0, ca: 1.5 },
-    preAssessment: { sbp: 136, dbp: 76, pulse: 82, temp: 36.6, shift: '下午班', machineNo: '6号机' },
-    vascular: { accessType: 'AVG' as const, catheterLocation: '', catheterPlacedDate: null as string | null },
-  },
-  {
-    value: 'liu',
-    label: '刘明远 — 男/65岁/TCC/下午班/7号机',
-    dryWeight: 50.0,
-    prescription: { bloodFlow: 220, duration: 4.0, dialysateFlow: 500, anticoagulant: '普通肝素 首剂3000IU', dialyzer: 'FX80（高通量）', na: 140, k: 2.0, ca: 1.5 },
-    preAssessment: { sbp: 145, dbp: 82, pulse: 84, temp: 36.7, shift: '下午班', machineNo: '7号机' },
-    vascular: { accessType: 'TCC' as const, catheterLocation: 'right_jugular', catheterPlacedDate: '2025-12-01' },
-  },
-];
+// ── 演示数据（与透析处方工作台共用） ─────────────────────────
+const PATIENTS_LIST = DIALYSIS_DEMO_PATIENTS;
 
 const COMPLICATIONS = [
   { value: 'hypotension',  label: '低血压',       emergency: false },
@@ -359,20 +357,105 @@ function calcUrr(preBun: number, postBun: number): number | null {
   return Math.round((1 - postBun / preBun) * 100);
 }
 
+/** 与 PrescriptionWorkspace 处方表单、打印单处方区同源 */
+type RxPrintBundle = {
+  frequencyLabel: string;
+  modeDisplay: string;
+  bloodFlow: number | null;
+  dialysateFlow: number | null;
+  duration: number | null;
+  dialyzerShort: string;
+  anticoagulantLabel: string;
+  heparinFirst: number | null;
+  heparinMaint: number | null;
+  na: number | null;
+  k: number | null;
+  ca: number | null;
+  dialysateTemp: number | null;
+  sodiumCurveLine: string;
+  preAssessSbp: number | null;
+  preAssessDbp: number | null;
+  preAssessPulse: number | null;
+  /** 透前其他补充 */
+  preAssessOther: string;
+  edemaDisplay: string;
+  bleedingDisplay: string;
+  shiftChinese: string;
+  machineNo: string;
+  preMachineWeightRx: number | null;
+  prescriptionUfMl: number | null;
+  prescriptionUfRate: string | null;
+  /** 处方超滤率按干体重折算：mL·h⁻¹·kg⁻¹（干体重） */
+  prescriptionUfPerHrPerDryKg: string | null;
+};
+
+function buildRxPrintBundle(
+  rx: Record<string, unknown> | null,
+  demo: DialysisDemoPatient | null,
+): RxPrintBundle | null {
+  if (!rx || !demo) return null;
+  const mode = String(rx.mode ?? 'HD');
+  const dw = rx.dryWeight as number;
+  const preM = rx.preMachineWeight as number;
+  const dur = rx.duration as number;
+  if (!Number.isFinite(dw) || !Number.isFinite(preM) || !Number.isFinite(dur)) return null;
+  const ufMl = computePrescriptionUltrafiltrationMl(preM, dw, mode);
+  const ufRate = dur > 0 ? (ufMl / dur).toFixed(0) : null;
+  const ufPerHrPerDryKg = dur > 0 && dw > 0 ? ((ufMl / dur) / dw).toFixed(2) : null;
+
+  const freqPreset = String(rx.frequencyPreset ?? '');
+  const freqCustom = String(rx.frequencyCustom ?? '');
+  const modeOther = String(rx.modeOther ?? '');
+  const edema = String(rx.preAssessEdema ?? '');
+  const edemaSite = String(rx.preAssessEdemaSite ?? '').trim();
+  const bleeding = String(rx.preAssessBleeding ?? '');
+  const bleedingDesc = String(rx.preAssessBleedingDesc ?? '').trim();
+  const edemaDisplay =
+    edema === 'yes' ? (edemaSite ? `有 · ${edemaSite}` : '有') : yesNoAssessLabel(edema);
+  const bleedingDisplay =
+    bleeding === 'yes' ? (bleedingDesc ? `有 · ${bleedingDesc}` : '有') : yesNoAssessLabel(bleeding);
+
+  return {
+    frequencyLabel: frequencyPresetLabel(freqPreset, freqCustom),
+    modeDisplay: dialysisModeLabel(mode, modeOther),
+    bloodFlow: typeof rx.bloodFlow === 'number' ? rx.bloodFlow : null,
+    dialysateFlow: typeof rx.dialysateFlow === 'number' ? rx.dialysateFlow : null,
+    duration: dur,
+    dialyzerShort: dialyzerShortFromFormValue(String(rx.dialyzer ?? '')),
+    anticoagulantLabel: anticoagulantLabelFromCode(String(rx.anticoagulant ?? '')),
+    heparinFirst: typeof rx.heparinFirst === 'number' ? rx.heparinFirst : null,
+    heparinMaint: typeof rx.heparinMaint === 'number' ? rx.heparinMaint : null,
+    na: typeof rx.na === 'number' ? rx.na : null,
+    k: typeof rx.k === 'number' ? rx.k : null,
+    ca: typeof rx.ca === 'number' ? rx.ca : null,
+    dialysateTemp: typeof rx.temp === 'number' ? rx.temp : null,
+    sodiumCurveLine: formatSodiumCurveSummary(rx),
+    preAssessSbp: typeof rx.preAssessSbp === 'number' ? rx.preAssessSbp : null,
+    preAssessDbp: typeof rx.preAssessDbp === 'number' ? rx.preAssessDbp : null,
+    preAssessPulse: typeof rx.preAssessPulse === 'number' ? rx.preAssessPulse : null,
+    preAssessOther: String(rx.preAssessOther ?? '').trim(),
+    edemaDisplay,
+    bleedingDisplay,
+    shiftChinese: shiftCodeToChinese(String(rx.shift ?? '')),
+    machineNo: String(rx.machineNo ?? ''),
+    preMachineWeightRx: preM,
+    prescriptionUfMl: ufMl,
+    prescriptionUfRate: ufRate,
+    prescriptionUfPerHrPerDryKg: ufPerHrPerDryKg,
+  };
+}
+
 // ── A4 打印单 HTML 生成 ───────────────────────────────────
 interface PrintData {
   patientLabel: string;
   printDate: string;
-  prescription: typeof PATIENTS_LIST[0]['prescription'] | null;
-  preAssessment: typeof PATIENTS_LIST[0]['preAssessment'] | null;
+  prescribingDoctorName: string | null;
+  rxPrint: RxPrintBundle | null;
   dryWeight: number | null;
-  preWeight: number | null;
   postWeight: number | null;
   durationHours: number | null;
   preBun: number | null;
   postBun: number | null;
-  rxUF: number | null;
-  ufRate: string | null;
   computedUF: number | null;
   ufPercent: string | null;
   ufAlert: boolean;
@@ -507,7 +590,7 @@ function generatePrintHtml(d: PrintData): string {
     <h1>血 液 透 析 记 录 单</h1>
     <div class="meta">
       <span>患者：<b>${d.patientLabel}</b></span>
-      <span>班次：<b>${d.preAssessment?.shift ?? '—'}</b>&emsp;机器：<b>${d.preAssessment?.machineNo ?? '—'}</b></span>
+      <span>班次：<b>${d.rxPrint?.shiftChinese ?? '—'}</b>&emsp;机器：<b>${d.rxPrint?.machineNo ?? '—'}</b></span>
       <span>通路：<b>${d.accessType}</b></span>
       <span>透析日期：<b>${d.printDate}</b></span>
     </div>
@@ -518,29 +601,39 @@ function generatePrintHtml(d: PrintData): string {
     <div class="block">
       <div class="block-hd">透析处方参数（来自医生处方）</div>
       <div class="block-bd kv">
-        <div class="item">血流速：<b>${v(d.prescription?.bloodFlow, ' mL/min')}</b></div>
-        <div class="item">透析液流速：<b>${v(d.prescription?.dialysateFlow, ' mL/min')}</b></div>
-        <div class="item">标准时长：<b>${v(d.prescription?.duration, ' h')}</b></div>
-        <div class="item">透析器：<b>${v(d.prescription?.dialyzer)}</b></div>
-        <div class="item">抗凝方案：<b>${v(d.prescription?.anticoagulant)}</b></div>
-        <div class="item">Na：<b>${v(d.prescription?.na, ' mmol/L')}</b></div>
-        <div class="item">K：<b>${v(d.prescription?.k, ' mmol/L')}</b></div>
-        <div class="item">Ca：<b>${v(d.prescription?.ca, ' mmol/L')}</b></div>
-        <div class="item">干体重：<b>${v(d.dryWeight, ' kg')}</b></div>
+        <div class="item">透析频次：<b>${d.rxPrint?.frequencyLabel ?? '—'}</b></div>
+        <div class="item">透析方式：<b>${d.rxPrint?.modeDisplay ?? '—'}</b></div>
+        <div class="item">标准时长：<b>${v(d.rxPrint?.duration, ' h')}</b></div>
+        <div class="item">血流速：<b>${v(d.rxPrint?.bloodFlow, ' mL/min')}</b></div>
+        <div class="item">透析液流速：<b>${v(d.rxPrint?.dialysateFlow, ' mL/min')}</b></div>
+        <div class="item">透析器：<b>${d.rxPrint?.dialyzerShort ?? '—'}</b></div>
+        <div class="item">Na / K / Ca：<b>${d.rxPrint?.na ?? '—'} / ${d.rxPrint?.k ?? '—'} / ${d.rxPrint?.ca ?? '—'}</b></div>
+        <div class="item">透析液温度：<b>${v(d.rxPrint?.dialysateTemp, ' ℃')}</b></div>
+        <div class="item">钠曲线：<b>${d.rxPrint?.sodiumCurveLine ?? '—'}</b></div>
+        <div class="item">抗凝方案：<b>${d.rxPrint?.anticoagulantLabel ?? '—'}</b></div>
+        <div class="item">首剂：<b>${v(d.rxPrint?.heparinFirst, ' IU')}</b></div>
+        <div class="item">追加：<b>${v(d.rxPrint?.heparinMaint, ' IU/h')}</b></div>
       </div>
     </div>
     <div class="block">
       <div class="block-hd">透前评估 &amp; 体重超滤</div>
       <div class="block-bd kv">
-        <div class="item">透前收缩压：<b>${v(d.preAssessment?.sbp, ' mmHg')}</b></div>
-        <div class="item">舒张压：<b>${v(d.preAssessment?.dbp, ' mmHg')}</b></div>
-        <div class="item">脉搏：<b>${v(d.preAssessment?.pulse, ' 次/分')}</b></div>
-        <div class="item">体温：<b>${v(d.preAssessment?.temp, ' ℃')}</b></div>
-        <div class="item">上机前体重：<b>${v(d.preWeight, ' kg')}</b></div>
-        <div class="item">处方超滤量：<b>${v(d.rxUF, ' mL')}</b></div>
-        <div class="item">超滤率：<b>${v(d.ufRate, ' mL/h')}</b></div>
+        <div class="item">透前收缩压：<b>${v(d.rxPrint?.preAssessSbp, ' mmHg')}</b></div>
+        <div class="item">舒张压：<b>${v(d.rxPrint?.preAssessDbp, ' mmHg')}</b></div>
+        <div class="item">脉搏：<b>${v(d.rxPrint?.preAssessPulse, ' 次/分')}</b></div>
+        <div class="item">其他：<b>${d.rxPrint?.preAssessOther?.trim() ? d.rxPrint.preAssessOther : '—'}</b></div>
+        <div class="item">水肿：<b>${d.rxPrint?.edemaDisplay ?? '—'}</b></div>
+        <div class="item">活动性出血：<b>${d.rxPrint?.bleedingDisplay ?? '—'}</b></div>
+        <div class="item">干体重（处方）：<b>${v(d.dryWeight, ' kg')}</b></div>
+        <div class="item">上机前体重（处方）：<b>${v(d.rxPrint?.preMachineWeightRx, ' kg')}</b></div>
+        <div class="item">处方超滤量：<b>${v(d.rxPrint?.prescriptionUfMl, ' mL')}</b></div>
+        <div class="item">超滤率（处方）：<b>${v(d.rxPrint?.prescriptionUfRate, ' mL/h')}</b></div>
+        <div class="item">每公斤体重每小时超滤率（干体重）：<b>${d.rxPrint?.prescriptionUfPerHrPerDryKg != null ? `${d.rxPrint.prescriptionUfPerHrPerDryKg} mL·h⁻¹·kg⁻¹` : '—'}</b></div>
       </div>
     </div>
+  </div>
+  <div style="text-align:right;font-size:8.5pt;margin:-1px 0 5px;padding-right:1px;color:#333">
+    医生签名：<span style="font-family:'KaiTi','STKaiti','FangSong',serif;font-size:13pt;font-weight:bold;letter-spacing:0.15em">${d.prescribingDoctorName || '—'}</span>
   </div>
 
   <!-- 第二行：通路信息 + 护士签名 -->
@@ -754,11 +847,10 @@ export default function DialysisEntryPage() {
   const [loading, setLoading] = useState(false);
 
   const [selectedPatient, setSelectedPatient] = useState<string>('');
-  const [prescription, setPrescription] = useState<typeof PATIENTS_LIST[0]['prescription'] | null>(null);
-  const [preAssessment, setPreAssessment] = useState<typeof PATIENTS_LIST[0]['preAssessment'] | null>(null);
+  /** 与处方工作台 mergePrescriptionDefaultsForPatient 同源（演示默认值 + 医生保存的参数），仅展示只读 */
+  const [rxDefaults, setRxDefaults] = useState<Record<string, unknown> | null>(null);
   const [dryWeight, setDryWeight] = useState<number | null>(null);
 
-  const [preWeight, setPreWeight] = useState<number | null>(null);
   const [postWeight, setPostWeight] = useState<number | null>(null);
   const [durationHours, setDurationHours] = useState<number | null>(null);
   const [preBun, setPreBun] = useState<number | null>(null);
@@ -773,6 +865,7 @@ export default function DialysisEntryPage() {
   const [complicationRecords, setComplicationRecords] = useState<Record<string, Record<string, unknown>>>({});
   const [treatmentModalTarget, setTreatmentModalTarget] = useState<string | null>(null);
   const [treatmentForm] = Form.useForm();
+  const [postDialysisSyncMeta, setPostDialysisSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
   const [orders, setOrders] = useState<Record<string, boolean>>({});
   const [vitalRows, setVitalRows] = useState<VitalSignRow[]>([createVitalSignRow()]);
 
@@ -780,17 +873,110 @@ export default function DialysisEntryPage() {
     setSelectedPatient(val);
     const p = PATIENTS_LIST.find(p => p.value === val);
     if (p) {
-      setPrescription(p.prescription);
-      setPreAssessment(p.preAssessment);
-      setDryWeight(p.dryWeight);
-      setDurationHours(p.prescription.duration);
+      const defaults = mergePrescriptionDefaultsForPatient(p);
+      setRxDefaults(defaults);
+      setDryWeight(typeof defaults.dryWeight === 'number' ? defaults.dryWeight : p.dryWeight);
+      setDurationHours(typeof defaults.duration === 'number' ? defaults.duration : p.prescription.duration);
       setAccessType(p.vascular.accessType);
       setCatheterLocation(p.vascular.catheterLocation);
       setCatheterPlacedDate(p.vascular.catheterPlacedDate);
+    } else {
+      setRxDefaults(null);
+    }
+    const sync = val ? readPostDialysisSync(val) : null;
+    setPostDialysisSyncMeta(sync);
+    if (sync?.filledBy === 'doctor') {
+      setPostWeight(sync.postWeightKg);
+      form.setFieldsValue({
+        post_sbp: sync.postSbp ?? undefined,
+        post_dbp: sync.postDbp ?? undefined,
+        post_pulse: sync.postPulse ?? undefined,
+      });
+    } else {
+      setPostWeight(null);
+      form.setFieldsValue({
+        post_sbp: undefined,
+        post_dbp: undefined,
+        post_pulse: undefined,
+      });
     }
   }, [form]);
 
-  const computedUF = preWeight && postWeight ? Math.round((preWeight - postWeight) * 1000) : null;
+  const selectedDemoPatient = useMemo(
+    () => PATIENTS_LIST.find((p) => p.value === selectedPatient) ?? null,
+    [selectedPatient],
+  );
+
+  /** 与 PrescriptionWorkspace 处方表单字段同源（只读） */
+  const rxPreview = useMemo(() => {
+    if (!rxDefaults || !selectedDemoPatient) return null;
+    const mode = String(rxDefaults.mode ?? 'HD');
+    const dw = rxDefaults.dryWeight as number;
+    const preM = rxDefaults.preMachineWeight as number;
+    const dur = rxDefaults.duration as number;
+    if (!Number.isFinite(dw) || !Number.isFinite(preM) || !Number.isFinite(dur)) return null;
+    const ufMl = computePrescriptionUltrafiltrationMl(preM, dw, mode);
+    const ufRate = dur > 0 ? (ufMl / dur).toFixed(0) : null;
+    const ufPerHrPerDryKg = dur > 0 && dw > 0 ? ((ufMl / dur) / dw).toFixed(2) : null;
+    const ufAlert = ufMl / (dw * 1000) > 0.05;
+
+    const freqPreset = String(rxDefaults.frequencyPreset ?? '');
+    const freqCustom = String(rxDefaults.frequencyCustom ?? '');
+    const modeOther = String(rxDefaults.modeOther ?? '');
+    const heparinFirst = typeof rxDefaults.heparinFirst === 'number' ? rxDefaults.heparinFirst : null;
+    const heparinMaint = typeof rxDefaults.heparinMaint === 'number' ? rxDefaults.heparinMaint : null;
+    const dialysateTemp = typeof rxDefaults.temp === 'number' ? rxDefaults.temp : null;
+    const sodiumCurveLine = formatSodiumCurveSummary(rxDefaults);
+    const edema = String(rxDefaults.preAssessEdema ?? '');
+    const edemaSite = String(rxDefaults.preAssessEdemaSite ?? '').trim();
+    const bleeding = String(rxDefaults.preAssessBleeding ?? '');
+    const bleedingDesc = String(rxDefaults.preAssessBleedingDesc ?? '').trim();
+    const edemaDisplay =
+      edema === 'yes' ? (edemaSite ? `有 · ${edemaSite}` : '有') : yesNoAssessLabel(edema);
+    const bleedingDisplay =
+      bleeding === 'yes' ? (bleedingDesc ? `有 · ${bleedingDesc}` : '有') : yesNoAssessLabel(bleeding);
+
+    return {
+      frequencyLabel: frequencyPresetLabel(freqPreset, freqCustom),
+      modeDisplay: dialysisModeLabel(mode, modeOther),
+      bloodFlow: rxDefaults.bloodFlow as number,
+      dialysateFlow: rxDefaults.dialysateFlow as number,
+      duration: dur,
+      dialyzerShort: dialyzerShortFromFormValue(String(rxDefaults.dialyzer ?? '')),
+      anticoagulantLabel: anticoagulantLabelFromCode(String(rxDefaults.anticoagulant ?? '')),
+      heparinFirst,
+      heparinMaint,
+      na: rxDefaults.na as number,
+      k: rxDefaults.k as number,
+      ca: rxDefaults.ca as number,
+      dialysateTemp,
+      sodiumCurveLine,
+      preAssessSbp: rxDefaults.preAssessSbp as number,
+      preAssessDbp: rxDefaults.preAssessDbp as number,
+      preAssessPulse: rxDefaults.preAssessPulse as number,
+      preAssessOther: String(rxDefaults.preAssessOther ?? '').trim(),
+      edemaDisplay,
+      bleedingDisplay,
+      shiftChinese: shiftCodeToChinese(String(rxDefaults.shift ?? '')),
+      machineNo: String(rxDefaults.machineNo ?? ''),
+      preMachineWeightRx: preM,
+      prescriptionUfMl: ufMl,
+      prescriptionUfRate: ufRate,
+      prescriptionUfPerHrPerDryKg: ufPerHrPerDryKg,
+      ufAlertPrescription: ufAlert,
+    };
+  }, [rxDefaults, selectedDemoPatient]);
+
+  const postSbpWatch = Form.useWatch('post_sbp', form);
+  const postDbpWatch = Form.useWatch('post_dbp', form);
+  const postPulseWatch = Form.useWatch('post_pulse', form);
+  const postDialysisLockedByDoctor = postDialysisSyncMeta?.filledBy === 'doctor';
+
+  /** 实际脱水量：按处方上机前体重与透后体重差值（kg→mL） */
+  const computedUF =
+    rxPreview && postWeight != null
+      ? Math.round((rxPreview.preMachineWeightRx - postWeight) * 1000)
+      : null;
   const ufPercent = dryWeight && computedUF ? ((computedUF / (dryWeight * 1000)) * 100).toFixed(1) : null;
   const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;
 
@@ -800,6 +986,57 @@ export default function DialysisEntryPage() {
   const urr = preBun && postBun ? calcUrr(preBun, postBun) : null;
   const ktvAdequate = ktv !== null ? ktv >= 1.2 : null;
   const urrAdequate = urr !== null ? urr >= 65 : null;
+
+  useEffect(() => {
+    const refresh = () => {
+      if (!selectedPatient) {
+        setPostDialysisSyncMeta(null);
+        return;
+      }
+      const sync = readPostDialysisSync(selectedPatient);
+      setPostDialysisSyncMeta(sync);
+      if (sync?.filledBy === 'doctor') {
+        setPostWeight(sync.postWeightKg);
+        form.setFieldsValue({
+          post_sbp: sync.postSbp ?? undefined,
+          post_dbp: sync.postDbp ?? undefined,
+          post_pulse: sync.postPulse ?? undefined,
+        });
+      }
+    };
+    refresh();
+    window.addEventListener('storage', refresh);
+    window.addEventListener(POST_DIALYSIS_SYNC_EVENT, refresh);
+    return () => {
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener(POST_DIALYSIS_SYNC_EVENT, refresh);
+    };
+  }, [selectedPatient, form]);
+
+  useEffect(() => {
+    if (!selectedPatient) return;
+    if (readPostDialysisSync(selectedPatient)?.filledBy === 'doctor') return;
+    const hasAny =
+      postSbpWatch != null ||
+      postDbpWatch != null ||
+      postPulseWatch != null ||
+      postWeight != null;
+    if (!hasAny) return;
+    const t = window.setTimeout(() => {
+      if (readPostDialysisSync(selectedPatient)?.filledBy === 'doctor') return;
+      writePostDialysisSync({
+        patientId: selectedPatient,
+        postSbp: postSbpWatch ?? null,
+        postDbp: postDbpWatch ?? null,
+        postPulse: postPulseWatch ?? null,
+        postWeightKg: postWeight,
+        filledBy: 'nurse',
+        updatedAt: new Date().toISOString(),
+      });
+      setPostDialysisSyncMeta(readPostDialysisSync(selectedPatient));
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [selectedPatient, postWeight, postSbpWatch, postDbpWatch, postPulseWatch]);
 
   const handleVitalChange = (rowId: string, field: string, val: string) => {
     setVitalRows(prev => prev.map(row =>
@@ -821,7 +1058,8 @@ export default function DialysisEntryPage() {
 
   const handleSubmit = async () => {
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
-    if (!preWeight) { message.warning('请填写透析前体重'); return; }
+    if (!rxPreview) { message.warning('处方数据未加载'); return; }
+    if (postWeight == null) { message.warning('请填写透后体重'); return; }
     const hasUnsignedVitalRow = vitalRows.some(row => !row.values.signature?.trim());
     if (hasUnsignedVitalRow) { message.warning('透析中生命体征记录每行都需要护士签名'); return; }
     setLoading(true);
@@ -835,9 +1073,9 @@ export default function DialysisEntryPage() {
   };
 
   const autoGeneratedDate = dayjs().format('YYYY年M月D日');
+  const prescribingDoctorName =
+    PATIENTS_LIST.find(p => p.value === selectedPatient)?.prescribingDoctorName ?? null;
   const hasEmergency = complications.some(c => COMPLICATIONS.find(co => co.value === c)?.emergency);
-  const rxUF = preWeight && dryWeight ? Math.round((preWeight - dryWeight) * 1000) : null;
-  const ufRate = rxUF !== null && prescription?.duration ? (rxUF / prescription.duration).toFixed(0) : null;
 
   const handlePrint = useCallback(() => {
     if (!selectedPatient) { message.warning('请先选择患者后再打印'); return; }
@@ -846,16 +1084,13 @@ export default function DialysisEntryPage() {
     const html = generatePrintHtml({
       patientLabel: patient?.label?.split(' — ').join(' ') ?? selectedPatient,
       printDate: dayjs().format('YYYY年MM月DD日'),
-      prescription,
-      preAssessment,
+      prescribingDoctorName,
+      rxPrint: buildRxPrintBundle(rxDefaults, patient ?? null),
       dryWeight,
-      preWeight,
       postWeight,
       durationHours,
       preBun,
       postBun,
-      rxUF,
-      ufRate,
       computedUF,
       ufPercent,
       ufAlert,
@@ -877,8 +1112,8 @@ export default function DialysisEntryPage() {
     win.document.write(html);
     win.document.close();
   }, [
-    selectedPatient, prescription, preAssessment, dryWeight, preWeight, postWeight,
-    durationHours, preBun, postBun, rxUF, ufRate, computedUF, ufPercent, ufAlert,
+    selectedPatient, prescribingDoctorName, rxDefaults, dryWeight, postWeight,
+    durationHours, preBun, postBun, computedUF, ufPercent, ufAlert,
     accessType, catheterLocation, catheterDays, complications, complicationRecords,
     orders, vitalRows, ktv, urr, ktvAdequate, urrAdequate, form,
   ]);
@@ -939,9 +1174,9 @@ export default function DialysisEntryPage() {
               </div>
             )}
 
-            {prescription && preAssessment && (
+            {rxPreview && selectedDemoPatient && (
               <>
-                {/* 患者基础信息条 */}
+                {/* 患者基础信息条（与处方工作台一致） */}
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                   padding: '8px 12px',
@@ -950,21 +1185,24 @@ export default function DialysisEntryPage() {
                   border: '1px solid #BFDBFE',
                 }}>
                   <span style={{ fontWeight: 700, fontSize: 15, color: '#1E40AF' }}>
-                    {PATIENTS_LIST.find(p => p.value === selectedPatient)?.label?.split(' — ')[0]}
+                    {selectedDemoPatient.label.split(' — ')[0]}
                   </span>
-                  <Tag color="blue">{preAssessment.shift}</Tag>
-                  <Tag color="geekblue">{preAssessment.machineNo}</Tag>
+                  <Tag color="blue">{rxPreview.shiftChinese}</Tag>
+                  <Tag color="geekblue">{rxPreview.machineNo}</Tag>
                   <Tag color={accessType === 'AVF' || accessType === 'AVG' ? 'green' : 'orange'}>
                     {accessType}
                   </Tag>
+                  <span style={{ fontSize: 12, color: '#64748B' }}>
+                    开立医师：
+                    <strong style={{ color: '#0D1B3E' }}>{selectedDemoPatient.prescribingDoctorName}</strong>
+                  </span>
                   <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
-                    📋 处方与评估信息自动导入，仅查看不可修改
+                    处方与评估信息自动导入，仅查看不可修改
                   </span>
                 </div>
 
-                {/* 处方参数 + 透前生命体征 两列 */}
+                {/* 处方参数 + 透前评估（与 PrescriptionWorkspace ②③④ 字段同源，只读） */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-                  {/* 左：处方参数 */}
                   <div style={{
                     padding: 12, background: '#F8FAFC', borderRadius: 8,
                     border: '1px solid #DBEAFE',
@@ -973,16 +1211,30 @@ export default function DialysisEntryPage() {
                       处方参数
                     </div>
                     <Grid cols={3} gap={10}>
-                      <ReadonlyValue label="血流速" value={`${prescription.bloodFlow} mL/min`} />
-                      <ReadonlyValue label="透析液流速" value={`${prescription.dialysateFlow} mL/min`} />
-                      <ReadonlyValue label="标准时长" value={`${prescription.duration} h`} />
-                      <ReadonlyValue label="透析器" value={prescription.dialyzer} />
-                      <ReadonlyValue label="Na / K / Ca" value={`${prescription.na} / ${prescription.k} / ${prescription.ca}`} />
-                      <ReadonlyValue label="抗凝方案" value={prescription.anticoagulant} />
+                      <ReadonlyValue label="透析频次" value={rxPreview.frequencyLabel} />
+                      <ReadonlyValue label="透析方式" value={rxPreview.modeDisplay} />
+                      <ReadonlyValue label="标准时长" value={`${rxPreview.duration} h`} />
+                      <ReadonlyValue label="血流速" value={`${rxPreview.bloodFlow} mL/min`} />
+                      <ReadonlyValue label="透析液流速" value={`${rxPreview.dialysateFlow} mL/min`} />
+                      <ReadonlyValue label="透析器" value={rxPreview.dialyzerShort} />
+                      <ReadonlyValue label="Na / K / Ca" value={`${rxPreview.na} / ${rxPreview.k} / ${rxPreview.ca}`} />
+                      <ReadonlyValue
+                        label="透析液温度 (℃)"
+                        value={rxPreview.dialysateTemp != null ? `${rxPreview.dialysateTemp} ℃` : '—'}
+                      />
+                      <ReadonlyValue label="钠曲线" value={rxPreview.sodiumCurveLine} />
+                      <ReadonlyValue label="抗凝方案" value={rxPreview.anticoagulantLabel} />
+                      <ReadonlyValue
+                        label="首剂"
+                        value={rxPreview.heparinFirst != null ? `${rxPreview.heparinFirst} IU` : '—'}
+                      />
+                      <ReadonlyValue
+                        label="追加"
+                        value={rxPreview.heparinMaint != null ? `${rxPreview.heparinMaint} IU/h` : '—'}
+                      />
                     </Grid>
                   </div>
 
-                  {/* 右：透前生命体征 */}
                   <div style={{
                     padding: 12, background: '#F8FAFC', borderRadius: 8,
                     border: '1px solid #DBEAFE',
@@ -991,50 +1243,99 @@ export default function DialysisEntryPage() {
                       透前评估
                     </div>
                     <Grid cols={3} gap={10}>
-                      <ReadonlyValue label="收缩压" value={`${preAssessment.sbp} mmHg`} />
-                      <ReadonlyValue label="舒张压" value={`${preAssessment.dbp} mmHg`} />
-                      <ReadonlyValue label="脉搏" value={`${preAssessment.pulse} 次/分`} />
-                      <ReadonlyValue label="体温" value={`${preAssessment.temp} ℃`} />
+                      <ReadonlyValue label="收缩压" value={`${rxPreview.preAssessSbp} mmHg`} />
+                      <ReadonlyValue label="舒张压" value={`${rxPreview.preAssessDbp} mmHg`} />
+                      <ReadonlyValue label="脉搏" value={`${rxPreview.preAssessPulse} 次/分`} />
+                      <ReadonlyValue label="水肿" value={rxPreview.edemaDisplay} />
+                      <ReadonlyValue label="活动性出血" value={rxPreview.bleedingDisplay} />
                     </Grid>
+                    <div style={{ marginTop: 10 }}>
+                      <ReadonlyValue
+                        label="其他（透前补充）"
+                        value={
+                          rxPreview.preAssessOther ? (
+                            <span style={{ whiteSpace: 'pre-wrap', fontWeight: 700, fontSize: 13 }}>
+                              {rxPreview.preAssessOther}
+                            </span>
+                          ) : (
+                            '—'
+                          )
+                        }
+                      />
+                    </div>
                   </div>
                 </div>
 
-                {/* 体重 & 超滤目标 */}
+                {/* 体重 & 超滤：与处方工作台摘要区一致 */}
                 <div style={{
                   padding: '12px 14px', background: '#FFFDF0', borderRadius: 8,
                   border: '1px solid #FDE68A',
                 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 10, letterSpacing: 0.5 }}>
-                    ⚖️ 体重与超滤目标（干体重来自处方；超滤量/超滤率自动计算）
+                    体重与超滤（与处方工作台「超滤量」一致：(上机前体重−干体重)×1000 + 附加（HD/HDF +200mL，HD+HP +500mL）；处方为只读）
                   </div>
                   <Grid cols={4} gap={14}>
                     <ReadonlyValue label="干体重（处方）" value={`${dryWeight} kg`} color="#1D4ED8" bg="#EFF6FF" border="#BFDBFE" />
-                    <div>
-                      <FieldLabel text="上机前体重" required />
-                      <InputNumber
-                        min={20} max={200} step={0.1} precision={1}
-                        style={{ width: '100%', marginTop: 4 }}
-                        value={preWeight ?? undefined}
-                        onChange={v => setPreWeight(v)}
-                        placeholder="如：64.5"
-                        addonAfter="kg"
-                      />
-                    </div>
+                    <ReadonlyValue label="上机前体重（处方）" value={`${rxPreview.preMachineWeightRx} kg`} />
                     <ReadonlyValue
-                      label="处方超滤量 = (前-干)×1000"
-                      value={rxUF !== null ? `${rxUF} mL${rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? ' ⚠️' : ''}` : '—'}
-                      color={rxUF !== null && rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? '#BE123C' : '#15803D'}
-                      bg={rxUF !== null && rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? '#FFF1F2' : '#F0FDF4'}
-                      border={rxUF !== null && rxUF > (dryWeight ?? 0) * 1000 * 0.05 ? '#FECDD3' : '#BBF7D0'}
+                      label="处方超滤量"
+                      value={
+                        rxPreview.prescriptionUfMl !== null
+                          ? `${rxPreview.prescriptionUfMl} mL${rxPreview.ufAlertPrescription ? ' ⚠️' : ''}`
+                          : '—'
+                      }
+                      color={rxPreview.ufAlertPrescription ? '#BE123C' : '#15803D'}
+                      bg={rxPreview.ufAlertPrescription ? '#FFF1F2' : '#F0FDF4'}
+                      border={rxPreview.ufAlertPrescription ? '#FECDD3' : '#BBF7D0'}
                     />
                     <ReadonlyValue
                       label="超滤率 = 超滤量 ÷ 时长"
-                      value={ufRate !== null ? `${ufRate} mL/h` : '—'}
+                      value={rxPreview.prescriptionUfRate !== null ? `${rxPreview.prescriptionUfRate} mL/h` : '—'}
+                      color="#0369A1"
+                      bg="#F0F9FF"
+                      border="#BAE6FD"
+                    />
+                    <ReadonlyValue
+                      label="每公斤体重每小时超滤率（干体重）"
+                      value={
+                        rxPreview.prescriptionUfPerHrPerDryKg != null
+                          ? `${rxPreview.prescriptionUfPerHrPerDryKg} mL·h⁻¹·kg⁻¹`
+                          : '—'
+                      }
                       color="#0369A1"
                       bg="#F0F9FF"
                       border="#BAE6FD"
                     />
                   </Grid>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 14,
+                    paddingTop: 12,
+                    borderTop: '1px dashed #E2E8F0',
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    alignItems: 'baseline',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span style={{ fontSize: 12, color: '#64748B' }}>医生签名：</span>
+                  <span
+                    style={{
+                      fontFamily: '"KaiTi", "STKaiti", "FangSong", "SimSun", serif',
+                      fontSize: 20,
+                      color: '#1e293b',
+                      letterSpacing: '0.12em',
+                      padding: '0 10px 6px',
+                      borderBottom: '1px solid #cbd5e1',
+                      minWidth: 100,
+                      textAlign: 'center',
+                    }}
+                  >
+                    {prescribingDoctorName ?? '—'}
+                  </span>
                 </div>
               </>
             )}
@@ -1482,6 +1783,15 @@ export default function DialysisEntryPage() {
         <Section>
           <SectionTitle step={7} color="#0D1B3E" title="透析后评估 · 充分性计算（Kt/V）" />
           <SectionBody>
+            {postDialysisLockedByDoctor && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 14 }}
+                message="透后数据已由医生在透析处方工作台填写"
+                description="与「透析处方管理」页共用同一份数据，此处无需重复填写；如需更正请由医生在处方页修改。"
+              />
+            )}
 
             {/* 第一行：时长、体重、脱水、入量 */}
             <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
@@ -1500,6 +1810,7 @@ export default function DialysisEntryPage() {
                   value={postWeight ?? undefined}
                   onChange={v => setPostWeight(v)}
                   placeholder="如：62.0"
+                  disabled={postDialysisLockedByDoctor}
                 />
               </Form.Item>
               <div>
@@ -1535,18 +1846,18 @@ export default function DialysisEntryPage() {
                 <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
                   value={postBun ?? undefined} onChange={v => setPostBun(v)} placeholder="透析后" addonAfter="mmol/L" />
               </Form.Item>
-              <Form.Item label={<FieldLabel text="透后收缩压" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={60} max={250} style={{ width: '100%' }} addonAfter="mmHg" />
+              <Form.Item name="post_sbp" label={<FieldLabel text="透后收缩压" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={60} max={250} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
-              <Form.Item label={<FieldLabel text="透后舒张压" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={40} max={160} style={{ width: '100%' }} addonAfter="mmHg" />
+              <Form.Item name="post_dbp" label={<FieldLabel text="透后舒张压" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={40} max={160} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
             </Grid>
 
             {/* 第三行：脉搏、凝血、渗血、封管 */}
             <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
-              <Form.Item label={<FieldLabel text="透后脉搏" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={30} max={220} style={{ width: '100%' }} addonAfter="次/分" />
+              <Form.Item name="post_pulse" label={<FieldLabel text="透后脉搏" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={30} max={220} style={{ width: '100%' }} addonAfter="次/分" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
               <Form.Item label={<FieldLabel text="凝血分级" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="0" options={[

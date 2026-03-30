@@ -1,3 +1,8 @@
+/**
+ * 质控月报查看与确认页
+ * 主要作用：展示月度五项上报指标及报表状态，支持护士长确认与导出。
+ * 主要功能：按年月选择；拉取 reports 数据；Excel 等导出触发（依实现）。
+ */
 import { useState } from 'react';
 import { Card, Select, Button, message, Modal } from 'antd';
 import { FileExcelOutlined, CheckCircleOutlined } from '@ant-design/icons';

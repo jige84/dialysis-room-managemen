@@ -1,7 +1,7 @@
 /**
- * 统一响应格式封装
- * 成功：{ code: 200, data: {...}, message: '操作成功' }
- * 失败：{ code: 4xx/5xx, data: null, message: '错误描述' }
+ * HTTP JSON 响应统一封装
+ * 主要作用：全 API 使用一致的 { code, data, message } 结构，便于前端拦截器处理。
+ * 主要功能：success/created/paginated；error 系列与 401/403/404 快捷方法。
  */
 
 const success = (res, data = null, message = '操作成功', statusCode = 200) => {

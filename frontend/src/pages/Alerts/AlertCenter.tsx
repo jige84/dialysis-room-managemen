@@ -1,7 +1,13 @@
-import { useState } from 'react';
+/**
+ * 预警中心页
+ * 主要作用：集中展示系统生成的临床与流程预警，支持筛选与处理确认。
+ * 主要功能：按类型/级别过滤；批量或单条处理；对接 alerts API。
+ */
+import { useEffect, useMemo, useState } from 'react';
 import { Card, Button, Select, Input, Modal, Form, message } from 'antd';
 import { SearchOutlined, CheckOutlined } from '@ant-design/icons';
 import PageShell from '../../components/PageShell/PageShell';
+import { useLocation } from 'react-router-dom';
 
 interface AlertItem {
   key: string;
@@ -45,6 +51,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 
 export default function AlertCenterPage() {
+  const location = useLocation();
   const [levelFilter, setLevelFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -52,13 +59,26 @@ export default function AlertCenterPage() {
   const [handleModal, setHandleModal] = useState<AlertItem | null>(null);
   const [handleForm] = Form.useForm();
 
-  const filtered = ALERT_DATA.filter(a => {
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const level = params.get('level');
+    const status = params.get('status');
+    const category = params.get('category');
+    const q = params.get('q');
+
+    if (level) setLevelFilter(level);
+    if (status) setStatusFilter(status);
+    if (category) setCategoryFilter(category);
+    if (q) setSearch(q);
+  }, [location.search]);
+
+  const filtered = useMemo(() => ALERT_DATA.filter(a => {
     if (search && !a.patient.includes(search) && !a.title.includes(search)) return false;
     if (levelFilter && a.level !== levelFilter) return false;
     if (statusFilter && a.status !== statusFilter) return false;
     if (categoryFilter && a.category !== categoryFilter) return false;
     return true;
-  });
+  }), [categoryFilter, levelFilter, search, statusFilter]);
 
   const criticals = filtered.filter(a => a.level === 'critical');
   const highs     = filtered.filter(a => a.level === 'high');

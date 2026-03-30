@@ -1,6 +1,7 @@
 /**
- * JWT认证中间件
- * 验证 Authorization: Bearer <token>
+ * JWT 认证中间件
+ * 主要作用：解析并校验访问令牌，将当前用户挂载到 req.user。
+ * 主要功能：Bearer 解析；签名校验；可选 Redis 黑名单吊销检查；未登录返回统一 401。
  */
 const jwt = require('jsonwebtoken');
 const { cache } = require('../config/redis');

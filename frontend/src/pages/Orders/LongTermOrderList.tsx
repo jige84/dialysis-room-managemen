@@ -1,3 +1,8 @@
+/**
+ * 长期医嘱单列表与管理页
+ * 主要作用：展示患者长期医嘱，支持医生开立/停嘱与护士查看执行依据。
+ * 主要功能：按患者筛选 Table；新开/停止 Modal；对接 orders API。
+ */
 import { useState } from 'react';
 import { Card, Select, Button, Table, Tag, Modal, Form, Input, Space, message, Divider } from 'antd';
 import { PlusOutlined, StopOutlined } from '@ant-design/icons';

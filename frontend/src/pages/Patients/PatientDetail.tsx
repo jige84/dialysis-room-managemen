@@ -1,3 +1,8 @@
+/**
+ * 患者详情与档案维护页（多 Tab）
+ * 主要作用：集中展示患者基本信息、通路、处方、化验等，并支持部分字段编辑。
+ * 主要功能：路由参数 id 拉取详情；Tabs 组织子模块；打印与返回列表。
+ */
 import { useEffect, useState } from 'react';
 import { Card, Tabs, Button, Table, Tag, Space, message, Modal, Form, Input, Select, DatePicker, InputNumber, Checkbox } from 'antd';
 import { ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons';
@@ -411,42 +416,43 @@ function TabCareCoordination({
     isCatheterAccess && !patient.consent_cvc ? `${catheterLabel}置管同意书` : null,
   ].filter((v): v is string => Boolean(v));
 
-  const infectionAlerts = infectionRows
+  type CareReminderItem = {
+    key: string;
+    level: 'high' | 'medium' | 'info';
+    title: string;
+    desc: string;
+    actionLabel: string;
+    actionPath: string;
+  };
+
+  const infectionAlerts: CareReminderItem[] = infectionRows
     .filter(r => Boolean(r.screen_date))
-    .map((r, idx) => {
+    .flatMap((r, idx): CareReminderItem[] => {
       const daysSince = dayjs().diff(dayjs(r.screen_date), 'day');
       if (daysSince >= INFECTION_OVERDUE_DAYS) {
-        return {
+        return [{
           key: `infection-overdue-${idx}`,
-          level: 'high' as const,
+          level: 'high',
           title: `${infectionItemLabel(r.screen_type)} 复查已超期`,
           desc: `距离上次检测 ${daysSince} 天（阈值 ${INFECTION_OVERDUE_DAYS} 天），建议立即复查。`,
           actionLabel: '去传染病管理',
           actionPath: `/infection?patient_id=${encodeURIComponent(patient.id)}`,
-        };
+        }];
       }
       if (daysSince >= INFECTION_WARNING_DAYS) {
-        return {
+        return [{
           key: `infection-warning-${idx}`,
-          level: 'medium' as const,
+          level: 'medium',
           title: `${infectionItemLabel(r.screen_type)} 即将到期`,
           desc: `距离上次检测 ${daysSince} 天（预警阈值 ${INFECTION_WARNING_DAYS} 天），请提前安排复查。`,
           actionLabel: '去传染病管理',
           actionPath: `/infection?patient_id=${encodeURIComponent(patient.id)}`,
-        };
+        }];
       }
-      return null;
-    })
-    .filter((v): v is {
-      key: string;
-      level: 'high' | 'medium' | 'info';
-      title: string;
-      desc: string;
-      actionLabel: string;
-      actionPath: string;
-    } => Boolean(v));
+      return [];
+    });
 
-  const reminderItems = [
+  const reminderItems: CareReminderItem[] = [
     ...(criticalLabCount > 0
       ? [{
           key: 'critical-lab',
@@ -777,24 +783,30 @@ export default function PatientDetailPage() {
       };
       await patientsApi.update(id, updatePayload);
 
-      if (selectedAccessType !== currentAccessType) {
-        if (selectedAccessType === 'none') {
-          if (currentAccessRecord?.id) {
-            await vascularApi.abandon(
-              currentAccessRecord.id,
-              '患者档案编辑：调整为无需置管/暂无通路',
-              dayjs().format('YYYY-MM-DD'),
-            );
+      // 先保证“患者档案”更新成功；通路同步失败时给出明确提示（避免静默中断）
+      let vascularSyncError: unknown = null;
+      try {
+        if (selectedAccessType !== currentAccessType) {
+          if (selectedAccessType === 'none') {
+            if (currentAccessRecord?.id) {
+              await vascularApi.abandon(
+                currentAccessRecord.id,
+                '患者档案编辑：调整为无需置管/暂无通路',
+                dayjs().format('YYYY-MM-DD'),
+              );
+            }
+          } else {
+            await vascularApi.create(id, {
+              access_type: selectedAccessType.toLowerCase() as 'avf' | 'avg' | 'tcc' | 'ncc',
+              location: '待完善',
+              established_date: dayjs().format('YYYY-MM-DD'),
+              notes: '由患者档案编辑窗口快速更新，请在血管通路管理完善详细信息',
+              is_current: true,
+            });
           }
-        } else {
-          await vascularApi.create(id, {
-            access_type: selectedAccessType.toLowerCase() as 'avf' | 'avg' | 'tcc' | 'ncc',
-            location: '待完善',
-            established_date: dayjs().format('YYYY-MM-DD'),
-            notes: '由患者档案编辑窗口快速更新，请在血管通路管理完善详细信息',
-            is_current: true,
-          });
         }
+      } catch (e) {
+        vascularSyncError = e;
       }
 
       const data = await loadPatientData(id);
@@ -805,8 +817,34 @@ export default function PatientDetailPage() {
       setRecentLines(data.recentLines);
       setEditOpen(false);
       message.success('患者档案已更新');
-    } catch {
-      // 表单校验或请求错误由组件/拦截器处理
+
+      if (vascularSyncError) {
+        const maybeResponse = vascularSyncError as { response?: { data?: { message?: string }; status?: number } };
+        message.error(
+          maybeResponse?.response?.data?.message ||
+            (maybeResponse?.response?.status
+              ? `患者信息已保存，但通路同步失败（HTTP ${maybeResponse.response.status}）`
+              : '患者信息已保存，但通路同步失败'),
+        );
+      }
+    } catch (err: unknown) {
+      // 表单校验失败：antd 会在对应字段展示错误提示；此处只兜底避免“静默失败”
+      // 请求失败：axios 拦截器会兜底提示，但这里同样给出后端 message 以便定位
+      const maybeResponse = err as { response?: { data?: { message?: string }; status?: number } };
+      const backendMsg = maybeResponse?.response?.data?.message;
+      const status = maybeResponse?.response?.status;
+
+      const maybeValidationError = err as { errorFields?: unknown };
+      if (!maybeResponse?.response && maybeValidationError?.errorFields) return;
+
+      message.error(
+        backendMsg ||
+          (status ? `保存失败（HTTP ${status}），请稍后重试` : '保存失败，请稍后重试'),
+      );
+
+      // 避免在控制台输出请求体/患者隐私，仅记录错误摘要
+      // eslint-disable-next-line no-console
+      console.error('[PatientDetail] save patient error', { status, message: backendMsg || (err as Error)?.message });
     } finally {
       setEditLoading(false);
     }

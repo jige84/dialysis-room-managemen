@@ -1,5 +1,7 @@
 /**
- * 设备耗材管理路由
+ * 透析机与耗材 REST 路由
+ * 主要作用：维护透析机档案、隔离区属性及耗材出入库等业务数据。
+ * 主要功能：机器列表与状态；耗材记录；与排班/透析分配相关的只读或写接口（依表结构）。
  */
 const express = require('express');
 const router = express.Router();

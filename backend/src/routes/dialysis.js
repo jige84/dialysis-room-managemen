@@ -1,5 +1,7 @@
 /**
- * 透析记录路由（含自动带入医嘱、Kt/V计算）
+ * 透析记录 REST 路由
+ * 主要作用：透析场次与过程数据的核心 API，连接处方、医嘱与质控统计。
+ * 主要功能：透析记录 CRUD；护士录入日期限制；自动带入医嘱；Kt/V 与相关医疗计算。
  */
 const express = require('express');
 const router = express.Router();

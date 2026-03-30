@@ -1,5 +1,7 @@
 /**
- * 用户管理路由（仅管理员）
+ * 系统用户 REST 路由（仅管理员）
+ * 主要作用：维护登录账号、角色与基础资料，落实 RBAC 账号侧配置。
+ * 主要功能：用户列表与分页；创建/更新/禁用；密码哈希存储；操作审计。
  */
 const express = require('express');
 const router = express.Router();

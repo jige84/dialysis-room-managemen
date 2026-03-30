@@ -1,5 +1,7 @@
 /**
- * 涉县善谷医院血液透析室管理系统 - 后端主入口
+ * 血液透析室管理系统 — 后端 HTTP 服务入口（Express）
+ * 主要作用：启动 API 服务，串联安全中间件、认证授权与各业务路由。
+ * 主要功能：Helmet/CORS/访问限速；挂载认证、患者、透析、处方、医嘱等 REST；注册定时任务；统一错误处理与日志。
  */
 require('dotenv').config();
 const express = require('express');

@@ -1,6 +1,7 @@
 /**
- * 血管通路管理路由
- * 统一管理AVF/AVG/NCC/TCC，支持CVC风险评分、溶栓记录
+ * 血管通路 REST 路由
+ * 主要作用：管理 AVF/AVG/TCC/NCC 等通路档案，支撑透析穿刺与感染风险评估。
+ * 主要功能：通路 CRUD；CVC 高危评分（CVCRiskScoring）；溶栓等相关记录字段维护。
  */
 const express = require('express');
 const router = express.Router();
@@ -86,7 +87,7 @@ router.post('/:patientId', auth, rbac(['admin','head_nurse','doctor']), async (r
 
     const {
       access_type, location, side, established_date,
-      surgeon, notes, is_buttonhole,
+      surgeon, notes,
       // CVC特有
       cvc_brand, cvc_spec, insertion_date,
       // 超声随访
@@ -106,15 +107,15 @@ router.post('/:patientId', auth, rbac(['admin','head_nurse','doctor']), async (r
     const { rows } = await client.query(
       `INSERT INTO vascular_accesses (
          patient_id, access_type, location, side,
-         established_date, surgeon, notes, is_buttonhole,
+         established_date, surgeon, notes,
          cvc_brand, cvc_spec, insertion_date,
          avf_blood_flow, avf_diameter, avf_ultrasound_date,
          is_current, created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,true,$15)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true,$14)
        RETURNING *`,
       [
         req.params.patientId, access_type, location, side,
-        established_date, surgeon, notes, is_buttonhole || false,
+        established_date, surgeon, notes,
         cvc_brand, cvc_spec, insertion_date || null,
         avf_blood_flow, avf_diameter, avf_ultrasound_date || null,
         req.user.id,
@@ -134,7 +135,7 @@ router.put('/:id', auth, rbac(['admin','head_nurse','doctor','nurse']), async (r
   try {
     const allowed = [
       'avf_blood_flow','avf_diameter','avf_ultrasound_date',
-      'notes','surgeon','is_buttonhole',
+      'notes','surgeon',
     ];
     const updates = {};
     for (const k of allowed) {

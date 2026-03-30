@@ -1,6 +1,7 @@
 /**
- * Axios请求实例配置
- * 统一处理：Token注入、错误响应、401跳转登录
+ * Axios 单例与全局拦截器
+ * 主要作用：统一后端请求基地址、超时与鉴权头，封装业务层使用的 request 实例。
+ * 主要功能：请求头注入 JWT；401 清理 token 并跳转登录；网络/业务错误 message 提示。
  */
 import axios, { type AxiosResponse } from 'axios';
 import { message } from 'antd';

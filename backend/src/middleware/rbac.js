@@ -1,6 +1,7 @@
 /**
- * RBAC角色权限控制中间件
- * 用法：rbac(['admin', 'doctor']) 表示允许admin和doctor角色访问
+ * RBAC 角色权限控制中间件
+ * 主要作用：在 JWT 认证之后按角色白名单拦截接口，落实五类用户权限边界。
+ * 主要功能：rbac(allowedRoles) 与 requireMinRole；基于 ROLE_LEVELS 的最小职级校验；无权限返回 403。
  */
 const { forbidden } = require('../utils/response');
 

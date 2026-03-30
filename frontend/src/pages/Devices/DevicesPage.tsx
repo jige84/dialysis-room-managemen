@@ -1,8 +1,14 @@
+/**
+ * 透析机与耗材管理页
+ * 主要作用：维护设备台账、隔离区属性及耗材出入库记录。
+ * 主要功能：设备 Table 与编辑 Modal；耗材 Tab；对接 devices API。
+ */
 import { useState } from 'react';
 import { Card, Table, Button, Select, Input, Modal, Form, InputNumber, Tabs, message } from 'antd';
 import { SearchOutlined, PlusOutlined, ToolOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
+import { DIALYZER_CONSUMABLE_NAMES, type DialyzerConsumableName } from '../../constants/dialyzerConsumables';
 
 const MACHINES = [
   { key: '1',  no: '1号机',    brand: 'B.Braun',  model: 'Dialog+',  zone: 'normal', status: 'running',    lastMaint: '2026-02-15', nextMaint: '2026-05-15', sessions: 1248, compliant: true },
@@ -16,10 +22,22 @@ const MACHINES = [
   { key: '9',  no: 'HCV-01',  brand: 'Fresenius', model: '4008S',   zone: 'hcv',    status: 'running',    lastMaint: '2026-02-25', nextMaint: '2026-05-25', sessions: 534,  compliant: true },
 ];
 
+const DIALYZER_STOCK_ROWS: Record<
+  DialyzerConsumableName,
+  { stock: number; minStock: number; totalUsedMonth: number; status: 'sufficient' | 'warning' | 'low' }
+> = {
+  '透析器 FX80（高通量）': { stock: 152, minStock: 50, totalUsedMonth: 189, status: 'sufficient' },
+  '透析器 FX60（低通量）': { stock: 78, minStock: 50, totalUsedMonth: 82, status: 'sufficient' },
+};
+
 const CONSUMABLES = [
-  { key: '1', name: '透析器 FX80（高通量）',  unit: '个', stock: 152, minStock: 50, totalUsedMonth: 189, status: 'sufficient' },
-  { key: '2', name: '透析器 FX60（低通量）',  unit: '个', stock: 78,  minStock: 50, totalUsedMonth: 82,  status: 'sufficient' },
-  { key: '3', name: '血液管路（成人型）',      unit: '套', stock: 45,  minStock: 50, totalUsedMonth: 210, status: 'warning' },
+  ...DIALYZER_CONSUMABLE_NAMES.map((name, i) => ({
+    key: String(i + 1),
+    name,
+    unit: '个' as const,
+    ...DIALYZER_STOCK_ROWS[name],
+  })),
+  { key: '3', name: '血液管路（成人型）',      unit: '套', stock: 45,  minStock: 50, totalUsedMonth: 210, status: 'warning' as const },
   { key: '4', name: '穿刺针 16G',            unit: '盒', stock: 32,  minStock: 50, totalUsedMonth: 165, status: 'low' },
   { key: '5', name: '碳酸氢盐透析液（A液）',  unit: '桶', stock: 28,  minStock: 20, totalUsedMonth: 95,  status: 'sufficient' },
   { key: '6', name: '碳酸氢盐透析液（B液）',  unit: '桶', stock: 28,  minStock: 20, totalUsedMonth: 95,  status: 'sufficient' },

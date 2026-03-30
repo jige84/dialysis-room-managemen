@@ -1,3 +1,8 @@
+/**
+ * 患者档案相关 API 封装与类型定义
+ * 主要作用：对接 /api/patients 系列接口，供列表、详情、新建编辑页使用。
+ * 主要功能：分页列表、单条详情、创建/更新；TypeScript 实体类型与请求体类型导出。
+ */
 import request, { type ApiResponse, type PagedData } from './request';
 
 export interface Patient {

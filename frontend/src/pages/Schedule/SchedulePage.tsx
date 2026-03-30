@@ -1,3 +1,8 @@
+/**
+ * 周排班管理页
+ * 主要作用：为患者在每周各时段分配上机班次（AM/PM/EV 等）。
+ * 主要功能：周视图切换；单元格编辑保存；对接 schedule API。
+ */
 import { useState } from 'react';
 import { Card, Button, Select, Modal, Form, Input, DatePicker, message, Tooltip } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';

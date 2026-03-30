@@ -1,5 +1,7 @@
 /**
- * 隔离区与血管通路类型展示 — 单一数据源（与 hd-frontend 隔离区规范一致）
+ * 隔离区与通路类型展示常量（标签、样式类名）
+ * 主要作用：全站统一隔离区配色与文案，避免各页面硬编码不一致。
+ * 主要功能：ISOLATION_ZONES、展示映射；血管通路类型显示名与样式（见文件内导出）。
  */
 
 export const ISOLATION_ZONES = ['normal', 'hbv', 'hcv'] as const;

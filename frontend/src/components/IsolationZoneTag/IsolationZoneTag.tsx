@@ -1,3 +1,8 @@
+/**
+ * 隔离区标签展示组件
+ * 主要作用：根据患者隔离区枚举渲染带颜色的 Tag，与 constants/isolation 配置一致。
+ * 主要功能：接收 isolation_zone；映射为中文标签与样式类名。
+ */
 import {
   ISOLATION_ZONE_DISPLAY,
   type IsolationZone,

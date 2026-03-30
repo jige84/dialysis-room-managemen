@@ -1,6 +1,7 @@
 /**
- * 质控报表自动生成服务
- * 从dialysis_records/order_executions/infection_monitoring表自动汇总5项质控指标
+ * 月度质控报表数据生成服务
+ * 主要作用：从透析、医嘱执行、感染监测等表汇总质控中心要求的月度指标。
+ * 主要功能：按年月聚合五项上报指标；写入或更新报表记录；供 reports 路由与定时任务调用。
  */
 const { pool } = require('../config/database');
 

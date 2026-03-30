@@ -1,3 +1,8 @@
+/**
+ * Vite 构建与开发服务器配置
+ * 主要作用：配置 React 插件、开发端口及将 /api 代理到后端，便于本地联调。
+ * 主要功能：server.port 5173；proxy /api → localhost:3000；生产分包 manualChunks。
+ */
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 

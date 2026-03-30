@@ -1,4 +1,8 @@
-/** 与 AppLayout 顶栏标题一致的路由标题解析 */
+/**
+ * 路由路径 → 顶栏中文标题映射
+ * 主要作用：与 AppLayout 顶栏标题保持一致，便于设置 document.title 或面包屑。
+ * 主要功能：PAGE_TITLES 表；getPageTitle(pathname) 解析函数（见文件内实现）。
+ */
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': '今日概览',

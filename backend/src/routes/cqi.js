@@ -1,5 +1,7 @@
 /**
- * CQI（持续质量改进）管理路由
+ * CQI（持续质量改进）REST 路由
+ * 主要作用：管理科室质量改进记录，供护士长、管理员与质控协同使用。
+ * 主要功能：CQI 列表与详情；创建与更新；按角色限制写权限。
  */
 const express = require('express');
 const router = express.Router();

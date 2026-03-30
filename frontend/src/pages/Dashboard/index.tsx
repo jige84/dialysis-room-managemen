@@ -1,3 +1,8 @@
+/**
+ * 今日概览 / 工作台仪表盘页
+ * 主要作用：展示关键运营与质控概览图表、快捷入口，登录后默认落地页之一。
+ * 主要功能：Recharts 图表；筛选维度；与后端统计接口联动（依实现）。
+ */
 import { useState } from 'react';
 import { Card, Tag, Button, Select, Table, Segmented } from 'antd';
 import {

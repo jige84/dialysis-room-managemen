@@ -1,7 +1,7 @@
 /**
- * 感染监控管理路由
- * - 感染筛查（HBV/HCV/HIV/TP，每半年一次）
- * - 感染监测月报（CRBSI计算基础数据）
+ * 感染监控 REST 路由（筛查 + 监测数据）
+ * 主要作用：维护传染病四项筛查与感染监测记录，支撑隔离区分配与 CRBSI 等指标。
+ * 主要功能：筛查记录 CRUD 与最新结果查询；监测月报相关数据写入与查询。
  */
 const express = require('express');
 const router = express.Router();

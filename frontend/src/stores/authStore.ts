@@ -1,5 +1,7 @@
 /**
- * 认证状态管理（Zustand）
+ * 全局认证状态（Zustand）
+ * 主要作用：在内存与 localStorage 间同步 token 与用户信息，供路由守卫与 API 拦截器读取。
+ * 主要功能：login/logout；持久化 hd_token；isAuthenticated 派生状态。
  */
 import { create } from 'zustand';
 import { type UserInfo } from '../api/auth';

@@ -1,5 +1,7 @@
 /**
- * 认证路由：登录、退出、修改密码
+ * 认证 REST 路由（登录、退出、修改密码）
+ * 主要作用：完成身份校验与 JWT 签发，支撑全站登录态与登出吊销。
+ * 主要功能：账号密码登录；bcrypt 校验；签发含 jti 的 Token；Redis 黑名单；改密校验。
  */
 const express = require('express');
 const router = express.Router();

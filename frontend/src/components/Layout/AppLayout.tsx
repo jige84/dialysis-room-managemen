@@ -1,3 +1,8 @@
+/**
+ * 登录后主布局：顶栏、侧栏导航与内容区 Outlet
+ * 主要作用：提供血液透析室管理系统的统一壳子与菜单路由切换。
+ * 主要功能：折叠侧栏；用户信息与退出；按路由显示页面标题；消息/预警入口（依实现）。
+ */
 import { useState, useEffect } from 'react';
 import { Badge, Dropdown, Space, Tooltip } from 'antd';
 import { LogoutOutlined, SettingOutlined, BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';

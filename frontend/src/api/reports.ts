@@ -1,3 +1,8 @@
+/**
+ * 质控月报 API 与报表类型
+ * 主要作用：对接 /api/reports，供质控报表页拉取、确认或导出月度数据。
+ * 主要功能：列表与详情请求；必要时拼接 getApiBaseUrl 用于下载链接（依实现）。
+ */
 import request, { type ApiResponse } from './request';
 import { getApiBaseUrl } from '../config/apiBaseUrl';
 

@@ -1,3 +1,8 @@
+/**
+ * 患者档案列表页
+ * 主要作用：分页展示在透患者，支持检索、隔离区筛选与跳转详情/新建。
+ * 主要功能：Table + 搜索；导出（权限受控）；对接 patientsApi.list。
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { Card, Input, Select, Button, Table, Space, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';

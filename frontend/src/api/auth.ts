@@ -1,3 +1,8 @@
+/**
+ * 登录认证 API 与用户基础类型
+ * 主要作用：对接 /api/auth 登录、退出、改密等，定义 UserInfo 供全局状态使用。
+ * 主要功能：login/logout/changePassword（依实现）；导出 LoginParams、LoginResult。
+ */
 import request, { type ApiResponse } from './request';
 
 export interface LoginParams {

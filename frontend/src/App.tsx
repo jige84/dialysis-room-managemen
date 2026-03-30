@@ -1,3 +1,8 @@
+/**
+ * 根组件：路由、Ant Design 中文本地化与鉴权布局
+ * 主要作用：定义全站路由表与登录保护，挂载带侧栏的主布局。
+ * 主要功能：BrowserRouter + 各业务页面懒加载式导入；RequireAuth；dayjs 中文；ConfigProvider zhCN。
+ */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';

@@ -1,6 +1,7 @@
 /**
- * Kt/V 和 URR 计算服务
- * 公式：Daugirdas II 单室Kt/V
+ * Kt/V 与 URR 计算服务（Daugirdas II）
+ * 主要作用：按规程公式计算单次透析充分性指标，供透析保存与预警使用。
+ * 主要功能：输入校验；spKt/V 与 URR；是否达标标记；与肝素/超滤等参数的处理（见实现）。
  */
 
 class KtvCalculator {

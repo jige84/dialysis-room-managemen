@@ -1,3 +1,8 @@
+/**
+ * CQI（持续质量改进）记录页
+ * 主要作用：登记与跟踪科室质量改进项目与进度。
+ * 主要功能：列表 + 新建/编辑 Modal；对接 cqi API；权限按角色限制。
+ */
 import { useState } from 'react';
 import { Card, Button, Select, Modal, Form, Input, DatePicker, message, Progress } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';

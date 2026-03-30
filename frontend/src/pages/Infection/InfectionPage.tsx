@@ -1,3 +1,8 @@
+/**
+ * 感染筛查与监测管理页
+ * 主要作用：录入与查询传染病筛查、感染事件，支撑隔离与质控指标。
+ * 主要功能：筛查 Tab + 监测 Tab；表格与表单；对接 infection API。
+ */
 import { useState } from 'react';
 import { Card, Button, Table, Input, Select, Modal, Form, DatePicker, message, Tabs } from 'antd';
 import { SearchOutlined, PlusOutlined } from '@ant-design/icons';

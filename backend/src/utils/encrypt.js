@@ -1,6 +1,7 @@
 /**
- * 患者敏感信息加解密（AES-256-GCM）
- * 用于：身份证号、手机号等PII数据
+ * 敏感字段加解密与脱敏（AES-256-GCM）
+ * 主要作用：满足 PII 加密存储规范，API 仅返回脱敏后的展示字段。
+ * 主要功能：encrypt/decrypt；身份证号与手机号 mask；密钥来自环境变量。
  */
 const crypto = require('crypto');
 require('dotenv').config();

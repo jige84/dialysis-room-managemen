@@ -1,3 +1,8 @@
+/**
+ * 登录页
+ * 主要作用：用户名密码登录，成功后写入 token 并跳转主界面。
+ * 主要功能：Ant Design Form；调用 authApi.login；错误提示与加载态。
+ */
 import { useState } from 'react';
 import { Form, Input, Button, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';

@@ -1,7 +1,7 @@
 /**
- * 解析前端 API 基路径。
- * 生产环境应与页面同源（如 `/api`），由 Node 或 Nginx 反代到后端。
- * 若构建时误写入 `http://localhost:...`，从其他机器访问时会连到用户本机导致连接被拒绝。
+ * 解析前端请求的 API 基路径（getApiBaseUrl）
+ * 主要作用：开发走 Vite 代理的相对路径 /api，生产避免把 localhost 写死在构建产物中。
+ * 主要功能：读取 VITE_API_BASE_URL；生产环境跨机访问时拦截误配的 localhost 绝对地址。
  */
 export function getApiBaseUrl(): string {
   const fallback = '/api';

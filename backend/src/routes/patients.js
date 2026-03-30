@@ -1,5 +1,7 @@
 /**
- * 患者档案管理路由
+ * 患者档案 REST 路由
+ * 主要作用：患者主数据与敏感信息（身份证、手机）的加密存储与脱敏展示。
+ * 主要功能：分页列表与详情；新建/更新/软删除；加密字段不落日志；导出权限按 RBAC。
  */
 const express = require('express');
 const router = express.Router();

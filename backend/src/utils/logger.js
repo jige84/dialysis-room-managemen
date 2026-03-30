@@ -1,3 +1,8 @@
+/**
+ * 简易文件日志工具
+ * 主要作用：将 INFO/WARN/ERROR 等写入按日滚动的日志文件，并视级别输出控制台。
+ * 主要功能：确保 logs 目录存在；按上海时区格式化时间戳；开发环境同步打印，ERROR 始终 stderr。
+ */
 const fs = require('fs');
 const path = require('path');
 

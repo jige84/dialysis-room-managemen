@@ -1,7 +1,7 @@
 /**
- * 初始化管理员账号
- * 运行：node src/utils/initAdminUser.js
- * 在数据库迁移完成后运行一次，创建初始用户
+ * 初始管理员账号种子 CLI
+ * 主要作用：在空库或首次部署时创建可登录的超级管理员账号。
+ * 主要功能：读取环境变量中的初始密码；bcrypt 哈希后写入 users 表；宜迁移后仅执行一次。
  */
 require('dotenv').config();
 const bcrypt = require('bcryptjs');

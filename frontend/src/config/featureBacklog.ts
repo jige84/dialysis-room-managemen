@@ -1,6 +1,7 @@
 /**
- * 与「全站 UI 微调」分离的待办功能占位，便于产品评审后拆任务。
- * 未实现前不得当作已上线能力对外承诺。
+ * 产品待实现功能占位清单（常量）
+ * 主要作用：集中记录尚未开发的前端能力点，避免与已交付功能混淆。
+ * 主要功能：导出 PENDING_FEATURE_BACKLOG 数组，供布局或文档引用；不含运行逻辑。
  */
 export const PENDING_FEATURE_BACKLOG = [
   { id: 'admin-users', title: '用户管理页（替换 App 内联占位）', dependsOn: '后端 RBAC /users API' },

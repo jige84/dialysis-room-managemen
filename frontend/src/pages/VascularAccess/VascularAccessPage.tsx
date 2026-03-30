@@ -1,7 +1,13 @@
+/**
+ * 血管通路管理页
+ * 主要作用：维护患者 AVF/AVG/导管等通路档案及 CVC 风险评分展示。
+ * 主要功能：按患者切换；通路列表与表单；对接 vascular API。
+ */
 import { useState } from 'react';
-import { Card, Select, Button, Table, Tabs, Modal, Form, Input, DatePicker, message } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { Card, Select, Button, Table, Tabs, Modal, Form, Input, DatePicker, InputNumber, message } from 'antd';
+import { PlusOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { useNavigate } from 'react-router-dom';
 import PageShell from '../../components/PageShell/PageShell';
 
 const PATIENTS = [
@@ -12,11 +18,76 @@ const PATIENTS = [
   { value: 'sun',   label: '孙红梅', access: 'AVG', zone: 'normal' },
 ];
 
-const ACCESS_DETAIL: Record<string, {
+type AvfAssessment = {
+  key: string;
+  date: string;
+  bloodflow: string;
+  pulsation?: string;
+  thrill?: string;
+  bruit?: string;
+  inner_diameter_mm?: number;
+  skin_depth_mm?: number;
+  armRaiseTest?: string;
+  pulsationEnhancementTest?: string;
+  skin?: string;
+  result: string;
+  doctor: string;
+};
+
+type CvcAssessment = {
+  key: string;
+  date: string;
+  bloodflow: string;
+  blood_return_status?: string;
+  draw_volume?: string;
+  lock_clot_status?: string;
+  skin?: string;
+  fixation?: string;
+  result: string;
+  doctor: string;
+};
+
+type AvfAssessFormValues = {
+  date: dayjs.Dayjs;
+  bloodflow: number;
+  pulsation?: string;
+  thrill?: string;
+  bruit?: string;
+  inner_diameter_mm?: number;
+  skin_depth_mm?: number;
+  armRaiseTest?: string;
+  pulsationEnhancementTest?: string;
+  skin?: string;
+  result: string;
+};
+
+type CvcAssessFormValues = {
+  date: dayjs.Dayjs;
+  bloodflow: number;
+  blood_return_status: string;
+  arterial_draw_volume: number;
+  venous_draw_volume: number;
+  lock_clot_status: string;
+  skin: string;
+  fixation: string;
+  result: string;
+  intervention_notes?: string;
+};
+
+type AssessFormValues = AvfAssessFormValues | CvcAssessFormValues;
+
+type AccessDetail = {
   current: { type: string; side: string; method: string; startDate: string; bloodflow: number; status: string; cathStatus?: string };
-  assessments: { key: string; date: string; bloodflow: string; thrill: string; bruit: string; skin: string; result: string; doctor: string }[];
+  assessments: Array<AvfAssessment | CvcAssessment>;
   punctures: { key: string; date: string; nurse: string; arterial: string; venous: string; attempts: string; result: string; note: string }[];
   cvcRisk?: { diabetesMellitus: boolean; immunosuppressed: boolean; recentHospitalization: boolean; catheterDaysOver90: boolean; previousCrbsi: boolean; poorHygiene: boolean };
+};
+
+const ACCESS_DETAIL: Record<string, {
+  current: AccessDetail['current'];
+  assessments: AccessDetail['assessments'];
+  punctures: AccessDetail['punctures'];
+  cvcRisk?: AccessDetail['cvcRisk'];
 }> = {
   zhang: {
     current: { type: 'AVF', side: '左前臂', method: '绳梯穿刺', startDate: '2021-03-20', bloodflow: 820, status: '功能良好' },
@@ -34,7 +105,18 @@ const ACCESS_DETAIL: Record<string, {
   liu: {
     current: { type: 'LTCC', side: '右颈内静脉', method: 'LTCC隧道导管', startDate: '2020-06-15', bloodflow: 260, status: '功能良好', cathStatus: '留置350天' },
     assessments: [
-      { key: '1', date: '2026-02-15', bloodflow: '260 mL/min', thrill: '—', bruit: '—', skin: '出口处干燥清洁', result: '功能良好', doctor: '任计阁' },
+      {
+        key: '1',
+        date: '2026-02-15',
+        bloodflow: '260 mL/min',
+        blood_return_status: '通畅',
+        draw_volume: '动约2mL/静约2mL',
+        lock_clot_status: '无凝血块',
+        skin: '入口处干燥清洁',
+        fixation: '固定良好',
+        result: '功能良好',
+        doctor: '任计阁',
+      },
     ],
     punctures: [],
     cvcRisk: { diabetesMellitus: true, immunosuppressed: false, recentHospitalization: false, catheterDaysOver90: true, previousCrbsi: false, poorHygiene: false },
@@ -79,8 +161,10 @@ export default function VascularAccessPage() {
   const [selectedPatient, setSelectedPatient] = useState('zhang');
   const [showAssessModal, setShowAssessModal] = useState(false);
   const [assessForm] = Form.useForm();
+  const [accessDetailState, setAccessDetailState] = useState(ACCESS_DETAIL);
+  const navigate = useNavigate();
 
-  const detail = ACCESS_DETAIL[selectedPatient];
+  const detail = accessDetailState[selectedPatient];
   const patientInfo = PATIENTS.find(p => p.value === selectedPatient);
   const accessType = patientInfo?.access || 'AVF';
   const typeConfig = ACCESS_TYPE_MAP[accessType];
@@ -96,21 +180,54 @@ export default function VascularAccessPage() {
 
   if (!detail) {
     return (
-      <PageShell>
-        <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px 0' }}>暂无该患者的血管通路数据</div>
+      <PageShell fullWidth>
+        <div className="flex items-center" style={{ marginBottom: 16, gap: 12 }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+        </div>
+        <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px 0' }}>
+          暂无该患者的血管通路数据
+        </div>
       </PageShell>
     );
   }
 
-  const assessmentColumns = [
-    { title: '评估日期', dataIndex: 'date' },
-    { title: '血流量', dataIndex: 'bloodflow', render: (v: string) => <span className="num">{v}</span> },
-    { title: '震颤', dataIndex: 'thrill' },
-    { title: '杂音', dataIndex: 'bruit' },
-    { title: '皮肤/导管出口', dataIndex: 'skin' },
-    { title: '综合评估', dataIndex: 'result', render: (v: string) => <span style={{ color: '#059669', fontWeight: 500 }}>{v}</span> },
-    { title: '评估医生', dataIndex: 'doctor' },
-  ];
+  const assessmentColumns = isCVC
+    ? [
+      { title: '评估日期', dataIndex: 'date' },
+      { title: '血流量', dataIndex: 'bloodflow', render: (v: string) => <span className="num">{v}</span> },
+      { title: '回血通畅情况', dataIndex: 'blood_return_status' },
+      { title: '回抽量(动/静)', dataIndex: 'draw_volume' },
+      { title: '封管液凝血块', dataIndex: 'lock_clot_status' },
+      {
+        title: '入口皮肤/导管固定',
+        dataIndex: 'skin',
+        render: (_v: string, row: CvcAssessment) => `${row.skin || '—'} / ${row.fixation || '—'}`,
+      },
+      {
+        title: '综合评估',
+        dataIndex: 'result',
+        render: (v: string) => <span style={{ color: '#059669', fontWeight: 500 }}>{v}</span>,
+      },
+      { title: '评估医生', dataIndex: 'doctor' },
+    ]
+    : [
+      { title: '评估日期', dataIndex: 'date' },
+      { title: '自然血流量', dataIndex: 'bloodflow', render: (v: string) => <span className="num">{v}</span> },
+      { title: '搏动', dataIndex: 'pulsation', render: (v?: string) => v || '—' },
+      { title: '震颤', dataIndex: 'thrill', render: (v?: string) => v || '—' },
+      { title: '杂音', dataIndex: 'bruit', render: (v?: string) => v || '—' },
+      { title: '内径(mm)', dataIndex: 'inner_diameter_mm', render: (v?: number) => (typeof v === 'number' ? `${v}` : '—') },
+      { title: '距皮深度(mm)', dataIndex: 'skin_depth_mm', render: (v?: number) => (typeof v === 'number' ? `${v}` : '—') },
+      { title: '抬臂试验', dataIndex: 'armRaiseTest', render: (v?: string) => v || '—' },
+      { title: '搏动增强试验', dataIndex: 'pulsationEnhancementTest', render: (v?: string) => v || '—' },
+      { title: '皮肤/穿刺点部位', dataIndex: 'skin', render: (v?: string) => v || '—' },
+      {
+        title: '综合评估',
+        dataIndex: 'result',
+        render: (v: string) => <span style={{ color: '#059669', fontWeight: 500 }}>{v}</span>,
+      },
+      { title: '评估医生', dataIndex: 'doctor' },
+    ];
 
   const punctureColumns = [
     { title: '日期', dataIndex: 'date' },
@@ -131,6 +248,9 @@ export default function VascularAccessPage() {
 
   return (
     <PageShell fullWidth>
+      <div className="flex items-center" style={{ marginBottom: 16, gap: 12 }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+      </div>
       {/* 患者选择 */}
       <Card style={{ marginBottom: 20, border: '1px solid #DBEAFE' }} styles={{ body: { padding: '16px 20px' } }}>
         <div className="flex items-center gap-16">
@@ -148,7 +268,7 @@ export default function VascularAccessPage() {
             🫀 {typeConfig.label}
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <Button icon={<PlusOutlined />} onClick={() => setShowAssessModal(true)}>录入评估</Button>
+            <Button icon={<PlusOutlined />} onClick={() => { assessForm.resetFields(); setShowAssessModal(true); }}>录入评估</Button>
           </div>
         </div>
       </Card>
@@ -265,7 +385,61 @@ export default function VascularAccessPage() {
       <Modal
         title="录入血管通路评估"
         open={showAssessModal}
-        onOk={() => assessForm.validateFields().then(() => { setShowAssessModal(false); assessForm.resetFields(); message.success('评估记录已保存'); })}
+        onOk={async () => {
+          const values = (await assessForm.validateFields()) as unknown as AssessFormValues;
+          const dateStr = dayjs(values.date).format('YYYY-MM-DD');
+          const recordBase = {
+            key: String(Date.now()),
+            date: dateStr,
+            bloodflow: `${values.bloodflow} mL/min`,
+            doctor: '—',
+            result: values.result,
+          };
+
+          const newAssessment: AvfAssessment | CvcAssessment = isCVC
+            ? (() => {
+              const cvcValues = values as CvcAssessFormValues;
+              return {
+                ...recordBase,
+                blood_return_status: cvcValues.blood_return_status,
+                draw_volume: `动约${cvcValues.arterial_draw_volume}mL/静约${cvcValues.venous_draw_volume}mL`,
+                lock_clot_status: cvcValues.lock_clot_status,
+                skin: cvcValues.skin,
+                fixation: cvcValues.fixation,
+                // 如果填写了处置/建议，就并入综合评估结论（便于后续追溯）
+                result: cvcValues.intervention_notes ? `${cvcValues.result}；${cvcValues.intervention_notes}` : cvcValues.result,
+              };
+            })()
+            : (() => {
+              const avfValues = values as AvfAssessFormValues;
+              return {
+                ...recordBase,
+                pulsation: avfValues.pulsation,
+                thrill: avfValues.thrill,
+                bruit: avfValues.bruit,
+                inner_diameter_mm: avfValues.inner_diameter_mm,
+                skin_depth_mm: avfValues.skin_depth_mm,
+                armRaiseTest: avfValues.armRaiseTest,
+                pulsationEnhancementTest: avfValues.pulsationEnhancementTest,
+                skin: avfValues.skin,
+              };
+            })();
+
+          setAccessDetailState(prev => {
+            const existing = prev[selectedPatient];
+            return {
+              ...prev,
+              [selectedPatient]: {
+                ...existing,
+                assessments: [newAssessment, ...(existing.assessments || [])],
+              },
+            };
+          });
+
+          setShowAssessModal(false);
+          assessForm.resetFields();
+          message.success('评估记录已保存');
+        }}
         onCancel={() => { setShowAssessModal(false); assessForm.resetFields(); }}
         okText="保存评估"
         cancelText="取消"
@@ -273,27 +447,237 @@ export default function VascularAccessPage() {
       >
         <Form form={assessForm} layout="vertical" size="middle" style={{ marginTop: 16 }}>
           <div className="grid-2" style={{ gap: 16 }}>
-            <Form.Item label="评估日期" name="date" initialValue={dayjs()} rules={[{ required: true }]}>
-              <DatePicker style={{ width: '100%' }} />
+            <Form.Item
+              label="评估日期"
+              name="date"
+              initialValue={dayjs()}
+              rules={[{ required: true, message: '请选择评估日期' }]}
+            >
+              <DatePicker
+                style={{ width: '100%' }}
+                disabledDate={(current) => !!current && current > dayjs().endOf('day')}
+              />
             </Form.Item>
-            <Form.Item label="血流量 (mL/min)" name="bloodflow" rules={[{ required: true }]}>
-              <Input placeholder="如：820" />
+            <Form.Item
+              label={isCVC ? '血流量 (mL/min)' : '自然血流量（mL/min）'}
+              name="bloodflow"
+              rules={[{ required: true, message: isCVC ? '请输入血流量' : '请输入自然血流量' }]}
+              help={isCVC ? undefined : '规程要点：自然血流量 > 500 mL/min'}
+            >
+              <InputNumber style={{ width: '100%' }} min={0} />
             </Form.Item>
           </div>
-          <div className="grid-2" style={{ gap: 16 }}>
-            <Form.Item label="震颤" name="thrill">
-              <Input placeholder="如：有力 / 减弱" />
-            </Form.Item>
-            <Form.Item label="杂音" name="bruit">
-              <Input placeholder="如：清晰 / 粗糙" />
-            </Form.Item>
-          </div>
-          <Form.Item label="皮肤/出口部位" name="skin">
-            <Input placeholder="如：正常 / 红肿 / 渗液" />
-          </Form.Item>
-          <Form.Item label="综合评估结论" name="result" rules={[{ required: true }]}>
-            <Input placeholder="如：功能良好 / 需关注 / 建议手术" />
-          </Form.Item>
+
+          {isCVC ? (
+            <>
+              <Form.Item
+                label="回血通畅情况"
+                name="blood_return_status"
+                rules={[{ required: true, message: '请选择回血通畅情况' }]}
+                initialValue="通畅"
+              >
+                <Select
+                  options={[
+                    { value: '通畅', label: '通畅' },
+                    { value: '轻度阻力', label: '轻度阻力' },
+                    { value: '不通畅', label: '不通畅' },
+                  ]}
+                />
+              </Form.Item>
+
+              <div className="grid-2" style={{ gap: 16 }}>
+                <Form.Item
+                  label="动脉端回抽量 (mL)"
+                  name="arterial_draw_volume"
+                  rules={[{ required: true, message: '请输入动脉端回抽量' }]}
+                  initialValue={2}
+                >
+                  <InputNumber style={{ width: '100%' }} min={0} step={0.1} />
+                </Form.Item>
+                <Form.Item
+                  label="静脉端回抽量 (mL)"
+                  name="venous_draw_volume"
+                  rules={[{ required: true, message: '请输入静脉端回抽量' }]}
+                  initialValue={2}
+                >
+                  <InputNumber style={{ width: '100%' }} min={0} step={0.1} />
+                </Form.Item>
+              </div>
+
+              <Form.Item
+                label="封管液凝血块"
+                name="lock_clot_status"
+                rules={[{ required: true, message: '请选择封管液凝血块情况' }]}
+                initialValue="无凝血块"
+              >
+                <Select
+                  options={[
+                    { value: '无凝血块', label: '无凝血块' },
+                    { value: '少量', label: '少量' },
+                    { value: '明显', label: '明显' },
+                  ]}
+                />
+              </Form.Item>
+
+              <div className="grid-2" style={{ gap: 16 }}>
+                <Form.Item
+                  label="导管入口处皮肤/分泌物"
+                  name="skin"
+                  rules={[{ required: true, message: '请选择皮肤/分泌物情况' }]}
+                  initialValue="入口干燥清洁"
+                >
+                  <Select
+                    options={[
+                      { value: '入口干燥清洁', label: '入口干燥清洁' },
+                      { value: '红肿', label: '红肿' },
+                      { value: '渗出/分泌物', label: '渗出/分泌物' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="导管固定情况"
+                  name="fixation"
+                  rules={[{ required: true, message: '请选择导管固定情况' }]}
+                  initialValue="固定良好"
+                >
+                  <Select
+                    options={[
+                      { value: '固定良好', label: '固定良好' },
+                      { value: '固定松动', label: '固定松动' },
+                      { value: '脱出/移位', label: '脱出/移位' },
+                    ]}
+                  />
+                </Form.Item>
+              </div>
+
+              <Form.Item
+                label="综合评估结论"
+                name="result"
+                rules={[{ required: true, message: '请输入综合评估结论' }]}
+              >
+                <Input placeholder="如：功能良好 / 需关注 / 建议处理" />
+              </Form.Item>
+
+              <Form.Item
+                label="处置/建议（如出现凝血块或回抽不畅需填写）"
+                name="intervention_notes"
+                dependencies={['lock_clot_status', 'blood_return_status']}
+                rules={[
+                  ({ getFieldValue }) => ({
+                    validator: (_, value) => {
+                      const lockClot = getFieldValue('lock_clot_status');
+                      const bloodReturn = getFieldValue('blood_return_status');
+                      const needs = (lockClot && lockClot !== '无凝血块') || bloodReturn === '不通畅';
+                      if (!needs) return Promise.resolve();
+                      if (!value || !String(value).trim()) return Promise.reject(new Error('请填写处置/建议'));
+                      return Promise.resolve();
+                    },
+                  }),
+                ]}
+              >
+                <Input.TextArea rows={3} placeholder="如：暂停使用并通知医生；查找原因并按规程处理封管液/导管。" />
+              </Form.Item>
+            </>
+          ) : (
+            <>
+              <div className="grid-2" style={{ gap: 16 }}>
+                <Form.Item
+                  label="搏动"
+                  name="pulsation"
+                  rules={[{ required: true, message: '请选择搏动情况' }]}
+                  initialValue="轻柔（易压迫）"
+                >
+                  <Select
+                    options={[
+                      { value: '轻柔（易压迫）', label: '轻柔（易压迫）' },
+                      { value: '强度增强（有力）', label: '强度增强（有力）' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="震颤"
+                  name="thrill"
+                  rules={[{ required: true, message: '请选择震颤情况' }]}
+                  initialValue="弥漫、柔和"
+                >
+                  <Select
+                    options={[
+                      { value: '弥漫、柔和', label: '弥漫、柔和' },
+                      { value: '局限、增强', label: '局限、增强' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="杂音"
+                  name="bruit"
+                  rules={[{ required: true, message: '请选择杂音情况' }]}
+                  initialValue="弥漫连续、低调"
+                >
+                  <Select
+                    options={[
+                      { value: '弥漫连续、低调', label: '弥漫连续、低调' },
+                      { value: '局限不连续、高调', label: '局限不连续、高调' },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="抬臂试验"
+                  name="armRaiseTest"
+                  rules={[{ required: true, message: '请选择抬臂试验结果' }]}
+                  initialValue="正常塌陷"
+                >
+                  <Select
+                    options={[
+                      { value: '正常塌陷', label: '正常塌陷' },
+                      { value: '异常（近心端塌陷、远心端扩张）', label: '异常（近心端塌陷、远心端扩张）' },
+                    ]}
+                  />
+                </Form.Item>
+              </div>
+              <div className="grid-2" style={{ gap: 16 }}>
+                <Form.Item label="内径（mm）" name="inner_diameter_mm" help="规程要点：内径 >= 5mm">
+                  <InputNumber style={{ width: '100%' }} min={0} step={0.1} />
+                </Form.Item>
+                <Form.Item label="距皮深度（mm）" name="skin_depth_mm" help="规程要点：距皮深度 < 5mm">
+                  <InputNumber style={{ width: '100%' }} min={0} step={0.1} />
+                </Form.Item>
+              </div>
+              <Form.Item
+                label="搏动增强试验"
+                name="pulsationEnhancementTest"
+                rules={[{ required: true, message: '请选择搏动增强试验结果' }]}
+                initialValue="增强（远心端搏动增强）"
+              >
+                <Select
+                  options={[
+                    { value: '增强（远心端搏动增强）', label: '增强（远心端搏动增强）' },
+                    { value: '不明显/异常', label: '不明显/异常' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item
+                label="皮肤/穿刺点部位"
+                name="skin"
+                rules={[{ required: true, message: '请填写皮肤/穿刺点部位情况' }]}
+              >
+                <Input placeholder="如：颜色/温度正常；无肿胀疼痛/破溃（按规程要点记录）" />
+              </Form.Item>
+              <Form.Item
+                label="综合评估结论"
+                name="result"
+                rules={[{ required: true, message: '请输入综合评估结论' }]}
+              >
+                <Select
+                  options={[
+                    { value: '功能良好', label: '功能良好' },
+                    { value: '需关注', label: '需关注' },
+                    { value: '建议进一步检查', label: '建议进一步检查' },
+                    { value: '建议介入/手术', label: '建议介入/手术' },
+                  ]}
+                />
+              </Form.Item>
+            </>
+          )}
         </Form>
       </Modal>
     </PageShell>

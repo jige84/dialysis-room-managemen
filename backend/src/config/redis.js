@@ -1,3 +1,8 @@
+/**
+ * Redis 客户端封装（可选依赖）
+ * 主要作用：为 JWT 黑名单、缓存等提供 Redis 连接；不可用时降级不影响主流程。
+ * 主要功能：懒加载建连；连接失败退避重试；导出 getRedisClient / 内存 fallback cache 接口。
+ */
 const { createClient } = require('redis');
 require('dotenv').config();
 

@@ -1,7 +1,7 @@
 /**
  * 护士透析录入时间限制中间件
- * 来源：medical-domain-rules §8 + security-rbac-rules §3
- * 责任护士只能录入当班日期，历史记录修改须联系管理员
+ * 主要作用：限制责任护士仅能提交「当班日期」的透析相关数据，防止越权改历史。
+ * 主要功能：对 nurse 角色校验 session_date / dialysisDate；早于今日零点则 403；其他角色直接放行。
  */
 const restrictNurseEditTime = (req, res, next) => {
   if (req.user.role !== 'nurse') return next();

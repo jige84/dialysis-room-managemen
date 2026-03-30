@@ -1,6 +1,7 @@
 /**
- * 数据库迁移执行脚本
- * 运行：node src/utils/runMigrations.js
+ * 数据库结构迁移 CLI
+ * 主要作用：按顺序执行 sql/migrations 下脚本，初始化或升级 PostgreSQL 表结构。
+ * 主要功能：独立进程连接数据库；记录已执行迁移；失败时输出错误并退出非零码。
  */
 require('dotenv').config();
 const fs = require('fs');

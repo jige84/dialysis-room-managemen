@@ -1,7 +1,7 @@
 /**
  * 审计日志中间件
- * 自动记录所有写操作（POST/PUT/PATCH/DELETE）
- * 审计日志不可修改、不可删除
+ * 主要作用：在关键写请求链路上自动落库审计记录，满足医疗系统可追溯要求。
+ * 主要功能：拦截 POST/PUT/PATCH/DELETE；解析用户与资源信息；写入审计表；审计记录不可篡改删除。
  */
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');

@@ -1,3 +1,8 @@
+/**
+ * 透析记录 API 与列表行类型
+ * 主要作用：对接透析场次 CRUD 接口，供透析录入与历史查询使用。
+ * 主要功能：列表/详情/保存；导出 DialysisRecordListRow 等与后端字段对齐的类型。
+ */
 import request, { type ApiResponse, type PagedData } from './request';
 
 export interface DialysisRecordListRow {

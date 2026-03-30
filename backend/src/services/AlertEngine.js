@@ -1,7 +1,7 @@
 /**
- * 预警引擎
- * 负责扫描并生成各类预警到 alerts 表
- * 每日凌晨6点由 node-cron 调用
+ * 预警引擎（定时扫描写入 alerts）
+ * 主要作用：按业务规则批量扫描患者与透析数据，生成或更新预警记录。
+ * 主要功能：传染病复查到期、Kt/V、护患比等规则；由 scheduledTasks 每日触发 runAll。
  */
 const { pool } = require('../config/database');
 const { isWithinDays } = require('../utils/dateUtils');

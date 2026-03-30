@@ -1,3 +1,8 @@
+/*
+ * 遗留示例组件样式（Vite 模板 .counter 等）
+ * 主要作用：若根组件仍引用保留类名时使用；新页面优先用 index.css 与设计变量。
+ * 主要功能：演示用按钮与 logo 动画样式。
+ */
 .counter {
   font-size: 16px;
   padding: 5px 10px;

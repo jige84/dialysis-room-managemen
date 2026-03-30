@@ -1,3 +1,8 @@
+/**
+ * 页面内容区外壳（可选副标题与内边距）
+ * 主要作用：为各业务页提供一致的版心宽度与上下留白，与顶栏标题配合。
+ * 主要功能：PageShell 组件；props 控制 subtitle、className 等。
+ */
 import type { ReactNode } from 'react';
 
 export type PageShellProps = {
