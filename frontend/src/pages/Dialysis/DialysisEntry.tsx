@@ -3,7 +3,7 @@
  * 主要作用：护士/授权角色完成当次透析全流程数据录入与保存。
  * 主要功能：选患者与日期；自动加载处方与医嘱；并发症与凝血；Kt/V 计算与预警联动。
  */
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Form, Input, InputNumber, Select, Button, Checkbox,
   DatePicker, message, Alert, Radio, Tag, Tooltip, Modal,
@@ -16,8 +16,11 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import { DIALYSIS_DEMO_PATIENTS, type DialysisDemoPatient } from '../../constants/dialysisDemoPatients';
+import { dialysisApi, type CreateDialysisPayload, type PrepareDialysisData } from '../../api/dialysis';
+import { patientsApi, type Patient } from '../../api/patients';
 import {
   mergePrescriptionDefaultsForPatient,
   shiftCodeToChinese,
@@ -840,6 +843,10 @@ function Grid({ cols = 4, gap = 14, children, style }: {
   );
 }
 
+// ── UUID 校验（用于区分真实患者 ID 与演示 ID）──────────────
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isRealPatientId = (v: string) => UUID_RE.test(v);
+
 // ── 主组件 ──────────────────────────────────────────────────
 export default function DialysisEntryPage() {
   const navigate = useNavigate();
@@ -847,8 +854,12 @@ export default function DialysisEntryPage() {
   const [loading, setLoading] = useState(false);
 
   const [selectedPatient, setSelectedPatient] = useState<string>('');
+  /** 选中的日期（DatePicker），默认今日 */
+  const [sessionDate, setSessionDate] = useState<Dayjs>(dayjs());
   /** 与处方工作台 mergePrescriptionDefaultsForPatient 同源（演示默认值 + 医生保存的参数），仅展示只读 */
   const [rxDefaults, setRxDefaults] = useState<Record<string, unknown> | null>(null);
+  /** 真实患者：从 /api/dialysis/prepare 获取的处方与医嘱数据 */
+  const [realPrepareData, setRealPrepareData] = useState<PrepareDialysisData | null>(null);
   const [dryWeight, setDryWeight] = useState<number | null>(null);
 
   const [postWeight, setPostWeight] = useState<number | null>(null);
@@ -869,20 +880,80 @@ export default function DialysisEntryPage() {
   const [orders, setOrders] = useState<Record<string, boolean>>({});
   const [vitalRows, setVitalRows] = useState<VitalSignRow[]>([createVitalSignRow()]);
 
-  const handlePatientChange = useCallback((val: string) => {
+  // 真实患者搜索
+  const [patientSearchOptions, setPatientSearchOptions] = useState<{ value: string; label: string }[]>([]);
+  const [patientSearchLoading, setPatientSearchLoading] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handlePatientSearch = useCallback((keyword: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!keyword.trim()) { setPatientSearchOptions([]); return; }
+    searchTimerRef.current = setTimeout(async () => {
+      setPatientSearchLoading(true);
+      try {
+        const resp = await patientsApi.list({ keyword, status: 'active', page_size: 20 });
+        const patients: Patient[] = resp.data.data.list;
+        setPatientSearchOptions(
+          patients.map(p => ({
+            value: p.id,
+            label: `${p.name} — ${p.primary_diagnosis} — ${p.isolation_zone === 'normal' ? '普通区' : p.isolation_zone === 'hbv' ? '乙肝区' : '丙肝区'}`,
+          }))
+        );
+      } catch {
+        // 搜索失败静默处理，保留演示列表
+      } finally {
+        setPatientSearchLoading(false);
+      }
+    }, 300);
+  }, []);
+
+  const handlePatientChange = useCallback(async (val: string) => {
     setSelectedPatient(val);
-    const p = PATIENTS_LIST.find(p => p.value === val);
-    if (p) {
-      const defaults = mergePrescriptionDefaultsForPatient(p);
-      setRxDefaults(defaults);
-      setDryWeight(typeof defaults.dryWeight === 'number' ? defaults.dryWeight : p.dryWeight);
-      setDurationHours(typeof defaults.duration === 'number' ? defaults.duration : p.prescription.duration);
-      setAccessType(p.vascular.accessType);
-      setCatheterLocation(p.vascular.catheterLocation);
-      setCatheterPlacedDate(p.vascular.catheterPlacedDate);
+    setRealPrepareData(null);
+
+    if (isRealPatientId(val)) {
+      // 真实患者：从 API 获取处方与今日医嘱
+      try {
+        const dateStr = sessionDate.format('YYYY-MM-DD');
+        const resp = await dialysisApi.prepare(val, dateStr);
+        const prep = resp.data.data;
+        setRealPrepareData(prep);
+        if (prep.prescription) {
+          const rx = prep.prescription;
+          setDryWeight(rx.dry_weight);
+          setDurationHours(rx.duration_hours);
+          // 将处方参数预填到表单（可被护士覆盖）
+          form.setFieldsValue({
+            blood_flow_rate: rx.blood_flow_rate,
+            dialysate_flow_rate: rx.dialysate_flow_rate,
+            dialysate_na: rx.dialysate_na,
+            dialysate_ca: rx.dialysate_ca,
+            dialysate_k: rx.dialysate_k,
+            dialysate_temp: rx.dialysate_temp,
+            heparin_prime_dose: rx.heparin_prime_dose,
+            heparin_maintain: rx.heparin_maintain,
+          });
+        }
+        setRxDefaults(null);
+      } catch {
+        message.error('加载患者处方数据失败，请检查网络或联系管理员');
+      }
     } else {
-      setRxDefaults(null);
+      // 演示患者：使用本地数据
+      const p = PATIENTS_LIST.find(p => p.value === val);
+      if (p) {
+        const defaults = mergePrescriptionDefaultsForPatient(p);
+        setRxDefaults(defaults);
+        setDryWeight(typeof defaults.dryWeight === 'number' ? defaults.dryWeight : p.dryWeight);
+        setDurationHours(typeof defaults.duration === 'number' ? defaults.duration : p.prescription.duration);
+        setAccessType(p.vascular.accessType);
+        setCatheterLocation(p.vascular.catheterLocation);
+        setCatheterPlacedDate(p.vascular.catheterPlacedDate);
+      } else {
+        setRxDefaults(null);
+      }
     }
+
     const sync = val ? readPostDialysisSync(val) : null;
     setPostDialysisSyncMeta(sync);
     if (sync?.filledBy === 'doctor') {
@@ -900,10 +971,12 @@ export default function DialysisEntryPage() {
         post_pulse: undefined,
       });
     }
-  }, [form]);
+  }, [form, sessionDate]);
 
   const selectedDemoPatient = useMemo(
-    () => PATIENTS_LIST.find((p) => p.value === selectedPatient) ?? null,
+    () => isRealPatientId(selectedPatient)
+      ? null
+      : (PATIENTS_LIST.find((p) => p.value === selectedPatient) ?? null),
     [selectedPatient],
   );
 
@@ -972,10 +1045,17 @@ export default function DialysisEntryPage() {
   const postPulseWatch = Form.useWatch('post_pulse', form);
   const postDialysisLockedByDoctor = postDialysisSyncMeta?.filledBy === 'doctor';
 
-  /** 实际脱水量：按处方上机前体重与透后体重差值（kg→mL） */
+  /**
+   * 实际脱水量（mL）：
+   * - 演示患者：处方上机前体重 - 透后体重
+   * - 真实患者：表单填写的透前体重 - 透后体重（fallback：干体重+估算）
+   */
+  const preWeightForUF = rxPreview?.preMachineWeightRx
+    ?? (form.getFieldValue('pre_weight') as number | undefined)
+    ?? null;
   const computedUF =
-    rxPreview && postWeight != null
-      ? Math.round((rxPreview.preMachineWeightRx - postWeight) * 1000)
+    preWeightForUF != null && postWeight != null
+      ? Math.round((preWeightForUF - postWeight) * 1000)
       : null;
   const ufPercent = dryWeight && computedUF ? ((computedUF / (dryWeight * 1000)) * 100).toFixed(1) : null;
   const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;
@@ -1058,15 +1138,108 @@ export default function DialysisEntryPage() {
 
   const handleSubmit = async () => {
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
-    if (!rxPreview) { message.warning('处方数据未加载'); return; }
+    // 允许真实患者（有 realPrepareData）或演示患者（有 rxPreview）继续提交
+    const hasRealRx = isRealPatientId(selectedPatient) && realPrepareData !== null;
+    const hasDemoRx = !isRealPatientId(selectedPatient) && rxPreview !== null;
+    if (!hasRealRx && !hasDemoRx) { message.warning('处方数据未加载，请重新选择患者'); return; }
     if (postWeight == null) { message.warning('请填写透后体重'); return; }
     const hasUnsignedVitalRow = vitalRows.some(row => !row.values.signature?.trim());
     if (hasUnsignedVitalRow) { message.warning('透析中生命体征记录每行都需要护士签名'); return; }
+
     setLoading(true);
     try {
-      await new Promise(r => setTimeout(r, 800));
-      message.success('透析记录已保存，Kt/V已计算并记录');
-      navigate('/dashboard');
+      if (isRealPatientId(selectedPatient)) {
+        // ── 真实患者：构建 API 请求体 ──
+        const formValues = form.getFieldsValue() as Record<string, unknown>;
+        const dateStr = sessionDate.format('YYYY-MM-DD');
+        const preWeightVal = realPrepareData?.prescription?.dry_weight
+          ? (rxPreview?.preMachineWeightRx ?? null)
+          : null;
+
+        // 生命体征数组
+        const vitalSignsPayload = vitalRows
+          .filter(row => row.values.sbp || row.values.systolic_bp)
+          .map((row, i) => ({
+            sequence_no: i + 1,
+            time_label: row.time || `第${i + 1}次`,
+            record_time: row.time ? `${dateStr}T${row.time.length === 5 ? row.time + ':00' : row.time}` : new Date().toISOString(),
+            systolic_bp: row.values.sbp ? parseInt(row.values.sbp) : undefined,
+            diastolic_bp: row.values.dbp ? parseInt(row.values.dbp) : undefined,
+            heart_rate: row.values.pulse ? parseInt(row.values.pulse) : undefined,
+            arterial_pressure: row.values.ap ? parseInt(row.values.ap) : undefined,
+            venous_pressure: row.values.vp ? parseInt(row.values.vp) : undefined,
+            tmp: row.values.tmp ? parseInt(row.values.tmp) : undefined,
+            notes: row.values.remark || undefined,
+          }));
+
+        // 并发症数组（合并类型字符串与详细记录）
+        const complicationsPayload = complications.map(compType => ({
+          comp_type: compType,
+          detail: complicationRecords[compType] || undefined,
+          notes: (complicationRecords[compType]?.remark as string) || undefined,
+        }));
+
+        // 医嘱执行记录
+        const orderExecPayload = realPrepareData?.ordersToday
+          .filter(o => orders[o.id] !== undefined)
+          .map(o => ({
+            long_term_order_id: o.id,
+            status: (orders[o.id] ? 'executed' : 'skipped') as 'executed' | 'skipped',
+          })) ?? [];
+
+        const payload: CreateDialysisPayload = {
+          patient_id: selectedPatient,
+          session_date: dateStr,
+          shift: (formValues.shift as 'morning' | 'afternoon' | 'evening') || 'morning',
+          prescription_id: realPrepareData?.prescription?.id || undefined,
+          pre_weight: preWeightVal ?? undefined,
+          post_weight: postWeight,
+          dry_weight: dryWeight ?? undefined,
+          actual_duration: durationHours != null ? Math.round(durationHours * 60) : undefined,
+          blood_flow_rate: (formValues.blood_flow_rate as number) || undefined,
+          dialysate_flow_rate: (formValues.dialysate_flow_rate as number) || undefined,
+          dialysate_temp: (formValues.dialysate_temp as number) || undefined,
+          dialysate_ca: (formValues.dialysate_ca as number) || undefined,
+          dialysate_k: (formValues.dialysate_k as number) || undefined,
+          dialysate_na: (formValues.dialysate_na as number) || undefined,
+          heparin_prime_dose: (formValues.heparin_prime_dose as number) || undefined,
+          heparin_maintain: (formValues.heparin_maintain as number) || undefined,
+          puncture_result: (formValues.puncture_result as 'one_shot' | 'two_shot' | 'difficult') || undefined,
+          puncture_method: (formValues.puncture_method as 'rope_ladder' | 'buttonhole' | 'area') || undefined,
+          is_avf_session: accessType === 'AVF' || accessType === 'AVG',
+          coagulation_grade: (formValues.coagulation_grade as 0 | 1 | 2 | 3) ?? 0,
+          blood_return_method: 'closed',
+          pre_bun: preBun ?? undefined,
+          post_bun: postBun ?? undefined,
+          notes: (formValues.remark as string) || undefined,
+          vital_signs: vitalSignsPayload,
+          complications: complicationsPayload,
+          order_executions: orderExecPayload,
+        };
+
+        await dialysisApi.create(payload);
+        message.success('透析记录已保存，Kt/V已计算并记录');
+        // 清除透后同步缓存
+        if (selectedPatient) {
+          writePostDialysisSync({
+            patientId: selectedPatient,
+            postSbp: null,
+            postDbp: null,
+            postPulse: null,
+            postWeightKg: null,
+            filledBy: 'nurse',
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        navigate('/dashboard');
+      } else {
+        // ── 演示患者：保持原有模拟逻辑 ──
+        await new Promise(r => setTimeout(r, 800));
+        message.success('透析记录已保存（演示模式，未写入数据库）');
+        navigate('/dashboard');
+      }
+    } catch {
+      // 错误由 request 拦截器统一提示
     } finally {
       setLoading(false);
     }
@@ -1139,15 +1312,33 @@ export default function DialysisEntryPage() {
         {/* 患者快选 + 日期 内联到顶栏 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Select
-            placeholder="选择患者…"
+            placeholder="搜索真实患者或选择演示患者…"
             value={selectedPatient || undefined}
             onChange={handlePatientChange}
-            options={PATIENTS_LIST.map(p => ({ value: p.value, label: p.label }))}
-            style={{ width: 230 }}
+            onSearch={handlePatientSearch}
+            loading={patientSearchLoading}
+            options={[
+              ...(patientSearchOptions.length > 0 ? [{
+                label: '── 在线患者（实时搜索）──',
+                options: patientSearchOptions,
+              }] : []),
+              {
+                label: '── 演示患者 ──',
+                options: PATIENTS_LIST.map(p => ({ value: p.value, label: p.label })),
+              },
+            ]}
+            style={{ width: 280 }}
             showSearch
+            filterOption={false}
             size="middle"
           />
-          <DatePicker defaultValue={dayjs()} style={{ width: 130 }} format="YYYY-MM-DD" size="middle" />
+          <DatePicker
+            value={sessionDate}
+            onChange={(val) => val && setSessionDate(val)}
+            style={{ width: 130 }}
+            format="YYYY-MM-DD"
+            size="middle"
+          />
         </div>
 
         <Button icon={<PrinterOutlined />} onClick={handlePrint} size="middle">

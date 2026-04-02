@@ -10,11 +10,20 @@ const { forbidden } = require('../utils/response');
  */
 const ROLE_LEVELS = {
   quality:    1,   // 质控（只读）
+  qc:         1,   // 与 quality 等价（历史种子/账号兼容）
   nurse:      2,   // 护士
   doctor:     3,   // 医生
   head_nurse: 4,   // 护士长
   admin:      5,   // 超级管理员
 };
+
+/** 白名单中 quality 与 qc 视为同一角色 */
+function expandAllowedRoles(allowedRoles) {
+  const s = new Set(allowedRoles);
+  if (s.has('quality')) s.add('qc');
+  if (s.has('qc')) s.add('quality');
+  return s;
+}
 
 /**
  * 检查是否有指定角色权限
@@ -31,7 +40,8 @@ function rbac(allowedRoles) {
     // admin 拥有所有权限
     if (userRole === 'admin') return next();
 
-    if (!allowedRoles.includes(userRole)) {
+    const allowed = expandAllowedRoles(allowedRoles);
+    if (!allowed.has(userRole)) {
       return forbidden(res, `权限不足，需要以下角色之一：${allowedRoles.join('、')}`);
     }
 
@@ -46,8 +56,8 @@ function rbac(allowedRoles) {
 function minRole(minRoleStr) {
   return (req, res, next) => {
     if (!req.user) return forbidden(res, '未认证');
-    const userLevel = ROLE_LEVELS[req.user.role] || 0;
-    const minLevel = ROLE_LEVELS[minRoleStr] || 999;
+    const userLevel = ROLE_LEVELS[req.user.role] ?? 0;
+    const minLevel = ROLE_LEVELS[minRoleStr] ?? 999;
     if (userLevel < minLevel) {
       return forbidden(res, '权限不足');
     }

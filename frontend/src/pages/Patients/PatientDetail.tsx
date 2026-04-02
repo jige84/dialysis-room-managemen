@@ -16,15 +16,23 @@ import { patientsApi, type PatientDetailRecord } from '../../api/patients';
 import { infectionApi, type InfectionScreeningLatestRow } from '../../api/infection';
 import labsApi, { LAB_TYPE_LABELS, type LabResult } from '../../api/labs';
 import { dialysisApi, type DialysisRecordListRow } from '../../api/dialysis';
-import vascularApi from '../../api/vascular';
+import vascularApi, { ACCESS_TYPE_LABELS, type AccessType } from '../../api/vascular';
+
+/** 将列表/详情中的通路类型字符串规范为 API 使用的 AccessType（小写） */
+function toAccessTypeKey(raw: string): AccessType | null {
+  const k = raw.trim().toLowerCase();
+  if (k === 'avf' || k === 'avg' || k === 'ncc' || k === 'tcc') return k;
+  return null;
+}
 import { useAuthStore } from '../../stores/authStore';
 
 function formatDialysisMode(mode?: string | null): string {
   if (!mode) return 'HD';
   const m = mode.toUpperCase();
-  if (m === 'HD') return '血液透析（HD）';
-  if (m === 'HDF') return '血液透析滤过（HDF）';
-  if (m === 'HP') return '血液灌流（HP）';
+  // 兼容旧数据：HD/HDF/HP 一律视作血液透析
+  if (m === 'HD' || m === 'HDF' || m === 'HP') return '血液透析';
+  if (m === 'PD') return '腹膜透析';
+  if (m === 'OTHER') return '其他透析方式';
   return mode;
 }
 
@@ -171,15 +179,14 @@ type PatientVascularAccessBrief = {
   id?: string;
   access_type?: string | null;
   is_active?: boolean;
-  is_current?: boolean;
 };
 
 function getCurrentAccessRecord(patient: PatientDetailRecord): PatientVascularAccessBrief | null {
-  const fromList = ((patient as PatientDetailRecord & { vascular_accesses?: PatientVascularAccessBrief[] }).vascular_accesses || [])
-    .find(v => v?.is_current || v?.is_active);
+  const list = patient.vascular_accesses ?? [];
+  const fromList = list.find(v => v?.is_active) ?? list[0];
   if (fromList) return fromList;
   if (patient.access_type) {
-    return { access_type: patient.access_type, is_current: true };
+    return { access_type: patient.access_type };
   }
   return null;
 }
@@ -193,6 +200,20 @@ function getCurrentAccessType(patient: PatientDetailRecord): 'AVF' | 'AVG' | 'TC
 
 function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
   const dobStr = patient.dob ? dayjs(patient.dob).format('YYYY-MM-DD') : '—';
+  const currentAccess = getCurrentAccessRecord(patient);
+  const rawAccessType =
+    (currentAccess?.access_type || patient.access_type || '').toString();
+  const accessKey = toAccessTypeKey(rawAccessType);
+  const accessLabelBase = accessKey ? ACCESS_TYPE_LABELS[accessKey] : null;
+  const accessLocation =
+    (currentAccess as PatientVascularAccessBrief & { location?: string })?.location ||
+    patient.access_location ||
+    '';
+  const accessDisplay = accessLabelBase
+    ? accessLocation
+      ? `${accessLabelBase} · ${accessLocation}`
+      : accessLabelBase
+    : '—';
   const rows = [
     ['姓名', patient.name],
     ['性别 / 年龄', `${formatGender(patient.gender)} / ${patient.age ?? '—'}岁（${dobStr}）`],
@@ -204,6 +225,7 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
     ['家属联系人', formatFamilyContact(patient.family_contact)],
     ['家庭住址', patient.address?.trim() || '—'],
     ['透析方式', formatDialysisMode(patient.dialysis_mode)],
+    ['血管通路', accessDisplay],
     ['透析开始日期', `${patient.dialysis_start_date ?? '—'}（透析龄 ${patient.dialysis_age ?? '—'}）`],
     ['责任护士', '—'],
   ] as const;
@@ -801,7 +823,6 @@ export default function PatientDetailPage() {
               location: '待完善',
               established_date: dayjs().format('YYYY-MM-DD'),
               notes: '由患者档案编辑窗口快速更新，请在血管通路管理完善详细信息',
-              is_current: true,
             });
           }
         }
@@ -842,8 +863,6 @@ export default function PatientDetailPage() {
           (status ? `保存失败（HTTP ${status}），请稍后重试` : '保存失败，请稍后重试'),
       );
 
-      // 避免在控制台输出请求体/患者隐私，仅记录错误摘要
-      // eslint-disable-next-line no-console
       console.error('[PatientDetail] save patient error', { status, message: backendMsg || (err as Error)?.message });
     } finally {
       setEditLoading(false);
@@ -1019,7 +1038,13 @@ export default function PatientDetailPage() {
               <InputNumber min={1} max={5} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="dialysis_mode" label="透析方式">
-              <Select options={[{ value: 'HD', label: 'HD' }, { value: 'HDF', label: 'HDF' }, { value: 'HP', label: 'HP' }]} />
+              <Select
+                options={[
+                  { value: 'HD', label: '血液透析' },
+                  { value: 'PD', label: '腹膜透析' },
+                  { value: 'OTHER', label: '其他' },
+                ]}
+              />
             </Form.Item>
             <Form.Item name="comorbidities" label="合并症（可选）" style={{ gridColumn: 'span 2' }}>
               <Select mode="tags" tokenSeparators={[',']} placeholder="输入后回车添加" />

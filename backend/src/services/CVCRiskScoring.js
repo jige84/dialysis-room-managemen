@@ -1,94 +1,85 @@
 /**
- * CVC 感染高危评分（纯计算模块）
- * 主要作用：根据通路类型与临床因子计算导管相关感染风险分值与等级。
- * 主要功能：因子权重汇总；输出 score 与 high/medium/low 风险档；供血管通路路由调用。
+ * CVC 感染高危评分（6 因素加权规则）
+ * 来源：medical-domain-rules §4.1
+ * 主要作用：根据 6 个临床因子计算导管相关感染风险分值与等级，供血管通路路由调用。
  */
 
-const SCORE_MAP = {
-  factor_a_urokinase: 4,
-  factor_b_thrombus:  3,
-  factor_c_poor_flow: 2,
-  factor_d_long_ncc:  2,
-  factor_e_infection: 5,
-  factor_f_ncc:       3,
-  factor_f_tcc:       2,
-  factor_g_femoral:   4,
-  factor_g_jugular:   2,
-  factor_h_in_situ:   5,
-  factor_i_interv:    3,
-  factor_j_age70:     2,
-  factor_j_diabetes:  2,
+// 来源：medical-domain-rules §4.1 CVC 感染高危评分维度
+const FACTOR_WEIGHTS = {
+  diabetes_mellitus:      2,  // 糖尿病
+  immunosuppressed:       2,  // 免疫抑制
+  recent_hospitalization: 1,  // 近期住院
+  catheter_days_over90:   2,  // 留管 > 90 天
+  previous_crbsi:         3,  // 既往 CRBSI
+  poor_hygiene:           1,  // 卫生依从性差
+};
+
+const FACTOR_LABELS = {
+  diabetes_mellitus:      '糖尿病',
+  immunosuppressed:       '免疫抑制',
+  recent_hospitalization: '近期住院',
+  catheter_days_over90:   '留管 > 90 天',
+  previous_crbsi:         '既往 CRBSI',
+  poor_hygiene:           '卫生依从性差',
 };
 
 class CVCRiskScoring {
   /**
-   * 计算CVC感染高危评分
-   * @param {object} factors 各评分因素（boolean值）
-   * @returns {{ totalScore, riskGrade, scoreSummary }}
+   * 计算 CVC 感染高危评分
+   * 来源：medical-domain-rules §4.1
+   * @param {object} factors 各评分因素（boolean 值，key 为 FACTOR_WEIGHTS 中的字段名）
+   * @returns {{ total_score, risk_grade, risk_label, score_summary }}
    */
   calculate(factors) {
-    let totalScore = 0;
-    const scoreSummary = [];
+    let total_score = 0;
+    const score_summary = [];
 
-    for (const [key, score] of Object.entries(SCORE_MAP)) {
+    for (const [key, weight] of Object.entries(FACTOR_WEIGHTS)) {
       if (factors[key]) {
-        totalScore += score;
-        scoreSummary.push({ factor: key, score });
+        total_score += weight;
+        score_summary.push({ factor: key, label: FACTOR_LABELS[key], score: weight });
       }
     }
 
-    const riskGrade = totalScore > 16 ? 3 : totalScore >= 13 ? 2 : 1;
+    // 风险等级阈值：来源 medical-domain-rules §4.1
+    const risk_grade = total_score >= 6 ? 3 : total_score >= 3 ? 2 : 1;
+    const risk_label = ['', '低风险', '中等风险', '高风险'][risk_grade];
 
-    return {
-      totalScore,
-      riskGrade,
-      scoreSummary,
-      riskLabel: ['', 'Ⅰ度（有可能）', 'Ⅱ度（风险较高）', 'Ⅲ度（随时可能）'][riskGrade],
-    };
+    return { total_score, risk_grade, risk_label, score_summary };
   }
 
   /**
-   * 溶栓后自动更新评分（加上 factor_a_urokinase）
-   */
-  afterThrombolysis(currentFactors) {
-    return this.calculate({ ...currentFactors, factor_a_urokinase: true });
-  }
-
-  /**
-   * 根据患者信息自动预填评分因素
-   * @param {object} patient 患者基本信息
-   * @param {object} access 血管通路信息
-   * @returns {object} 自动判断的因素
+   * 根据患者信息自动预填部分评分因素（客观可判断的项目）
+   * @param {object} patient 患者基本信息（comorbidities、immunosuppressed 字段）
+   * @param {object} access  血管通路信息（access_type、established_date）
+   * @returns {object} 预填的因素对象
    */
   autoFillFactors(patient, access) {
-    const age = patient.age || 0;
-    const hasDiabetes = (patient.comorbidities || []).includes('diabetes');
-    const isNCC = access.access_type === 'ncc';
-    const isTCC = access.access_type === 'tcc';
-    const isFemoral = (access.location || '').includes('股静脉');
-    const isJugular = (access.location || '').includes('颈内静脉');
+    const hasDiabetes = (patient.comorbidities || []).includes('diabetes') ||
+                        (patient.diagnosis || '').includes('糖尿病');
+    const isImmunosuppressed = patient.immunosuppressed === true;
 
-    // 计算NCC留置天数
-    const nccDays = isNCC && access.established_date
+    const catheterDays = access.established_date
       ? Math.floor((Date.now() - new Date(access.established_date)) / 86400000)
       : 0;
 
     return {
-      factor_d_long_ncc: isNCC && nccDays > 30,
-      factor_f_ncc:      isNCC,
-      factor_f_tcc:      isTCC,
-      factor_g_femoral:  isFemoral,
-      factor_g_jugular:  isJugular && !isFemoral,
-      factor_j_age70:    age >= 70,
-      factor_j_diabetes: hasDiabetes,
-      // 以下需要护士手动勾选
-      factor_a_urokinase: false,
-      factor_b_thrombus:  false,
-      factor_c_poor_flow: false,
-      factor_e_infection: false,
-      factor_h_in_situ:   false,
-      factor_i_interv:    false,
+      diabetes_mellitus:      hasDiabetes,
+      immunosuppressed:       isImmunosuppressed,
+      recent_hospitalization: false,     // 需护士手动勾选
+      catheter_days_over90:   catheterDays > 90,
+      previous_crbsi:         false,     // 需护士手动勾选
+      poor_hygiene:           false,     // 需护士手动勾选
     };
+  }
+
+  /** 返回所有因素的 key/label/weight，供前端渲染用 */
+  getFactorDefinitions() {
+    return Object.entries(FACTOR_WEIGHTS).map(([key, weight]) => ({
+      key,
+      label: FACTOR_LABELS[key],
+      weight,
+    }));
   }
 }
 

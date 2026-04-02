@@ -19,10 +19,12 @@ class AlertEngine {
 
   /**
    * 感染筛查到期提醒（HBV/HCV/HIV/TP每半年）
+   * 规程：≥175 天橙色预警，≥185 天红色超期（与 medical-domain-rules 一致）
    */
   async checkInfectionScreeningDue() {
-    const DUE_DAYS = 180;
-    const WARN_BEFORE_DAYS = 14;
+    const INFECTION_WARNING_DAYS = 175;
+    const INFECTION_OVERDUE_DAYS = 185;
+    const CYCLE_DAYS = 180;
 
     const { rows: patients } = await pool.query(
       `SELECT DISTINCT ON (p.id, is.test_type)
@@ -39,9 +41,9 @@ class AlertEngine {
         ? Math.floor((Date.now() - new Date(row.test_date).getTime()) / 86400000)
         : 9999;
 
-      if (daysSince >= DUE_DAYS - WARN_BEFORE_DAYS) {
+      if (daysSince >= INFECTION_WARNING_DAYS) {
         const dueDate = row.test_date
-          ? new Date(new Date(row.test_date).getTime() + DUE_DAYS * 86400000).toISOString().slice(0, 10)
+          ? new Date(new Date(row.test_date).getTime() + CYCLE_DAYS * 86400000).toISOString().slice(0, 10)
           : null;
 
         const exists = await this._alertExists(row.id, 'infection_screening_due', row.test_type);
@@ -54,7 +56,7 @@ class AlertEngine {
           [
             row.id,
             row.test_type || '初筛',
-            daysSince >= DUE_DAYS ? 'high' : 'medium',
+            daysSince >= INFECTION_OVERDUE_DAYS ? 'high' : 'medium',
             `感染筛查到期：${row.name}`,
             `患者 ${row.name} 的 ${row.test_type || '感染'} 筛查已${daysSince}天未复查，请安排复查`,
             dueDate,
@@ -183,9 +185,9 @@ class AlertEngine {
       `SELECT DISTINCT ON (va.patient_id)
          va.patient_id, va.id as access_id, cva.total_score, p.name
        FROM vascular_accesses va
-       JOIN cvc_risk_assessments cva ON cva.access_id = va.id
+       JOIN cvc_risk_assessments cva ON cva.vascular_access_id = va.id
        JOIN patients p ON p.id = va.patient_id
-       WHERE va.access_type IN ('ncc','tcc') AND va.is_current = true
+       WHERE va.access_type IN ('ncc','tcc') AND va.is_active = true
          AND cva.total_score >= 6
        ORDER BY va.patient_id, cva.assessed_at DESC`
     );
@@ -219,7 +221,7 @@ class AlertEngine {
        FROM vascular_accesses va
        JOIN patients p ON p.id = va.patient_id
        LEFT JOIN infection_monitoring im ON im.access_id = va.id
-       WHERE va.is_buttonhole = true AND va.is_current = true
+       WHERE va.is_buttonhole = true AND va.is_active = true
        GROUP BY va.patient_id, p.name`
     );
 
@@ -254,7 +256,7 @@ class AlertEngine {
    * @param {string} patientId
    * @param {number} ufVolume 超滤量（mL）
    * @param {number} dryWeight 干体重（kg）
-   * @param {number} ufPct 超滤比例（0~1）
+   * @param {number} ufPct 超滤占干体重百分比（如 5.3 表示 5.3%）
    */
   async checkUltrafiltrationAlert(patientId, ufVolume, dryWeight, ufPct) {
     const { rows: pRows } = await pool.query('SELECT name FROM patients WHERE id=$1', [patientId]);
@@ -267,7 +269,7 @@ class AlertEngine {
       [
         patientId,
         `超滤超标：${pname}`,
-        `超滤量 ${ufVolume}mL 超过干体重5%（${(ufPct * 100).toFixed(1)}%），请医生评估`
+        `超滤量 ${ufVolume}mL 超过干体重5%（实际 ${ufPct.toFixed(1)}%），请医生评估`
       ]
     );
   }

@@ -7,12 +7,18 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 
+function requiredEnv(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`缺少环境变量 ${name}，请先配置 .env（参考 backend/.env.example）`);
+  return v;
+}
+
 const pool = new Pool({
-  host: 'localhost',
-  port: 5432,
-  database: 'hemodialysis_db',
-  user: 'hd_app',
-  password: '840611',
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT || '5432', 10),
+  database: requiredEnv('DB_NAME'),
+  user: requiredEnv('DB_USER'),
+  password: requiredEnv('DB_PASSWORD'),
 });
 
 async function seed() {
@@ -22,7 +28,7 @@ async function seed() {
     ['yangchen', hash, '\u6768\u6668',         'head_nurse'],
     ['nurse01',  hash, '\u62a4\u58eb01',        'nurse'],
     ['doctor01', hash, '\u4e3b\u6cbb\u533b\u751f01', 'doctor'],
-    ['qc01',     hash, '\u8d28\u63a701',        'qc'],
+    ['qc01',     hash, '\u8d28\u63a701',        'quality'],
   ];
   for (const [u, h, n, r] of users) {
     await pool.query(

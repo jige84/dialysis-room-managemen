@@ -19,7 +19,7 @@ const isValidUuid = (value) => typeof value === 'string' && UUID_REGEX.test(valu
 // GET /api/patients
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { page = 1, page_size = 20, status, isolation_zone, keyword } = req.query;
+    const { page = 1, page_size = 20, status, isolation_zone, keyword, dialysis_mode, ckd_stage } = req.query;
     const offset = (page - 1) * page_size;
 
     const conditions = ['1=1'];
@@ -28,6 +28,8 @@ router.get('/', auth, async (req, res, next) => {
 
     if (status)         { conditions.push(`p.status = $${idx++}`);         params.push(status); }
     if (isolation_zone) { conditions.push(`p.isolation_zone = $${idx++}`); params.push(isolation_zone); }
+    if (dialysis_mode)  { conditions.push(`p.dialysis_mode = $${idx++}`);  params.push(dialysis_mode); }
+    if (ckd_stage)      { conditions.push(`p.ckd_stage = $${idx++}`);      params.push(parseInt(ckd_stage, 10)); }
     if (keyword) {
       conditions.push(`(p.name ILIKE $${idx} OR p.name ~ $${idx})`);
       params.push(`%${keyword}%`);
@@ -140,6 +142,25 @@ router.get('/:id', auth, async (req, res, next) => {
       [req.params.id]
     );
     patient.recent_dialysis = drRows;
+
+    // 传染病筛查最新结果摘要（每种检测类型取最近一次）
+    const { rows: screenRows } = await pool.query(
+      `SELECT DISTINCT ON (test_type)
+         test_type, result, test_date, next_due_date
+       FROM infection_screenings
+       WHERE patient_id = $1
+       ORDER BY test_type, test_date DESC`,
+      [req.params.id]
+    );
+    patient.infection_screenings_summary = screenRows;
+
+    // 知情同意子对象（方便前端渲染）
+    patient.consents = {
+      dialysis: patient.consent_dialysis || false,
+      dialysis_date: patient.consent_dialysis_date || null,
+      cvc: patient.consent_cvc || false,
+      cvc_date: patient.consent_cvc_date || null,
+    };
 
     return success(res, patient);
   } catch (err) { next(err); }

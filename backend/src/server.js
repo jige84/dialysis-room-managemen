@@ -31,6 +31,7 @@ const infectionRouter     = require('./routes/infection');
 const scheduleRouter      = require('./routes/schedule');
 const devicesRouter       = require('./routes/devices');
 const cqiRouter           = require('./routes/cqi');
+const aiRouter            = require('./routes/ai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -120,7 +121,7 @@ app.use('/api/reports',      reportsRouter);
 app.use('/api/schedule',     scheduleRouter);
 app.use('/api/devices',      devicesRouter);
 app.use('/api/cqi',          cqiRouter);
-app.use('/api/ai',           (req, res) => res.json({ code: 200, data: null, message: 'AI分析模块开发中' }));
+app.use('/api/ai',           aiRouter);
 
 // ── SPA回退（生产模式）───────────────────────────────────────
 if (process.env.NODE_ENV === 'production') {

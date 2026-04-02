@@ -294,6 +294,7 @@ export default function PrescriptionWorkspacePage() {
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [postSyncMeta, setPostSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
+  const [baselineDryWeight, setBaselineDryWeight] = useState<number | null>(null);
   const skipPersistRef = useRef(false);
   const baselineDryWeightRef = useRef<number | null>(null);
   const heparinCoreIURef = useRef(0);
@@ -407,7 +408,10 @@ export default function PrescriptionWorkspacePage() {
       const base = PATIENTS.find((p) => p.value === patientValue)?.defaults;
       if (!base) return;
       const stored = loadStoredBasicParams();
-      baselineDryWeightRef.current = typeof base.dryWeight === 'number' ? base.dryWeight : null;
+      const nextBaseline =
+        typeof base.dryWeight === 'number' ? base.dryWeight : null;
+      baselineDryWeightRef.current = nextBaseline;
+      setBaselineDryWeight(nextBaseline);
       heparinCoreIURef.current = typeof base.heparinFirst === 'number' ? base.heparinFirst : 0;
       ufUserEditedRef.current = false;
       heparinUserEditedRef.current = false;
@@ -433,9 +437,10 @@ export default function PrescriptionWorkspacePage() {
   );
 
   useEffect(() => {
-    if (selectedPatient) {
+    if (!selectedPatient) return;
+    queueMicrotask(() => {
       applyPatientFormValues(selectedPatient);
-    }
+    });
   }, [selectedPatient, applyPatientFormValues]);
 
   useEffect(() => {
@@ -903,9 +908,9 @@ export default function PrescriptionWorkspacePage() {
             </div>
             <Divider style={{ margin: '8px 0 16px', borderColor: '#DBEAFE' }} />
             <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>干体重与超滤</div>
-            {baselineDryWeightRef.current != null &&
+            {baselineDryWeight != null &&
             dryWeightWatched !== undefined &&
-            Number(dryWeightWatched) !== baselineDryWeightRef.current ? (
+            Number(dryWeightWatched) !== baselineDryWeight ? (
               <>
                 <div className="grid-4" style={{ gap: 16, marginBottom: 8 }}>
                   <Form.Item label={<>干体重目标 (kg) <span style={{ color: '#F43F5E' }}>*</span></>} name="dryWeight">

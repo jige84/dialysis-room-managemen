@@ -25,8 +25,8 @@ function processOnCanvas(
   const srcW = img.naturalWidth;
   const srcH = img.naturalHeight;
 
-  let rotW = swap ? srcH : srcW;
-  let rotH = swap ? srcW : srcH;
+  const rotW = swap ? srcH : srcW;
+  const rotH = swap ? srcW : srcH;
 
   const longer = Math.max(rotW, rotH);
   const scale = longer < OCR_MIN_LONG_SIDE_PX ? OCR_MIN_LONG_SIDE_PX / longer : 1;

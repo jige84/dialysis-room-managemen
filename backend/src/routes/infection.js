@@ -34,6 +34,27 @@ function normalizeTestType(raw) {
 
 // ── 感染筛查 ──────────────────────────────────────────────
 
+// GET /api/infection/screenings/overdue - 全科到期筛查（静态路由，必须在 :patientId 之前）
+router.get('/screenings/overdue', auth, rbac(['admin','head_nurse']), async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `WITH latest AS (
+         SELECT DISTINCT ON (is2.patient_id, is2.test_type)
+           p.id as patient_id, p.name, is2.test_type as screen_type, is2.test_date as screen_date,
+           is2.result,
+           EXTRACT(DAY FROM NOW() - is2.test_date) as days_since
+         FROM patients p
+         LEFT JOIN infection_screenings is2 ON is2.patient_id = p.id
+         WHERE p.status = 'active'
+         ORDER BY is2.patient_id, is2.test_type, is2.test_date DESC
+       )
+       SELECT * FROM latest WHERE days_since > 166 OR screen_date IS NULL
+       ORDER BY days_since DESC NULLS FIRST`
+    );
+    return success(res, rows);
+  } catch (err) { next(err); }
+});
+
 // GET /api/infection/screenings/:patientId - 某患者筛查历史
 router.get('/screenings/:patientId', auth, async (req, res, next) => {
   try {
@@ -64,27 +85,6 @@ router.get('/screenings/:patientId/latest', auth, async (req, res, next) => {
        WHERE patient_id = $1
        ORDER BY test_type, test_date DESC`,
       [req.params.patientId]
-    );
-    return success(res, rows);
-  } catch (err) { next(err); }
-});
-
-// GET /api/infection/screenings/overdue - 全科到期筛查患者列表
-router.get('/screenings/overdue', auth, rbac(['admin','head_nurse']), async (req, res, next) => {
-  try {
-    const { rows } = await pool.query(
-      `WITH latest AS (
-         SELECT DISTINCT ON (is2.patient_id, is2.test_type)
-           p.id as patient_id, p.name, is2.test_type as screen_type, is2.test_date as screen_date,
-           is2.result,
-           EXTRACT(DAY FROM NOW() - is2.test_date) as days_since
-         FROM patients p
-         LEFT JOIN infection_screenings is2 ON is2.patient_id = p.id
-         WHERE p.status = 'active'
-         ORDER BY is2.patient_id, is2.test_type, is2.test_date DESC
-       )
-       SELECT * FROM latest WHERE days_since > 166 OR screen_date IS NULL
-       ORDER BY days_since DESC NULLS FIRST`
     );
     return success(res, rows);
   } catch (err) { next(err); }
@@ -140,7 +140,7 @@ router.get('/monitoring/:year/:month', auth, async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT im.*, va.location, va.access_type, p.name as patient_name
        FROM infection_monitoring im
-       JOIN vascular_accesses va ON im.access_id = va.id
+       JOIN vascular_accesses va ON im.vascular_access_id = va.id
        JOIN patients p ON im.patient_id = p.id
        WHERE im.monitor_year = $1 AND im.monitor_month = $2
        ORDER BY im.catheter_days DESC`,
@@ -154,24 +154,26 @@ router.get('/monitoring/:year/:month', auth, async (req, res, next) => {
 router.post('/monitoring', auth, rbac(['admin','head_nurse','nurse']), async (req, res, next) => {
   try {
     const {
-      patient_id, access_id, monitor_year, monitor_month,
+      patient_id, access_id, vascular_access_id, monitor_year, monitor_month,
       catheter_days, infection_status, notes,
     } = req.body;
 
-    if (!patient_id || !access_id || !monitor_year || !monitor_month) {
-      return error(res, '患者、通路ID和月份为必填项');
+    const vaId = vascular_access_id || access_id;
+    if (!patient_id || !monitor_year || !monitor_month) {
+      return error(res, '患者ID和月份为必填项');
     }
 
     const { rows } = await pool.query(
       `INSERT INTO infection_monitoring
-         (patient_id, access_id, monitor_year, monitor_month,
+         (patient_id, vascular_access_id, monitor_year, monitor_month,
           catheter_days, infection_status, notes, recorded_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (patient_id, access_id, monitor_year, monitor_month)
+       ON CONFLICT (patient_id, monitor_year, monitor_month)
        DO UPDATE SET catheter_days = $5, infection_status = $6,
-                     notes = $7, updated_at = NOW()
+                     notes = $7, vascular_access_id = COALESCE($2, infection_monitoring.vascular_access_id),
+                     updated_at = NOW()
        RETURNING *`,
-      [patient_id, access_id, monitor_year, monitor_month,
+      [patient_id, vaId || null, monitor_year, monitor_month,
        catheter_days || 0, infection_status || 'none', notes, req.user.id]
     );
     return created(res, rows[0], '感染监测数据已保存');
@@ -190,12 +192,12 @@ router.post('/monitoring/batch', auth, rbac(['admin','head_nurse']), async (req,
     for (const r of records) {
       await client.query(
         `INSERT INTO infection_monitoring
-           (patient_id, access_id, monitor_year, monitor_month,
+           (patient_id, vascular_access_id, monitor_year, monitor_month,
             catheter_days, infection_status, recorded_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (patient_id, access_id, monitor_year, monitor_month)
+         ON CONFLICT (patient_id, monitor_year, monitor_month)
          DO UPDATE SET catheter_days = $5, updated_at = NOW()`,
-        [r.patient_id, r.access_id, year, month,
+        [r.patient_id, r.vascular_access_id || r.access_id || null, year, month,
          r.catheter_days || 0, r.infection_status || 'none', req.user.id]
       );
       count++;
@@ -208,26 +210,26 @@ router.post('/monitoring/batch', auth, rbac(['admin','head_nurse']), async (req,
   } finally { client.release(); }
 });
 
-// GET /api/infection/buttonhole-monitoring - 扣眼穿刺周监测记录
+// GET /api/infection/buttonhole-monitoring - 扣眼穿刺相关感染监测
 router.get('/buttonhole-monitoring', auth, async (req, res, next) => {
   try {
-    const { patient_id, start_date, end_date } = req.query;
+    const { patient_id, year, month } = req.query;
     const conditions = ['va.is_buttonhole = true'];
     const params = [];
     let idx = 1;
 
     if (patient_id) { conditions.push(`im.patient_id = $${idx++}`); params.push(patient_id); }
-    if (start_date) { conditions.push(`im.monitor_date >= $${idx++}`); params.push(start_date); }
-    if (end_date)   { conditions.push(`im.monitor_date <= $${idx++}`); params.push(end_date); }
+    if (year) { conditions.push(`im.monitor_year = $${idx++}`); params.push(parseInt(year)); }
+    if (month) { conditions.push(`im.monitor_month = $${idx++}`); params.push(parseInt(month)); }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(
       `SELECT im.*, p.name as patient_name, va.location
        FROM infection_monitoring im
        JOIN patients p ON im.patient_id = p.id
-       JOIN vascular_accesses va ON im.access_id = va.id
+       JOIN vascular_accesses va ON im.vascular_access_id = va.id
        ${where}
-       ORDER BY im.monitor_date DESC
+       ORDER BY im.monitor_year DESC, im.monitor_month DESC
        LIMIT 200`,
       params
     );

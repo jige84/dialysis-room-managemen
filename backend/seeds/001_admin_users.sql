@@ -7,7 +7,7 @@ INSERT INTO users (username, password_hash, real_name, role) VALUES
   ('yangchen', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '杨晨',   'head_nurse'),
   ('nurse01',  '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '护士01', 'nurse'),
   ('doctor01', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '主治医生01', 'doctor'),
-  ('qc01',     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '质控员01', 'qc')
+  ('qc01',     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '质控员01', 'quality')
 ON CONFLICT (username) DO NOTHING;
 
 -- 注意：上方hash仅为占位符，实际初始化需使用下方脚本生成正确hash:

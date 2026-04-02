@@ -14,7 +14,7 @@ export interface UserInfo {
   id: string;
   username: string;
   real_name: string;
-  role: 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'qc';
+  role: 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'quality' | 'qc';
 }
 
 export interface LoginResult {

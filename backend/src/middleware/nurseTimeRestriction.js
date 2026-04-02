@@ -6,7 +6,8 @@
 const restrictNurseEditTime = (req, res, next) => {
   if (req.user.role !== 'nurse') return next();
 
-  const rawDate = req.body.session_date || req.body.dialysisDate || req.body.date;
+  const rawDate = req.body.session_date || req.body.dialysisDate || req.body.date
+    || req.body.assessed_at || req.body.puncture_date;
   if (!rawDate) return next();
 
   const recordDate = new Date(rawDate);

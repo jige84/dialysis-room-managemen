@@ -1,16 +1,16 @@
 /**
  * CQI（持续质量改进）REST 路由
- * 主要作用：管理科室质量改进记录，供护士长、管理员与质控协同使用。
- * 主要功能：CQI 列表与详情；创建与更新；按角色限制写权限。
+ * 修复：静态路由 /defects/list 放在 /:id 通配之前；PUT 加 rbac。
  */
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
+const auditLog = require('../middleware/audit');
 const { success, created, error, notFound } = require('../utils/response');
 
-// GET /api/cqi - 获取CQI记录列表
+// GET /api/cqi - CQI 记录列表
 router.get('/', auth, async (req, res, next) => {
   try {
     const { status, page = 1, page_size = 20 } = req.query;
@@ -36,7 +36,45 @@ router.get('/', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/cqi/:id - 获取单条CQI记录
+// ── 静态路由（必须在 /:id 通配之前） ────────────────────
+
+// GET /api/cqi/defects/list - 缺陷上报列表
+router.get('/defects/list', auth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT dr.*, u.real_name as reported_by_name
+       FROM defect_reports dr
+       LEFT JOIN users u ON dr.reported_by = u.id
+       ORDER BY dr.event_time DESC LIMIT 100`
+    );
+    return success(res, rows);
+  } catch (err) { next(err); }
+});
+
+// POST /api/cqi/defects - 上报缺陷/不良事件
+router.post('/defects', auth, auditLog('defect_reports', 'CREATE'), async (req, res, next) => {
+  try {
+    const {
+      event_time, event_type, severity, description,
+      involved_patient_ids, immediate_action, anonymous
+    } = req.body;
+    if (!event_time || !event_type) return error(res, '事件时间和事件类型为必填项');
+
+    const { rows } = await pool.query(
+      `INSERT INTO defect_reports
+         (event_time, event_type, severity, description,
+          involved_patient_ids, immediate_action, is_anonymous, reported_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, event_type, event_time`,
+      [event_time, event_type, severity || 'minor', description,
+       involved_patient_ids || null, immediate_action, anonymous || false, req.user.id]
+    );
+    return created(res, rows[0], '缺陷事件已上报');
+  } catch (err) { next(err); }
+});
+
+// ── 通配路由 ────────────────────────────────────────────
+
+// GET /api/cqi/:id - 单条 CQI 记录
 router.get('/:id', auth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
@@ -50,30 +88,35 @@ router.get('/:id', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/cqi - 新建CQI项目
-router.post('/', auth, rbac(['admin','head_nurse','quality']), async (req, res, next) => {
+// POST /api/cqi - 新建 CQI 项目
+router.post('/', auth, rbac(['admin','head_nurse','quality']),
+  auditLog('cqi_records', 'CREATE'),
+  async (req, res, next) => {
   try {
     const {
-      title, problem_description, target_indicator,
-      responsible_person, plan_start_date, plan_end_date,
+      project_type, title, problem_found, measures,
+      start_date, target_description, target_value, target_unit, notes,
     } = req.body;
-    if (!title) return error(res, '标题为必填项');
+    if (!title || !project_type) return error(res, '标题和项目类型为必填项');
 
     const { rows } = await pool.query(
       `INSERT INTO cqi_records
-         (title, problem_description, target_indicator,
-          responsible_person, plan_start_date, plan_end_date,
-          status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'planning',$7) RETURNING *`,
-      [title, problem_description, target_indicator,
-       responsible_person, plan_start_date, plan_end_date, req.user.id]
+         (project_type, title, problem_found, measures,
+          start_date, target_description, target_value, target_unit,
+          notes, leader_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [project_type, title, problem_found || '', measures || '',
+       start_date || new Date().toISOString().slice(0, 10),
+       target_description, target_value, target_unit, notes, req.user.id]
     );
     return created(res, rows[0], 'CQI项目已创建');
   } catch (err) { next(err); }
 });
 
-// PUT /api/cqi/:id - 更新CQI项目进展
-router.put('/:id', auth, async (req, res, next) => {
+// PUT /api/cqi/:id - 更新 CQI 进展
+router.put('/:id', auth, rbac(['admin','head_nurse','quality']),
+  auditLog('cqi_records', 'UPDATE'),
+  async (req, res, next) => {
   try {
     const allowed = [
       'status','measures','implementation_notes',
@@ -92,40 +135,6 @@ router.put('/:id', auth, async (req, res, next) => {
     );
     if (rows.length === 0) return notFound(res, 'CQI记录不存在');
     return success(res, rows[0], 'CQI项目已更新');
-  } catch (err) { next(err); }
-});
-
-// GET /api/cqi/defects/list - 缺陷上报列表
-router.get('/defects/list', auth, async (req, res, next) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT dr.*, u.real_name as reported_by_name
-       FROM defect_reports dr
-       LEFT JOIN users u ON dr.reported_by = u.id
-       ORDER BY dr.reported_at DESC LIMIT 100`
-    );
-    return success(res, rows);
-  } catch (err) { next(err); }
-});
-
-// POST /api/cqi/defects - 上报缺陷/不良事件
-router.post('/defects', auth, async (req, res, next) => {
-  try {
-    const {
-      event_date, defect_type, severity, description,
-      patient_id, immediate_action, anonymous
-    } = req.body;
-    if (!event_date || !defect_type) return error(res, '日期和缺陷类型为必填项');
-
-    const { rows } = await pool.query(
-      `INSERT INTO defect_reports
-         (event_date, defect_type, severity, description,
-          patient_id, immediate_action, is_anonymous, reported_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, defect_type, reported_at`,
-      [event_date, defect_type, severity || 'minor', description,
-       patient_id || null, immediate_action, anonymous || false, req.user.id]
-    );
-    return created(res, rows[0], '缺陷事件已上报');
   } catch (err) { next(err); }
 });
 

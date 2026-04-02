@@ -80,7 +80,7 @@ export default function AppLayout() {
   useEffect(() => {
     const fetchAlertCount = async () => {
       try {
-        const res = await alertsApi.getSummary();
+        const res = await alertsApi.summary();
         setPendingAlerts(res.data.data?.total || 0);
       } catch { /* 静默失败 */ }
     };

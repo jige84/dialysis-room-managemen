@@ -1,7 +1,8 @@
 /**
  * 预警管理 REST 路由
- * 主要作用：为前端预警中心提供查询与处理接口，对接系统生成的各类临床预警。
- * 主要功能：预警列表与筛选；感染筛查/Kt/V/化验等类型展示；状态更新（依实现与 RBAC）。
+ * 字段与 migrations/021_create_audit_alerts.sql 完全对齐：
+ *   severity（不是 priority）、status=active/dismissed/handled/auto_closed
+ *   handled_by/handled_at/handle_notes（不是 ack_by/ack_at/action_note）
  */
 const express = require('express');
 const router = express.Router();
@@ -10,18 +11,17 @@ const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const { success } = require('../utils/response');
 
-// GET /api/alerts - 获取当前用户相关的所有预警
+// GET /api/alerts - 预警列表（支持筛选）
 router.get('/', auth, async (req, res, next) => {
   try {
-    const { type, status = 'pending', page = 1, page_size = 50 } = req.query;
-    // 纯 JS：req.query 在 JS 中无法做 TS 类型断言
+    const { type, severity, status = 'active', page = 1, page_size = 50 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(page_size);
 
-    const conditions = ['(a.assigned_to IS NULL OR a.assigned_to = $1)'];
-    const params = [req.user.id];
-    let idx = 2;
+    const conditions = [];
+    const params = [];
+    let idx = 1;
 
-    if (status !== 'all') {
+    if (status && status !== 'all') {
       conditions.push(`a.status = $${idx++}`);
       params.push(status);
     }
@@ -29,20 +29,29 @@ router.get('/', auth, async (req, res, next) => {
       conditions.push(`a.alert_type = $${idx++}`);
       params.push(type);
     }
+    if (severity) {
+      conditions.push(`a.severity = $${idx++}`);
+      params.push(severity);
+    }
 
-    const where = conditions.join(' AND ');
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await pool.query(
-      `SELECT a.*, p.name as patient_name
+      `SELECT a.id, a.patient_id, a.alert_rule_id, a.alert_type, a.severity,
+              a.title, a.message, a.status, a.handled_by, a.handled_at,
+              a.handle_notes, a.notified_roles, a.created_at,
+              p.name as patient_name
        FROM alerts a
        LEFT JOIN patients p ON a.patient_id = p.id
-       WHERE ${where}
-       ORDER BY a.priority DESC, a.created_at DESC
+       ${where}
+       ORDER BY
+         CASE a.severity WHEN 'emergency' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 ELSE 5 END,
+         a.created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, parseInt(page_size), offset]
     );
 
     const countRes = await pool.query(
-      `SELECT COUNT(*) FROM alerts a WHERE ${where}`,
+      `SELECT COUNT(*) FROM alerts a ${where}`,
       params
     );
 
@@ -50,39 +59,47 @@ router.get('/', auth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// GET /api/alerts/summary - 预警汇总数量（首页徽标用）
+// GET /api/alerts/summary - 按 severity 分组计数（首页徽标用）
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT alert_type, COUNT(*) as count
+      `SELECT severity, COUNT(*) as count
        FROM alerts
-       WHERE status = 'pending'
-       GROUP BY alert_type`
+       WHERE status = 'active'
+       GROUP BY severity`
     );
-    const summary = { total: 0 };
+    const summary = { total: 0, emergency: 0, critical: 0, warning: 0, info: 0 };
     for (const row of rows) {
-      summary[row.alert_type] = parseInt(row.count);
+      summary[row.severity] = parseInt(row.count);
       summary.total += parseInt(row.count);
     }
     return success(res, summary);
   } catch (err) { next(err); }
 });
 
-// PATCH /api/alerts/:id/ack - 确认处理预警
+// PATCH /api/alerts/:id/ack - 确认/处理预警
 router.patch('/:id/ack', auth, async (req, res, next) => {
   try {
-    const { action_note } = req.body;
+    const { handle_notes, new_status = 'handled' } = req.body;
+    const validStatuses = ['handled', 'dismissed'];
+    const targetStatus = validStatuses.includes(new_status) ? new_status : 'handled';
+
     const { rows } = await pool.query(
       `UPDATE alerts
-       SET status = 'acknowledged', ack_by = $1, ack_at = NOW(), action_note = $2, updated_at = NOW()
-       WHERE id = $3 RETURNING id, alert_type, status`,
-      [req.user.id, action_note, req.params.id]
+       SET status = $1, handled_by = $2, handled_at = NOW(), handle_notes = $3
+       WHERE id = $4 AND status = 'active'
+       RETURNING id, alert_type, severity, status`,
+      [targetStatus, req.user.id, handle_notes, req.params.id]
     );
-    return success(res, rows[0], '预警已确认处理');
+
+    if (rows.length === 0) {
+      return success(res, null, '预警不存在或已处理');
+    }
+    return success(res, rows[0], '预警已处理');
   } catch (err) { next(err); }
 });
 
-// POST /api/alerts/run-checks - 手动触发全科预警扫描（仅管理员）
+// POST /api/alerts/run-checks - 手动触发全科预警扫描
 router.post('/run-checks', auth, rbac(['admin']), async (req, res, next) => {
   try {
     const AlertEngine = require('../services/AlertEngine');
