@@ -1,306 +1,894 @@
 /**
- * CQI（持续质量改进）记录页
- * 主要作用：登记与跟踪科室质量改进项目与进度。
- * 主要功能：列表 + 新建/编辑 Modal；对接 cqi API；权限按角色限制。
+ * CQI（持续质量改进）记录页 — PDCA 全流程字段，对接 cqi API。
  */
-import { useState } from 'react';
-import { Card, Button, Select, Modal, Form, Input, DatePicker, message, Progress } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Card,
+  Button,
+  Select,
+  Modal,
+  Form,
+  Input,
+  DatePicker,
+  message,
+  Progress,
+  Tabs,
+  Table,
+  Tag,
+  Spin,
+  Empty,
+  Checkbox,
+  Collapse,
+  Divider,
+} from 'antd';
+import { PlusOutlined, BugOutlined } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
+import dayjs from 'dayjs';
+import { useLocation } from 'react-router-dom';
 import PageShell from '../../components/PageShell/PageShell';
+import {
+  cqiApi,
+  type CqiRecord,
+  type CqiStatus,
+  type DefectReport,
+  type DefectEventType,
+  type CqiUserOption,
+} from '../../api/cqi';
+import { usePermission } from '../../utils/permission';
 
-interface CQIPlan {
-  key: string;
-  title: string;
-  category: string;
-  problem: string;
-  goal: string;
-  plan: string;
-  leader: string;
-  startDate: string;
-  endDate: string;
-  status: 'ongoing' | 'completed' | 'overdue' | 'planning';
-  progress: number;
-  updates: { date: string; content: string; author: string }[];
-}
-
-const CQI_DATA: CQIPlan[] = [
-  {
-    key: '1',
-    title: '提升 Kt/V 达标率至 95%以上',
-    category: '透析充分性',
-    problem: '2025年第四季度 Kt/V 达标率仅 91.3%，低于目标值 95%',
-    goal: 'Kt/V 达标率（spKt/V ≥ 1.2 且 URR ≥ 65%）由 91.3% 提升至 ≥ 95%',
-    plan: '1. 每月评估不达标患者，分析原因（透析时间不足/血流速不达/内瘘功能减退）；2. 对连续2次不达标患者调整处方；3. 加强内瘘评估，发现血流量不足及时干预',
-    leader: '任计阁（主治医生）',
-    startDate: '2026-01-01',
-    endDate: '2026-06-30',
-    status: 'ongoing',
-    progress: 65,
-    updates: [
-      { date: '2026-03-01', content: '3月Kt/V达标率提升至94.7%，连续2次不达标患者由5人降至2人', author: '任计阁' },
-      { date: '2026-02-01', content: '2月达标率93.2%，持续改进中，已对4名患者延长透析时间', author: '任计阁' },
-      { date: '2026-01-15', content: '启动改进计划，基线评估：91.3%达标', author: '任计阁' },
-    ],
-  },
-  {
-    key: '2',
-    title: '降低穿刺损伤发生率至 <0.3%',
-    category: '穿刺护理',
-    problem: '2025年穿刺损伤率为 0.52%（血肿5次/967次），超过目标值 <0.3%',
-    goal: '将AVF/AVG穿刺损伤发生率由0.52%降至<0.3%',
-    plan: '1. 加强护士绳梯穿刺培训，规范穿刺技术；2. 建立穿刺困难患者档案，制定个性化穿刺方案；3. 三次穿刺困难自动触发评估预警',
-    leader: '杨晨（护士长）',
-    startDate: '2026-01-01',
-    endDate: '2026-06-30',
-    status: 'ongoing',
-    progress: 40,
-    updates: [
-      { date: '2026-03-01', content: '3月穿刺损伤率0.46%，较基线有改善，培训已完成3轮', author: '杨晨' },
-    ],
-  },
-  {
-    key: '3',
-    title: '传染病复查到期率降至 0%',
-    category: '感染管理',
-    problem: '2025年多次出现传染病复查超期情况，影响隔离区管理规范性',
-    goal: '确保所有在透患者传染病筛查均在有效期内，超期率 = 0%',
-    plan: '1. 系统提前25天自动发出复查提醒；2. 护士长每周审查复查状态；3. 超期15天前与家属联系确认复查时间',
-    leader: '杨晨（护士长）',
-    startDate: '2025-10-01',
-    endDate: '2025-12-31',
-    status: 'completed',
-    progress: 100,
-    updates: [
-      { date: '2025-12-31', content: '2025年四季度实现传染病复查超期率0%，改进成功', author: '杨晨' },
-    ],
-  },
-  {
-    key: '4',
-    title: '肾性贫血Hb达标率提升至90%',
-    category: '贫血管理',
-    problem: '当前Hb达标率（≥110g/L）仅82.1%，低于目标85%（计划更进一步至90%）',
-    goal: 'Hb ≥ 110g/L 达标率提升至 90%',
-    plan: '1. 对Hb<110g/L患者每月复查；2. 评估EPO剂量是否合理；3. 检查铁储备（SF/TSAT），必要时补铁治疗',
-    leader: '任计阁（主治医生）',
-    startDate: '2026-04-01',
-    endDate: '2026-12-31',
-    status: 'planning',
-    progress: 0,
-    updates: [],
-  },
-];
-
-const STATUS_CFG: Record<string, { label: string; color: string; bg: string }> = {
-  ongoing:   { label: '进行中', color: '#0369A1', bg: '#E0F2FE' },
+const STATUS_CFG: Record<CqiStatus, { label: string; color: string; bg: string }> = {
+  ongoing: { label: '进行中', color: '#0369A1', bg: '#E0F2FE' },
   completed: { label: '已完成', color: '#059669', bg: '#ECFDF5' },
-  overdue:   { label: '已超期', color: '#BE123C', bg: '#FFF1F2' },
-  planning:  { label: '计划中', color: '#7C3AED', bg: '#FAF5FF' },
+  overdue: { label: '已超期', color: '#BE123C', bg: '#FFF1F2' },
+  planning: { label: '计划中', color: '#7C3AED', bg: '#FAF5FF' },
 };
 
-const CATEGORIES = ['全部类别', '透析充分性', '穿刺护理', '感染管理', '贫血管理', 'CKD-MBD', '护患比'];
+/** 与需求 3.13.1 改进项目下拉一致 */
+const CATEGORIES = [
+  '血管通路',
+  '透析充分性',
+  '感染控制',
+  '并发症管理',
+  '护患比',
+  '其他',
+];
+
+const ROLE_LABEL: Record<string, string> = {
+  admin: '管理',
+  doctor: '医师',
+  head_nurse: '护士长',
+  nurse: '护士',
+  quality: '质控',
+  qc: '质控',
+};
+
+const DEFECT_TYPES: { value: DefectEventType; label: string }[] = [
+  { value: 'operation_error', label: '操作差错' },
+  { value: 'equipment_failure', label: '设备故障' },
+  { value: 'infection_event', label: '感染事件' },
+  { value: 'medication_error', label: '用药错误' },
+  { value: 'other', label: '其他' },
+];
+
+type LocationDraft = {
+  problem_found?: string;
+  measures?: string;
+  title?: string;
+};
+
+function roleShort(role: string): string {
+  return ROLE_LABEL[role] ?? role;
+}
 
 export default function CQIPage() {
-  const [selectedPlan, setSelectedPlan] = useState<CQIPlan | null>(null);
+  const location = useLocation();
+  const { canEditCqi, canReportDefect } = usePermission();
+  const [tab, setTab] = useState<'cqi' | 'defects'>('cqi');
+
+  const [list, setList] = useState<CqiRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [loading, setLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<CqiStatus | ''>('');
+
+  const [selected, setSelected] = useState<CqiRecord | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
   const [showNewModal, setShowNewModal] = useState(false);
-  const [categoryFilter, setCategoryFilter] = useState('全部类别');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [userOptions, setUserOptions] = useState<CqiUserOption[]>([]);
+
+  const [defects, setDefects] = useState<DefectReport[]>([]);
+  const [defectLoading, setDefectLoading] = useState(false);
+  const [defectModal, setDefectModal] = useState(false);
+
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
+  const [defectForm] = Form.useForm();
 
-  const filtered = CQI_DATA.filter(p => {
-    if (categoryFilter !== '全部类别' && p.category !== categoryFilter) return false;
-    if (statusFilter && p.status !== statusFilter) return false;
-    return true;
-  });
+  const userSelectOptions = useMemo(
+    () =>
+      userOptions.map((u) => ({
+        value: u.id,
+        label: `${u.real_name}（${roleShort(u.role)}）`,
+      })),
+    [userOptions],
+  );
 
-  const ongoingCount   = CQI_DATA.filter(p => p.status === 'ongoing').length;
-  const completedCount = CQI_DATA.filter(p => p.status === 'completed').length;
-  const planningCount  = CQI_DATA.filter(p => p.status === 'planning').length;
+  const loadUserOptions = useCallback(async () => {
+    if (!canEditCqi) return;
+    try {
+      const res = await cqiApi.userOptions();
+      setUserOptions(res.data.data ?? []);
+    } catch {
+      setUserOptions([]);
+    }
+  }, [canEditCqi]);
+
+  useEffect(() => {
+    void loadUserOptions();
+  }, [loadUserOptions]);
+
+  const loadList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await cqiApi.list({
+        page,
+        page_size: pageSize,
+        status: statusFilter || undefined,
+      });
+      const payload = res.data.data;
+      setList(payload?.data ?? []);
+      setTotal(payload?.total ?? 0);
+    } catch {
+      setList([]);
+      setTotal(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, statusFilter]);
+
+  useEffect(() => {
+    loadList();
+  }, [loadList]);
+
+  const loadDefects = useCallback(async () => {
+    setDefectLoading(true);
+    try {
+      const res = await cqiApi.listDefects();
+      setDefects(res.data.data ?? []);
+    } catch {
+      setDefects([]);
+    } finally {
+      setDefectLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'defects') loadDefects();
+  }, [tab, loadDefects]);
+
+  useEffect(() => {
+    const st = location.state as { cqiDraft?: LocationDraft } | null;
+    const d = st?.cqiDraft;
+    if (d && (d.problem_found || d.measures || d.title)) {
+      form.setFieldsValue({
+        title: d.title || '',
+        problem_found: d.problem_found || '',
+        measures: d.measures || '',
+      });
+      setShowNewModal(true);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, form]);
+
+  const openDetail = async (row: CqiRecord) => {
+    setSelected(row);
+    setDetailLoading(true);
+    try {
+      const res = await cqiApi.get(row.id);
+      const r = res.data.data;
+      if (r) setSelected(r);
+    } catch {
+      message.error('加载详情失败');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    const v = await form.validateFields();
+    setSaving(true);
+    try {
+      await cqiApi.create({
+        project_type: v.category,
+        title: v.title,
+        problem_found: v.problem_found,
+        measures: v.measures,
+        start_date: v.startDate ? dayjs(v.startDate).format('YYYY-MM-DD') : undefined,
+        target_description: v.goal || undefined,
+        target_value: v.target_value != null ? Number(v.target_value) : undefined,
+        target_unit: v.target_unit || undefined,
+        notes: v.leaderNote || undefined,
+        status: v.initialStatus || 'ongoing',
+        leader_id: v.leader_id || undefined,
+        root_cause: v.root_cause || undefined,
+        participants: Array.isArray(v.participants) ? v.participants : [],
+        review_date: v.review_date ? dayjs(v.review_date).format('YYYY-MM-DD') : undefined,
+      });
+      message.success('CQI 项目已创建');
+      setShowNewModal(false);
+      form.resetFields();
+      loadList();
+    } catch {
+      /* 校验或接口错误已提示 */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openEdit = () => {
+    if (!selected) return;
+    editForm.setFieldsValue({
+      status: selected.status,
+      problem_found: selected.problem_found,
+      root_cause: selected.root_cause,
+      target_description: selected.target_description,
+      target_value: selected.target_value != null ? Number(selected.target_value) : undefined,
+      target_unit: selected.target_unit,
+      measures: selected.measures,
+      leader_id: selected.leader_id,
+      participants: selected.participants ?? [],
+      review_date: selected.review_date ? dayjs(selected.review_date) : undefined,
+      implementation_notes: selected.implementation_notes,
+      implementation_date: selected.implementation_date ? dayjs(selected.implementation_date) : undefined,
+      outcome: selected.outcome,
+      effect_description: selected.effect_description,
+      actual_value: selected.actual_value != null ? Number(selected.actual_value) : undefined,
+      is_goal_achieved: selected.is_goal_achieved,
+      summary: selected.summary,
+      actual_end_date: selected.actual_end_date ? dayjs(selected.actual_end_date) : undefined,
+      director_sign_id: selected.director_sign_id,
+      director_sign_date: selected.director_sign_date ? dayjs(selected.director_sign_date) : undefined,
+      notes: selected.notes,
+    });
+    setShowEditModal(true);
+  };
+
+  const handleUpdate = async () => {
+    if (!selected) return;
+    const v = await editForm.validateFields();
+    setSaving(true);
+    try {
+      await cqiApi.update(selected.id, {
+        status: v.status,
+        problem_found: v.problem_found,
+        root_cause: v.root_cause,
+        target_description: v.target_description,
+        target_value: v.target_value != null && v.target_value !== '' ? Number(v.target_value) : null,
+        target_unit: v.target_unit,
+        measures: v.measures,
+        leader_id: v.leader_id ?? null,
+        participants: Array.isArray(v.participants) ? v.participants : [],
+        review_date: v.review_date ? dayjs(v.review_date).format('YYYY-MM-DD') : null,
+        implementation_notes: v.implementation_notes,
+        implementation_date: v.implementation_date
+          ? dayjs(v.implementation_date).format('YYYY-MM-DD')
+          : null,
+        outcome: v.outcome,
+        effect_description: v.effect_description,
+        actual_value: v.actual_value != null && v.actual_value !== '' ? Number(v.actual_value) : null,
+        is_goal_achieved: v.is_goal_achieved ?? null,
+        summary: v.summary,
+        actual_end_date: v.actual_end_date
+          ? dayjs(v.actual_end_date).format('YYYY-MM-DD')
+          : undefined,
+        director_sign_id: v.director_sign_id ?? null,
+        director_sign_date: v.director_sign_date
+          ? dayjs(v.director_sign_date).format('YYYY-MM-DD')
+          : null,
+        notes: v.notes,
+      });
+      message.success('已保存');
+      setShowEditModal(false);
+      setSelected(null);
+      loadList();
+    } catch {
+      /* */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDefectSubmit = async () => {
+    const v = await defectForm.validateFields();
+    setSaving(true);
+    try {
+      await cqiApi.createDefect({
+        event_time: dayjs(v.event_time).toISOString(),
+        event_type: v.event_type,
+        severity: v.severity || 'minor',
+        description: v.description,
+        immediate_action: v.immediate_action,
+        anonymous: v.anonymous,
+      });
+      message.success('缺陷已上报');
+      setDefectModal(false);
+      defectForm.resetFields();
+      loadDefects();
+    } catch {
+      /* */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const ongoingCount = list.filter((p) => p.status === 'ongoing').length;
+  const completedCount = list.filter((p) => p.status === 'completed').length;
+  const planningCount = list.filter((p) => p.status === 'planning').length;
+
+  const defectColumns: ColumnsType<DefectReport> = [
+    {
+      title: '事件时间',
+      dataIndex: 'event_time',
+      width: 170,
+      render: (t: string) => dayjs(t).format('YYYY-MM-DD HH:mm'),
+    },
+    { title: '类型', dataIndex: 'event_type', width: 120 },
+    {
+      title: '严重程度',
+      dataIndex: 'severity',
+      width: 90,
+      render: (s: string) => (
+        <Tag color={s === 'serious' ? 'red' : s === 'moderate' ? 'orange' : 'default'}>{s}</Tag>
+      ),
+    },
+    {
+      title: '描述',
+      dataIndex: 'description',
+      ellipsis: true,
+    },
+    { title: '上报人', dataIndex: 'reported_by_name', width: 100 },
+  ];
+
+  const detailCollapseItems = selected
+    ? [
+        {
+          key: 'p',
+          label: 'P 计划：问题与目标',
+          children: (
+            <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.75 }}>
+              <p>
+                <strong>问题：</strong>
+                {selected.problem_found}
+              </p>
+              {selected.root_cause ? (
+                <p>
+                  <strong>原因分析：</strong>
+                  {selected.root_cause}
+                </p>
+              ) : null}
+              <p>
+                <strong>预期目标：</strong>
+                {selected.target_description || '—'}
+                {selected.target_value != null && (
+                  <span>
+                    {' '}
+                    （目标值 {String(selected.target_value)}
+                    {selected.target_unit ? ` ${selected.target_unit}` : ''}）
+                  </span>
+                )}
+              </p>
+              <p>
+                <strong>改进措施：</strong>
+                <span style={{ whiteSpace: 'pre-line' }}>{selected.measures}</span>
+              </p>
+              <p>
+                <strong>质控小组负责人：</strong>
+                {selected.leader_name || '—'}
+              </p>
+              <p>
+                <strong>参与人员：</strong>
+                {selected.participant_users?.length
+                  ? selected.participant_users.map((u) => u.real_name).join('、')
+                  : '—'}
+              </p>
+              {selected.review_date ? (
+                <p>
+                  <strong>计划复盘日：</strong>
+                  {selected.review_date}
+                </p>
+              ) : null}
+            </div>
+          ),
+        },
+        {
+          key: 'd',
+          label: 'D 实施',
+          children: (
+            <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.75 }}>
+              <p>
+                <strong>实施记录：</strong>
+                {selected.implementation_notes || '—'}
+              </p>
+              {selected.implementation_date ? (
+                <p>
+                  <strong>实施节点日期：</strong>
+                  {selected.implementation_date}
+                </p>
+              ) : null}
+            </div>
+          ),
+        },
+        {
+          key: 'c',
+          label: 'C 评估',
+          children: (
+            <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.75 }}>
+              <p>
+                <strong>结果评价：</strong>
+                {selected.outcome || '—'}
+              </p>
+              <p>
+                <strong>改进效果：</strong>
+                {selected.effect_description || '—'}
+              </p>
+              <p>
+                <strong>实际值：</strong>
+                {selected.actual_value != null ? String(selected.actual_value) : '—'}
+              </p>
+              <p>
+                <strong>是否达标：</strong>
+                {selected.is_goal_achieved === true
+                  ? '是'
+                  : selected.is_goal_achieved === false
+                    ? '否'
+                    : '—'}
+              </p>
+            </div>
+          ),
+        },
+        {
+          key: 'a',
+          label: 'A 处理与确认',
+          children: (
+            <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.75 }}>
+              <p>
+                <strong>标准化总结：</strong>
+                {selected.summary || '—'}
+              </p>
+              <p>
+                <strong>科主任签名：</strong>
+                {selected.director_sign_name || '—'}{' '}
+                {selected.director_sign_date ? `（${selected.director_sign_date}）` : ''}
+              </p>
+              {selected.actual_end_date ? (
+                <p>
+                  <strong>实际结束日期：</strong>
+                  {selected.actual_end_date}
+                </p>
+              ) : null}
+              {selected.notes ? (
+                <p>
+                  <strong>备注：</strong>
+                  {selected.notes}
+                </p>
+              ) : null}
+            </div>
+          ),
+        },
+      ]
+    : [];
 
   return (
     <PageShell fullWidth>
-      {/* 概览 */}
-      <div className="grid-4" style={{ marginBottom: 20 }}>
-        <div className="hd-stat-card teal">
-          <div className="hd-stat-icon">🔄</div>
-          <div className="hd-stat-label">改进项目总数</div>
-          <div className="hd-stat-value num">{CQI_DATA.length}</div>
-          <div className="hd-stat-meta">当前管理中</div>
-        </div>
-        <div className="hd-stat-card blue">
-          <div className="hd-stat-icon">⚡</div>
-          <div className="hd-stat-label">进行中</div>
-          <div className="hd-stat-value num" style={{ color: '#0369A1' }}>{ongoingCount}</div>
-          <div className="hd-stat-meta">需持续跟进</div>
-        </div>
-        <div className="hd-stat-card teal">
-          <div className="hd-stat-icon">✅</div>
-          <div className="hd-stat-label">已完成</div>
-          <div className="hd-stat-value num" style={{ color: '#059669' }}>{completedCount}</div>
-          <div className="hd-stat-meta">改进目标达成</div>
-        </div>
-        <div className="hd-stat-card blue">
-          <div className="hd-stat-icon">📋</div>
-          <div className="hd-stat-label">计划中</div>
-          <div className="hd-stat-value num" style={{ color: '#7C3AED' }}>{planningCount}</div>
-          <div className="hd-stat-meta">待启动</div>
-        </div>
-      </div>
-
-      {/* 筛选 + 新建 */}
-      <div className="flex gap-8 items-center" style={{ marginBottom: 16 }}>
-        <Select value={categoryFilter} onChange={setCategoryFilter} style={{ width: 140 }}
-          options={CATEGORIES.map(c => ({ value: c, label: c }))} />
-        <Select placeholder="全部状态" value={statusFilter || undefined} onChange={v => setStatusFilter(v || '')} style={{ width: 130 }} allowClear
-          options={Object.entries(STATUS_CFG).map(([k, v]) => ({ value: k, label: v.label }))} />
-        <div style={{ marginLeft: 'auto' }}>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowNewModal(true)}>
-            新建改进计划
-          </Button>
-        </div>
-      </div>
-
-      {/* 计划列表 */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {filtered.map(plan => {
-          const s = STATUS_CFG[plan.status];
-          return (
-            <Card key={plan.key}
-              style={{ border: '1px solid #DBEAFE', cursor: 'pointer', transition: 'box-shadow 0.2s' }}
-              styles={{ body: { padding: '16px 20px' } }}
-              onClick={() => setSelectedPlan(plan)}
-              hoverable
-            >
-              <div className="flex items-start gap-16">
-                <div style={{ flex: 1 }}>
-                  <div className="flex items-center gap-8" style={{ marginBottom: 8 }}>
-                    <span style={{ fontWeight: 600, fontSize: 15, color: '#0D1B3E' }}>{plan.title}</span>
-                    <span style={{ background: s.bg, color: s.color, padding: '2px 9px', borderRadius: 20, fontSize: 12, fontWeight: 500 }}>
-                      {s.label}
-                    </span>
-                    <span style={{ background: '#EEF2FF', color: '#4338CA', padding: '2px 8px', borderRadius: 20, fontSize: 12 }}>
-                      {plan.category}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 13, color: '#3D5280', marginBottom: 8 }}>
-                    <strong>问题：</strong>{plan.problem}
-                  </div>
-                  <div style={{ fontSize: 13, color: '#3D5280', marginBottom: 12 }}>
-                    <strong>目标：</strong>{plan.goal}
-                  </div>
-                  <div className="flex items-center gap-16">
-                    <span style={{ fontSize: 12, color: '#7B92BC' }}>负责人：{plan.leader}</span>
-                    <span style={{ fontSize: 12, color: '#7B92BC' }}>周期：{plan.startDate} ~ {plan.endDate}</span>
-                    <span style={{ fontSize: 12, color: '#7B92BC' }}>最近更新：{plan.updates[0]?.date || '尚未更新'}</span>
-                  </div>
-                </div>
-                <div style={{ width: 120, textAlign: 'center', flexShrink: 0 }}>
-                  <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 6 }}>完成进度</div>
-                  <Progress
-                    type="circle"
-                    percent={plan.progress}
-                    size={80}
-                    strokeColor={s.color}
-                    format={p => <span style={{ fontSize: 14, fontWeight: 700, color: s.color }}>{p}%</span>}
-                  />
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* 计划详情弹窗 */}
-      <Modal
-        title={selectedPlan?.title}
-        open={!!selectedPlan}
-        onCancel={() => setSelectedPlan(null)}
-        footer={[
-          <Button key="close" onClick={() => setSelectedPlan(null)}>关闭</Button>,
-          <Button key="update" type="primary" onClick={() => { setSelectedPlan(null); message.info('进度更新功能开发中'); }}>
-            录入进度更新
-          </Button>,
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => setTab(k as 'cqi' | 'defects')}
+        items={[
+          { key: 'cqi', label: 'CQI 改进项目' },
+          { key: 'defects', label: <span><BugOutlined /> 缺陷 / 不良事件</span> },
         ]}
-        width={700}
-      >
-        {selectedPlan && (
-          <div>
-            <div className="grid-2" style={{ gap: 16, marginBottom: 16 }}>
-              <div style={{ padding: 14, background: '#F0F9FF', borderRadius: 8, border: '1px solid #BAE6FD' }}>
-                <div style={{ fontWeight: 600, color: '#0369A1', marginBottom: 8 }}>问题描述</div>
-                <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.7 }}>{selectedPlan.problem}</div>
-              </div>
-              <div style={{ padding: 14, background: '#ECFDF5', borderRadius: 8, border: '1px solid #6EE7B7' }}>
-                <div style={{ fontWeight: 600, color: '#059669', marginBottom: 8 }}>改进目标</div>
-                <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.7 }}>{selectedPlan.goal}</div>
-              </div>
+        style={{ marginBottom: 16 }}
+      />
+
+      {tab === 'cqi' && (
+        <>
+          <div className="grid-4" style={{ marginBottom: 20 }}>
+            <div className="hd-stat-card teal">
+              <div className="hd-stat-icon">🔄</div>
+              <div className="hd-stat-label">改进项目总数</div>
+              <div className="hd-stat-value num">{total}</div>
+              <div className="hd-stat-meta">当前列表</div>
             </div>
-            <div style={{ padding: 14, background: '#F8FAFC', borderRadius: 8, marginBottom: 16, border: '1px solid #DBEAFE' }}>
-              <div style={{ fontWeight: 600, color: '#3D5280', marginBottom: 8 }}>📋 改进措施</div>
-              <div style={{ fontSize: 13, color: '#3D5280', lineHeight: 1.8, whiteSpace: 'pre-line' }}>
-                {selectedPlan.plan}
+            <div className="hd-stat-card blue">
+              <div className="hd-stat-icon">⚡</div>
+              <div className="hd-stat-label">进行中</div>
+              <div className="hd-stat-value num" style={{ color: '#0369A1' }}>
+                {ongoingCount}
               </div>
+              <div className="hd-stat-meta">本页统计</div>
             </div>
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 10 }}>📝 进度记录</div>
-              {selectedPlan.updates.length > 0 ? (
-                selectedPlan.updates.map((u, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#0EA5E9', marginTop: 6, flexShrink: 0 }} />
-                    <div style={{ flex: 1 }}>
-                      <div className="flex items-center gap-8">
-                        <span className="num text-sm">{u.date}</span>
-                        <span style={{ fontSize: 12, color: '#7B92BC' }}>by {u.author}</span>
-                      </div>
-                      <div style={{ fontSize: 13, color: '#3D5280', marginTop: 3 }}>{u.content}</div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ color: '#7B92BC', fontSize: 13 }}>暂无进度记录</div>
+            <div className="hd-stat-card teal">
+              <div className="hd-stat-icon">✅</div>
+              <div className="hd-stat-label">已完成</div>
+              <div className="hd-stat-value num" style={{ color: '#059669' }}>
+                {completedCount}
+              </div>
+              <div className="hd-stat-meta">本页统计</div>
+            </div>
+            <div className="hd-stat-card blue">
+              <div className="hd-stat-icon">📋</div>
+              <div className="hd-stat-label">计划中</div>
+              <div className="hd-stat-value num" style={{ color: '#7C3AED' }}>
+                {planningCount}
+              </div>
+              <div className="hd-stat-meta">本页统计</div>
+            </div>
+          </div>
+
+          <div className="flex gap-8 items-center" style={{ marginBottom: 16 }}>
+            <Select
+              placeholder="全部状态"
+              value={statusFilter || undefined}
+              onChange={(v) => {
+                setStatusFilter(v || '');
+                setPage(1);
+              }}
+              style={{ width: 130 }}
+              allowClear
+              options={Object.entries(STATUS_CFG).map(([k, v]) => ({ value: k, label: v.label }))}
+            />
+            <div style={{ marginLeft: 'auto' }}>
+              {canEditCqi && (
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowNewModal(true)}>
+                  新建改进计划
+                </Button>
               )}
             </div>
           </div>
-        )}
+
+          <Spin spinning={loading}>
+            {list.length === 0 && !loading ? (
+              <Empty description="暂无 CQI 记录" />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {list.map((plan) => {
+                  const s = STATUS_CFG[plan.status] ?? STATUS_CFG.ongoing;
+                  const progressGuess =
+                    plan.status === 'completed'
+                      ? 100
+                      : plan.status === 'planning'
+                        ? 0
+                        : plan.status === 'overdue'
+                          ? 30
+                          : 50;
+                  return (
+                    <Card
+                      key={plan.id}
+                      style={{ border: '1px solid #DBEAFE', cursor: 'pointer', transition: 'box-shadow 0.2s' }}
+                      styles={{ body: { padding: '16px 20px' } }}
+                      onClick={() => openDetail(plan)}
+                      hoverable
+                    >
+                      <div className="flex items-start gap-16">
+                        <div style={{ flex: 1 }}>
+                          <div className="flex items-center gap-8" style={{ marginBottom: 8 }}>
+                            <span style={{ fontWeight: 600, fontSize: 15, color: '#0D1B3E' }}>
+                              {plan.title}
+                            </span>
+                            <span
+                              style={{
+                                background: s.bg,
+                                color: s.color,
+                                padding: '2px 9px',
+                                borderRadius: 20,
+                                fontSize: 12,
+                                fontWeight: 500,
+                              }}
+                            >
+                              {s.label}
+                            </span>
+                            <span
+                              style={{
+                                background: '#EEF2FF',
+                                color: '#4338CA',
+                                padding: '2px 8px',
+                                borderRadius: 20,
+                                fontSize: 12,
+                              }}
+                            >
+                              {plan.project_type}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 13, color: '#3D5280', marginBottom: 8 }}>
+                            <strong>问题：</strong>
+                            {plan.problem_found}
+                          </div>
+                          <div style={{ fontSize: 13, color: '#3D5280', marginBottom: 12 }}>
+                            <strong>目标：</strong>
+                            {plan.target_description || '—'}
+                          </div>
+                          <div className="flex items-center gap-16">
+                            <span style={{ fontSize: 12, color: '#7B92BC' }}>
+                              创建：{plan.created_by_name || '—'}
+                            </span>
+                            <span style={{ fontSize: 12, color: '#7B92BC' }}>
+                              开始：{plan.start_date}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ width: 120, textAlign: 'center', flexShrink: 0 }}>
+                          <div style={{ fontSize: 12, color: '#7B92BC', marginBottom: 6 }}>参考进度</div>
+                          <Progress
+                            type="circle"
+                            percent={progressGuess}
+                            size={80}
+                            strokeColor={s.color}
+                            format={(p) => (
+                              <span style={{ fontSize: 14, fontWeight: 700, color: s.color }}>{p}%</span>
+                            )}
+                          />
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </Spin>
+
+          {total > pageSize && (
+            <div style={{ marginTop: 16, textAlign: 'right' }}>
+              <Button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                上一页
+              </Button>
+              <span style={{ margin: '0 12px' }}>
+                {page} / {Math.ceil(total / pageSize) || 1}
+              </span>
+              <Button disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>
+                下一页
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'defects' && (
+        <Card>
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            {canReportDefect && (
+              <Button type="primary" onClick={() => setDefectModal(true)}>
+                上报缺陷 / 不良事件
+              </Button>
+            )}
+          </div>
+          <Spin spinning={defectLoading}>
+            <Table rowKey="id" columns={defectColumns} dataSource={defects} pagination={false} />
+          </Spin>
+        </Card>
+      )}
+
+      <Modal
+        title={selected?.title}
+        open={!!selected}
+        onCancel={() => setSelected(null)}
+        footer={[
+          <Button key="close" onClick={() => setSelected(null)}>
+            关闭
+          </Button>,
+          ...(canEditCqi
+            ? [
+                <Button key="edit" type="primary" onClick={openEdit}>
+                  编辑（PDCA）
+                </Button>,
+              ]
+            : []),
+        ]}
+        width={760}
+      >
+        <Spin spinning={detailLoading}>
+          {selected && (
+            <div>
+              <div style={{ marginBottom: 12, fontSize: 12, color: '#64748B' }}>
+                状态：<Tag>{STATUS_CFG[selected.status]?.label ?? selected.status}</Tag>
+                <span style={{ marginLeft: 12 }}>创建人：{selected.created_by_name || '—'}</span>
+              </div>
+              <Collapse items={detailCollapseItems} defaultActiveKey={['p', 'd', 'c', 'a']} />
+            </div>
+          )}
+        </Spin>
       </Modal>
 
-      {/* 新建计划弹窗 */}
       <Modal
-        title="新建CQI改进计划"
+        title="编辑 CQI（PDCA）"
+        open={showEditModal}
+        onOk={handleUpdate}
+        onCancel={() => setShowEditModal(false)}
+        confirmLoading={saving}
+        okText="保存"
+        width={640}
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
+      >
+        <Form form={editForm} layout="vertical" size="middle">
+          <Divider orientation="left">P 计划</Divider>
+          <Form.Item name="problem_found" label="发现的问题" rules={[{ required: true }]}>
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="root_cause" label="原因分析">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="target_description" label="预期目标（文字）">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item label="目标值 / 单位">
+            <div className="flex gap-8">
+              <Form.Item name="target_value" noStyle>
+                <Input type="number" placeholder="数值" style={{ width: 140 }} />
+              </Form.Item>
+              <Form.Item name="target_unit" noStyle>
+                <Input placeholder="单位，如 %" style={{ width: 120 }} />
+              </Form.Item>
+            </div>
+          </Form.Item>
+          <Form.Item name="measures" label="改进措施" rules={[{ required: true }]}>
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="leader_id" label="质控小组负责人">
+            <Select allowClear options={userSelectOptions} placeholder="默认当前创建人" showSearch optionFilterProp="label" />
+          </Form.Item>
+          <Form.Item name="participants" label="参与人员">
+            <Select mode="multiple" options={userSelectOptions} placeholder="多选" showSearch optionFilterProp="label" />
+          </Form.Item>
+          <Form.Item name="review_date" label="计划复盘日">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Divider orientation="left">D 实施</Divider>
+          <Form.Item name="implementation_notes" label="实施记录">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="implementation_date" label="实施节点日期">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Divider orientation="left">C 评估</Divider>
+          <Form.Item name="outcome" label="结果评价">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="effect_description" label="改进效果说明">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="actual_value" label="实际值">
+            <Input type="number" />
+          </Form.Item>
+          <Form.Item name="is_goal_achieved" label="是否达标" valuePropName="checked">
+            <Checkbox />
+          </Form.Item>
+
+          <Divider orientation="left">A 处理</Divider>
+          <Form.Item name="summary" label="标准化总结">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="status" label="状态" rules={[{ required: true }]}>
+            <Select options={Object.entries(STATUS_CFG).map(([k, v]) => ({ value: k, label: v.label }))} />
+          </Form.Item>
+          <Form.Item name="actual_end_date" label="实际结束日期">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="director_sign_id" label="科主任签名（选用户）">
+            <Select allowClear options={userSelectOptions} showSearch optionFilterProp="label" />
+          </Form.Item>
+          <Form.Item name="director_sign_date" label="科主任签名日期">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="notes" label="备注">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="新建 CQI 改进计划"
         open={showNewModal}
-        onOk={() => form.validateFields().then(() => { setShowNewModal(false); form.resetFields(); message.success('改进计划已创建'); })}
-        onCancel={() => { setShowNewModal(false); form.resetFields(); }}
+        onOk={handleCreate}
+        onCancel={() => {
+          setShowNewModal(false);
+          form.resetFields();
+        }}
+        confirmLoading={saving}
         okText="创建计划"
         cancelText="取消"
-        width={600}
+        width={640}
       >
         <Form form={form} layout="vertical" size="middle" style={{ marginTop: 16 }}>
           <Form.Item label="计划标题" name="title" rules={[{ required: true }]}>
-            <Input placeholder="如：提升Kt/V达标率至95%以上" />
+            <Input placeholder="如：提升 Kt/V 达标率" />
           </Form.Item>
-          <div className="grid-2" style={{ gap: 16 }}>
-            <Form.Item label="改进类别" name="category" rules={[{ required: true }]}>
-              <Select options={CATEGORIES.slice(1).map(c => ({ value: c, label: c }))} />
-            </Form.Item>
-            <Form.Item label="负责人" name="leader" rules={[{ required: true }]}>
-              <Input placeholder="如：任计阁（主治医生）" />
-            </Form.Item>
-          </div>
-          <div className="grid-2" style={{ gap: 16 }}>
-            <Form.Item label="开始日期" name="startDate" rules={[{ required: true }]}>
-              <DatePicker style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item label="目标完成日期" name="endDate" rules={[{ required: true }]}>
-              <DatePicker style={{ width: '100%' }} />
-            </Form.Item>
-          </div>
-          <Form.Item label="问题描述" name="problem" rules={[{ required: true }]}>
-            <Input.TextArea rows={2} placeholder="描述当前存在的质量问题…" />
+          <Form.Item label="改进项目" name="category" rules={[{ required: true }]}>
+            <Select options={CATEGORIES.map((c) => ({ value: c, label: c }))} />
           </Form.Item>
-          <Form.Item label="改进目标" name="goal" rules={[{ required: true }]}>
-            <Input.TextArea rows={2} placeholder="明确可量化的改进目标…" />
+          <Form.Item label="开始日期" name="startDate" rules={[{ required: true }]}>
+            <DatePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="改进措施" name="plan" rules={[{ required: true }]}>
-            <Input.TextArea rows={4} placeholder="列出具体改进措施（建议分条描述）…" />
+          <Form.Item label="初始状态" name="initialStatus" initialValue="ongoing">
+            <Select options={Object.entries(STATUS_CFG).map(([k, v]) => ({ value: k, label: v.label }))} />
+          </Form.Item>
+          <Form.Item label="质控小组负责人" name="leader_id">
+            <Select allowClear options={userSelectOptions} showSearch optionFilterProp="label" />
+          </Form.Item>
+          <Form.Item label="参与人员" name="participants">
+            <Select mode="multiple" options={userSelectOptions} showSearch optionFilterProp="label" />
+          </Form.Item>
+          <Form.Item label="发现的问题" name="problem_found" rules={[{ required: true }]}>
+            <Input.TextArea rows={2} placeholder="描述质量问题" />
+          </Form.Item>
+          <Form.Item label="原因分析" name="root_cause">
+            <Input.TextArea rows={2} placeholder="鱼骨图 / 5-Why 等简要记录" />
+          </Form.Item>
+          <Form.Item label="预期目标" name="goal">
+            <Input.TextArea rows={2} placeholder="可量化目标（文字）" />
+          </Form.Item>
+          <Form.Item label="目标值 / 单位">
+            <div className="flex gap-8">
+              <Form.Item name="target_value" noStyle>
+                <Input type="number" placeholder="数值" style={{ width: 140 }} />
+              </Form.Item>
+              <Form.Item name="target_unit" noStyle>
+                <Input placeholder="单位" style={{ width: 120 }} />
+              </Form.Item>
+            </div>
+          </Form.Item>
+          <Form.Item label="计划复盘日" name="review_date">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="改进措施" name="measures" rules={[{ required: true }]}>
+            <Input.TextArea rows={4} placeholder="具体改进措施与分工" />
+          </Form.Item>
+          <Form.Item label="备注" name="leaderNote">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="上报缺陷 / 不良事件"
+        open={defectModal}
+        onOk={handleDefectSubmit}
+        onCancel={() => {
+          setDefectModal(false);
+          defectForm.resetFields();
+        }}
+        confirmLoading={saving}
+        width={520}
+      >
+        <Form form={defectForm} layout="vertical">
+          <Form.Item name="event_time" label="事件时间" rules={[{ required: true }]}>
+            <DatePicker showTime style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="event_type" label="事件类型" rules={[{ required: true }]}>
+            <Select options={DEFECT_TYPES} />
+          </Form.Item>
+          <Form.Item name="severity" label="严重程度" initialValue="minor">
+            <Select
+              options={[
+                { value: 'minor', label: '轻微' },
+                { value: 'moderate', label: '中等' },
+                { value: 'serious', label: '严重' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} placeholder="事件经过（可填「待补充」）" />
+          </Form.Item>
+          <Form.Item name="immediate_action" label="即时处理">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="anonymous" valuePropName="checked" initialValue={false}>
+            <Checkbox>匿名上报（后台仍记录操作账号）</Checkbox>
           </Form.Item>
         </Form>
       </Modal>

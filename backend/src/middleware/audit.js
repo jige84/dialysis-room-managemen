@@ -6,6 +6,15 @@
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');
 
+/** 审计表 new_values 为 JSONB：须为可序列化对象，避免 BigInt/循环引用导致 JSON.stringify 抛错拖垮业务响应 */
+function cloneBodyForAudit(body) {
+  try {
+    return JSON.parse(JSON.stringify(body ?? {}));
+  } catch {
+    return { _audit_note: 'request_body_not_serializable' };
+  }
+}
+
 /**
  * 创建审计日志
  * @param {string} tableName 操作的数据表
@@ -31,7 +40,7 @@ function auditLog(tableName, action) {
               action,
               tableName,
               body.data?.id || req.params?.id || null,
-              JSON.stringify(req.body || {}),
+              cloneBodyForAudit(req.body),
               req.ip || req.socket?.remoteAddress
             ]
           );

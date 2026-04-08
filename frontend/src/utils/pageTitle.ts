@@ -7,6 +7,7 @@
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': '今日概览',
   '/patients': '患者档案',
+  '/dialysis/today': '今日上机名单',
   '/dialysis/entry': '透析记录录入',
   '/prescription': '透析处方管理',
   '/orders': '长期医嘱单',
@@ -19,6 +20,11 @@ const PAGE_TITLES: Record<string, string> = {
   '/schedule': '排班管理',
   '/devices': '设备耗材',
   '/admin/users': '用户管理',
+  '/no-access': '无可用菜单权限',
+  '/ai/assistant': 'AI 分析助手',
+  '/ai/guidelines': '指南阅读中心',
+  '/ai/knowledge': '知识库管理',
+  '/ai/sites': '专业网站配置',
 };
 
 export function getPageTitle(pathname: string): string {

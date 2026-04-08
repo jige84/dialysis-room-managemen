@@ -1,10 +1,10 @@
 /**
  * 今日概览 / 工作台仪表盘页
  * 主要作用：展示关键运营与质控概览图表、快捷入口，登录后默认落地页之一。
- * 主要功能：Recharts 图表；筛选维度；与后端统计接口联动（依实现）。
+ * 主要功能：Recharts 图表；对接患者统计、透析日统计、今日排班、预警与月度质控月报。
  */
-import { useState } from 'react';
-import { Card, Tag, Button, Select, Table, Segmented } from 'antd';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Card, Tag, Button, Select, Table, Segmented, Spin, Empty, message } from 'antd';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -14,65 +14,23 @@ import {
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
-
-// ── 静态演示数据 ──────────────────────────────────────────
-const STATS = {
-  totalActive: 79,
-  vaDetail: 'AVF 61 · AVG 1 · TCC 4 · LTCC 4 · NCC 9',
-  completedToday: 24,
-  shiftDetail: '上午 8 · 下午 10 · 晚班 6 / 计划27例',
-  alertCount: 7,
-  alertDetail: '危急值 2 · 复查到期 5',
-  nurseRatio: '1:5.4',
-  ratioDetail: '5名护士 · 27例患者 · 符合规程',
-};
-
-const TODAY_SESSIONS = [
-  { key: '1', avatar: '张', name: '张国华', gender: '男', age: 56, diagnosis: '糖尿病肾病', shift: '下午班', machine: '5号机', access: 'AVF', zone: 'normal', dryWeight: 62.0, preWeight: 64.5, uf: 2500, ufAlert: false, status: 'ongoing', statusLabel: '透析中' },
-  { key: '2', avatar: '赵', name: '赵丽萍', gender: '女', age: 48, diagnosis: '糖尿病肾病', shift: '下午班', machine: '6号机', access: 'AVF', zone: 'normal', dryWeight: 52.0, preWeight: 55.2, uf: 3200, ufAlert: true, status: 'critical', statusLabel: 'K⁺危急值' },
-  { key: '3', avatar: '刘', name: '刘明远', gender: '男', age: 65, diagnosis: '多囊肾',    shift: '下午班', machine: '7号机', access: 'LTCC', zone: 'normal', dryWeight: 50.0, preWeight: 52.8, uf: 2800, ufAlert: false, status: 'ongoing', statusLabel: '透析中' },
-  { key: '4', avatar: '王', name: '王建军', gender: '男', age: 71, diagnosis: '高血压肾病', shift: '下午班', machine: 'HBV-01', access: 'AVF', zone: 'hbv', dryWeight: 57.5, preWeight: 60.0, uf: 2500, ufAlert: false, status: 'warning', statusLabel: 'Kt/V不达标' },
-];
-
-const ALERTS = [
-  { id: 1, level: 'danger',  icon: '⚡', title: '危急值 — 赵丽萍 血清钾 K⁺', desc: 'K⁺ = 6.8 mmol/L（正常 3.5–5.5）· 已超危急值6.5', time: '今日 09:42 · 责护：陈燕' },
-  { id: 2, level: 'warning', icon: '⚠️', title: 'Kt/V 不达标 — 王建军', desc: 'spKt/V = 1.05（标准 ≥1.2）· URR 58%（标准 ≥65%）', time: '2026-03-15 上次检测' },
-  { id: 3, level: 'warning', icon: '🦠', title: '传染病复查到期 — 李秀珍等3人', desc: 'HCV复查已到期（上次 2025-09-12）逾期 7 天', time: '应于 2026-03-12 前复查' },
-  { id: 4, level: 'info',    icon: '💧', title: '超滤量 > 5%干体重 — 刘明远', desc: '本次超滤 2800mL / 干体重 50kg · 比例 5.6%', time: '今日 14:30 · 已通知医生' },
-];
-
-const SCHEDULES = [
-  { shift: '上午班', count: 8,  nurses: '杨晨、陈燕',        ratio: '1:4.0', status: '已完成', level: 'done' },
-  { shift: '下午班', count: 10, nurses: '李梅、张颖、王芳',   ratio: '1:3.3', status: '进行中', level: 'ongoing' },
-  { shift: '晚班',   count: 9,  nurses: '刘娜、赵丽',        ratio: '1:4.5', status: '待开始', level: 'pending' },
-];
-
-const QC_INDICATORS = [
-  { index: '① 护患比',         value: '1:6.2', formula: '469次 ÷ 75护次',   color: '#10B981', barWidth: '85%', barClass: 'hd-qc-bar-good' },
-  { index: '② 凝血发生率',     value: '0.000', formula: '0次 ÷ 469次',       color: '#10B981', barWidth: '5%',  barClass: 'hd-qc-bar-good' },
-  { index: '③ 漏血发生率',     value: '0.000', formula: '0次 ÷ 469次',       color: '#10B981', barWidth: '5%',  barClass: 'hd-qc-bar-good' },
-  { index: '④ 穿刺损伤率',     value: '0.0046', formula: '2次 ÷ 433内瘘次', color: '#F59E0B', barWidth: '40%', barClass: 'hd-qc-bar-caution' },
-  { index: '⑤ CRBSI发生率',   value: '0.000‰', formula: '0例 ÷ 导管天数',   color: '#10B981', barWidth: '5%',  barClass: 'hd-qc-bar-good' },
-];
-
-// ── 图表专用数据 ───────────────────────────────────────────
-// 各指标占合规上限的百分比（护患比：实际值/标准×100%，其余同理）
-const QC_BAR_DATA = [
-  { name: '护患比',   pct: 124, value: '1:6.2',   standard: '≤ 1:5' },
-  { name: '凝血率',   pct: 0,   value: '0.000%',  standard: '< 0.5%' },
-  { name: '漏血率',   pct: 0,   value: '0.000%',  standard: '< 0.5%' },
-  { name: '穿刺损伤', pct: 46,  value: '0.46%',   standard: '< 1.0%' },
-  { name: 'CRBSI',   pct: 0,   value: '0.000‰',  standard: '< 1.0‰' },
-];
-
-// 雷达图：本月 vs 上月，均为占合规上限的百分比（100% = 合规边界）
-const QC_RADAR_DATA = [
-  { subject: '护患比',   本月: 124, 上月: 102, actual: '1:6.2',  prev: '1:5.1',  standard: '≤ 1:5' },
-  { subject: '凝血率',   本月: 0,   上月: 0,   actual: '0.000%', prev: '0.000%', standard: '< 0.5%' },
-  { subject: '漏血率',   本月: 0,   上月: 0,   actual: '0.000%', prev: '0.000%', standard: '< 0.5%' },
-  { subject: '穿刺损伤', 本月: 46,  上月: 38,  actual: '0.46%',  prev: '0.38%',  standard: '< 1.0%' },
-  { subject: 'CRBSI',   本月: 0,   上月: 0,   actual: '0.000‰', prev: '0.000‰', standard: '< 1.0‰' },
-];
+import { patientsApi, type PatientStats } from '../../api/patients';
+import dialysisApi, { type DailyDialysisStats } from '../../api/dialysis';
+import { scheduleApi, type TodaySchedulePatientRow, type WeekScheduleResponse, type ShiftKey } from '../../api/schedule';
+import alertsApi, { type AlertItem, type AlertSummary } from '../../api/alerts';
+import reportsApi, { type QCReport, type QcTrendRow } from '../../api/reports';
+import {
+  buildQcBarDataFromReport,
+  buildQcIndicatorCardsFromReport,
+  buildQcRadarFromReports,
+  buildQcTrendFromRows,
+  getWeekStartMonday,
+  mapScheduleRowToDashboardSession,
+  scheduleMatchesShiftFilter,
+  shiftSnapshotMeta,
+  type DashboardSessionRow,
+  type QcRadarRow,
+} from './dashboardHelpers';
 
 const TREND_OPTIONS = [
   { key: 'nurseRatio',  label: '护患比',      standard: 5.0, unit: '',  color: '#6366F1' },
@@ -84,20 +42,12 @@ const TREND_OPTIONS = [
 
 type TrendKey = typeof TREND_OPTIONS[number]['key'];
 
-// 近6个月实际值（2025年10月 — 2026年3月）
-const QC_TREND_DATA = [
-  { month: '10月', nurseRatio: 5.8, coagulation: 0.42, bloodLeak: 0.00, puncture: 0.42, crbsi: 0.00 },
-  { month: '11月', nurseRatio: 5.2, coagulation: 0.21, bloodLeak: 0.00, puncture: 0.39, crbsi: 0.00 },
-  { month: '12月', nurseRatio: 6.0, coagulation: 0.00, bloodLeak: 0.21, puncture: 0.44, crbsi: 0.00 },
-  { month: '1月',  nurseRatio: 5.5, coagulation: 0.00, bloodLeak: 0.00, puncture: 0.51, crbsi: 0.00 },
-  { month: '2月',  nurseRatio: 5.1, coagulation: 0.00, bloodLeak: 0.00, puncture: 0.38, crbsi: 0.00 },
-  { month: '3月',  nurseRatio: 6.2, coagulation: 0.00, bloodLeak: 0.00, puncture: 0.46, crbsi: 0.00 },
-];
+type QcBarDatum = ReturnType<typeof buildQcBarDataFromReport>[number];
 
 // ── 图表 Tooltip 组件 ──────────────────────────────────────
 interface QcBarTooltipProps {
   active?: boolean;
-  payload?: Array<{ payload: typeof QC_BAR_DATA[number] }>;
+  payload?: Array<{ payload: QcBarDatum }>;
 }
 
 const QcBarTooltip = ({ active, payload }: QcBarTooltipProps) => {
@@ -145,11 +95,12 @@ interface QcRadarTooltipProps {
   active?: boolean;
   payload?: ReadonlyArray<{ value?: unknown; name?: unknown; color?: string }>;
   label?: string | number;
+  radarRows: QcRadarRow[];
 }
 
-const QcRadarTooltip = ({ active, payload, label }: QcRadarTooltipProps) => {
+const QcRadarTooltip = ({ active, payload, label, radarRows }: QcRadarTooltipProps) => {
   if (!active || !payload?.length) return null;
-  const row = QC_RADAR_DATA.find(d => d.subject === String(label));
+  const row = radarRows.find(d => d.subject === String(label));
   return (
     <div style={{ background: '#fff', border: '1px solid #E8F0FB', borderRadius: 8, padding: '10px 14px', fontSize: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.08)', minWidth: 180 }}>
       <div style={{ fontWeight: 600, marginBottom: 6, color: '#0D1B3E' }}>{label}</div>
@@ -188,50 +139,176 @@ const AccessBadge = ({ type }: { type: string }) => {
   );
 };
 
+function alertDisplayMeta(a: AlertItem): { level: string; icon: string } {
+  if (a.severity === 'emergency' || a.severity === 'critical') return { level: 'danger', icon: '⚡' };
+  if (a.severity === 'warning') return { level: 'warning', icon: '⚠️' };
+  return { level: 'info', icon: 'ℹ️' };
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const [shiftFilter, setShiftFilter] = useState('pm');
+  const [loading, setLoading] = useState(true);
+  const [shiftFilter, setShiftFilter] = useState('all');
   const [qcViewType, setQcViewType] = useState<'card' | 'bar' | 'radar' | 'trend'>('card');
   const [trendKey, setTrendKey] = useState<TrendKey>('nurseRatio');
 
-  const currentTrendOpt = TREND_OPTIONS.find(o => o.key === trendKey)!;
+  const [patientStats, setPatientStats] = useState<PatientStats | null>(null);
+  const [dailyStats, setDailyStats] = useState<DailyDialysisStats | null>(null);
+  const [todaySchedule, setTodaySchedule] = useState<TodaySchedulePatientRow[]>([]);
+  const [weekData, setWeekData] = useState<WeekScheduleResponse | null>(null);
+  const [alertSummary, setAlertSummary] = useState<AlertSummary | null>(null);
+  const [alertItems, setAlertItems] = useState<AlertItem[]>([]);
+  const [qcReport, setQcReport] = useState<QCReport | null>(null);
+  const [qcTrendRows, setQcTrendRows] = useState<QcTrendRow[]>([]);
 
-  const filteredSessions = shiftFilter === 'all'
-    ? TODAY_SESSIONS
-    : TODAY_SESSIONS.filter(s => {
-        if (shiftFilter === 'pm') return s.shift === '下午班';
-        if (shiftFilter === 'am') return s.shift === '上午班';
-        if (shiftFilter === 'eve') return s.shift === '晚班';
-        return true;
-      });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const y = dayjs().year();
+        const m = dayjs().month() + 1;
+        const weekStart = getWeekStartMonday(dayjs());
+
+        const [stRes, dailyRes, scheduleRows, weekDataResult, sumRes, listRes, qcRes, trendRes] = await Promise.all([
+          patientsApi.stats(),
+          dialysisApi.statsDaily(todayStr),
+          scheduleApi.getToday(),
+          scheduleApi.getWeek(weekStart),
+          alertsApi.summary(),
+          alertsApi.list({ status: 'active', page_size: 8 }),
+          reportsApi.getQCUpload(y, m),
+          reportsApi.trend(),
+        ]);
+
+        if (cancelled) return;
+        setPatientStats(stRes.data.data);
+        setDailyStats(dailyRes.data.data);
+        setTodaySchedule(scheduleRows);
+        setWeekData(weekDataResult);
+        setAlertSummary(sumRes.data.data);
+        setAlertItems(listRes.data.data.data);
+        setQcReport(qcRes.data.data);
+        setQcTrendRows(trendRes.data.data);
+      } catch {
+        message.error('工作台数据加载失败，请稍后重试');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const currentTrendOpt = TREND_OPTIONS.find((o) => o.key === trendKey)!;
+
+  const statCards = useMemo(() => {
+    if (!patientStats || !dailyStats || !alertSummary) return null;
+    const va = `AVF ${patientStats.va_avf} · AVG ${patientStats.va_avg} · TCC ${patientStats.va_tcc} · NCC ${patientStats.va_ncc}`;
+    const d = dailyStats;
+    const m = Number(d.morning_sessions ?? 0);
+    const a = Number(d.afternoon_sessions ?? 0);
+    const e = Number(d.evening_sessions ?? 0);
+    const done = Number(d.total_sessions ?? 0);
+    const planned = todaySchedule.length;
+    const shiftDetail = `上午 ${m} · 下午 ${a} · 晚班 ${e} / 计划${planned}例`;
+    const em = (alertSummary.emergency ?? 0) + (alertSummary.critical ?? 0);
+    const wr = (alertSummary.warning ?? 0) + (alertSummary.info ?? 0);
+    const alertDetail = `紧急/危重 ${em} · 警示/提示 ${wr}`;
+    const nc = Number(d.nurse_count ?? 0);
+    const ratio = nc > 0 ? (done / nc).toFixed(1) : '—';
+    const nurseRatio = nc > 0 ? `1:${ratio}` : '—';
+    const ratioDetail = `${nc}名当班护士（透析记录）· ${done} 场次`;
+    return {
+      totalActive: patientStats.total_active,
+      vaDetail: va,
+      completedToday: done,
+      shiftDetail,
+      alertCount: alertSummary.total,
+      alertDetail,
+      nurseRatio,
+      ratioDetail,
+    };
+  }, [patientStats, dailyStats, alertSummary, todaySchedule.length]);
+
+  const shiftCounts = useMemo(() => {
+    const am = todaySchedule.filter((r) => r.shift === 'morning').length;
+    const pm = todaySchedule.filter((r) => r.shift === 'afternoon').length;
+    const eve = todaySchedule.filter((r) => r.shift === 'evening').length;
+    return { am, pm, eve, total: todaySchedule.length };
+  }, [todaySchedule]);
+
+  const filteredSessions: DashboardSessionRow[] = useMemo(() => {
+    const rows = todaySchedule.filter((r) => scheduleMatchesShiftFilter(r, shiftFilter));
+    return rows.map(mapScheduleRowToDashboardSession);
+  }, [todaySchedule, shiftFilter]);
+
+  const scheduleSnapshot = useMemo(() => {
+    if (!weekData) return [];
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    const keys: ShiftKey[] = ['am', 'pm', 'eve'];
+    const labels: Record<ShiftKey, string> = { am: '上午班', pm: '下午班', eve: '晚班' };
+    const now = dayjs();
+    return keys.map((k) => {
+      const cell = weekData.cells[k]?.[todayStr];
+      const meta = shiftSnapshotMeta(k, now);
+      return {
+        key: k,
+        shift: labels[k],
+        count: cell?.patients?.length ?? 0,
+        nurses: cell?.nurses?.map((n) => n.name).join('、') || '—',
+        ratio: cell?.ratio ?? '—',
+        status: meta.status,
+        level: meta.level,
+      };
+    });
+  }, [weekData]);
+
+  const qcBarData = useMemo(() => (qcReport ? buildQcBarDataFromReport(qcReport) : []), [qcReport]);
+  const qcRadarData: QcRadarRow[] = useMemo(() => {
+    if (!qcReport) return [];
+    const prevMonth = dayjs().subtract(1, 'month');
+    const prev =
+      qcTrendRows.find(
+        (x) => x.report_year === prevMonth.year() && x.report_month === prevMonth.month() + 1,
+      ) ?? null;
+    return buildQcRadarFromReports(qcReport, prev);
+  }, [qcReport, qcTrendRows]);
+  const qcTrendChart = useMemo(() => buildQcTrendFromRows(qcTrendRows, 6), [qcTrendRows]);
+  const qcIndicatorCards = useMemo(() => (qcReport ? buildQcIndicatorCardsFromReport(qcReport) : []), [qcReport]);
+
+  const asOfDay = Math.max(0, dayjs().date() - 1);
 
   return (
     <PageShell fullWidth>
+      <Spin spinning={loading}>
       {/* ── 4个统计卡 ── */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card teal">
           <div className="hd-stat-icon">👥</div>
           <div className="hd-stat-label">在透患者总数</div>
-          <div className="hd-stat-value num">{STATS.totalActive}</div>
-          <div className="hd-stat-meta">{STATS.vaDetail}</div>
+          <div className="hd-stat-value num">{statCards?.totalActive ?? '—'}</div>
+          <div className="hd-stat-meta">{statCards?.vaDetail ?? '加载中…'}</div>
         </div>
         <div className="hd-stat-card blue">
           <div className="hd-stat-icon">💉</div>
           <div className="hd-stat-label">今日已完成透析</div>
-          <div className="hd-stat-value num">{STATS.completedToday}</div>
-          <div className="hd-stat-meta">{STATS.shiftDetail}</div>
+          <div className="hd-stat-value num">{statCards?.completedToday ?? '—'}</div>
+          <div className="hd-stat-meta">{statCards?.shiftDetail ?? '—'}</div>
         </div>
         <div className="hd-stat-card amber">
           <div className="hd-stat-icon">🔔</div>
           <div className="hd-stat-label">活跃预警</div>
-          <div className="hd-stat-value num">{STATS.alertCount}</div>
-          <div className="hd-stat-meta">{STATS.alertDetail}</div>
+          <div className="hd-stat-value num">{statCards?.alertCount ?? '—'}</div>
+          <div className="hd-stat-meta">{statCards?.alertDetail ?? '—'}</div>
         </div>
         <div className="hd-stat-card teal">
           <div className="hd-stat-icon">👩‍⚕️</div>
-          <div className="hd-stat-label">今日护患比</div>
-          <div className="hd-stat-value num">{STATS.nurseRatio}</div>
-          <div className="hd-stat-meta">{STATS.ratioDetail}</div>
+          <div className="hd-stat-label">今日护患比（透析记录）</div>
+          <div className="hd-stat-value num">{statCards?.nurseRatio ?? '—'}</div>
+          <div className="hd-stat-meta">{statCards?.ratioDetail ?? '—'}</div>
         </div>
       </div>
 
@@ -252,10 +329,10 @@ export default function DashboardPage() {
               size="small"
               style={{ width: 150 }}
               options={[
-                { value: 'all', label: '全部班次（27人）' },
-                { value: 'am',  label: '上午班（8人）' },
-                { value: 'pm',  label: '下午班（10人）' },
-                { value: 'eve', label: '晚班（9人）' },
+                { value: 'all', label: `全部班次（${shiftCounts.total}人）` },
+                { value: 'am', label: `上午班（${shiftCounts.am}人）` },
+                { value: 'pm', label: `下午班（${shiftCounts.pm}人）` },
+                { value: 'eve', label: `晚班（${shiftCounts.eve}人）` },
               ]}
             />
             <Button type="primary" size="small" onClick={() => navigate('/dialysis/entry')}>
@@ -267,6 +344,7 @@ export default function DashboardPage() {
         <div style={{ padding: 0, margin: '-20px' }}>
           <Table
             dataSource={filteredSessions}
+            locale={{ emptyText: <Empty description="今日暂无排班患者" /> }}
             size="small"
             pagination={false}
             style={{ borderTop: 'none' }}
@@ -296,13 +374,26 @@ export default function DashboardPage() {
                 ),
               },
               { title: '通路', render: (_, r) => <AccessBadge type={r.access} /> },
-              { title: '干体重', dataIndex: 'dryWeight', render: v => <span className="num">{v} kg</span> },
-              { title: '上机前体重', dataIndex: 'preWeight', render: v => <span className="num">{v} kg</span> },
               {
-                title: '目标超滤',
+                title: '干体重',
+                dataIndex: 'dryWeight',
+                render: (v: number | null) => (
+                  <span className="num">{v != null ? `${v} kg` : '—'}</span>
+                ),
+              },
+              {
+                title: '上机前体重',
+                dataIndex: 'preWeight',
+                render: (v: number | null) => (
+                  <span className="num">{v != null ? `${v} kg` : '—'}</span>
+                ),
+              },
+              {
+                title: '超滤量',
                 render: (_, r) => (
                   <span className="num" style={{ color: r.ufAlert ? '#F43F5E' : '#0284C7', fontWeight: r.ufAlert ? 600 : 400 }}>
-                    {r.uf} mL{r.ufAlert ? ' ⚠' : ''}
+                    {r.uf != null ? `${r.uf} mL` : '—'}
+                    {r.ufAlert ? ' ⚠' : ''}
                   </span>
                 ),
               },
@@ -312,6 +403,7 @@ export default function DashboardPage() {
                   const statusMap: Record<string, { color: string; bg: string }> = {
                     ongoing:  { color: '#059669', bg: '#ECFDF5' },
                     done:     { color: '#0369A1', bg: '#E0F2FE' },
+                    pending:  { color: '#64748B', bg: '#F1F5F9' },
                     critical: { color: '#BE123C', bg: '#FFF1F2' },
                     warning:  { color: '#D97706', bg: '#FFFBEB' },
                   };
@@ -327,16 +419,13 @@ export default function DashboardPage() {
                 title: '操作',
                 render: (_, r) => (
                   <div className="flex gap-4">
-                    <Button size="small" onClick={() => navigate(`/patients/${r.key}`)}>档案</Button>
+                    <Button size="small" onClick={() => navigate(`/patients/${r.patientId}`)}>档案</Button>
                     <Button
                       size="small"
-                      type={r.status === 'critical' ? 'default' : 'primary'}
-                      danger={r.status === 'critical'}
-                      onClick={() =>
-                        navigate(r.status === 'critical' ? '/alerts' : '/dialysis/entry')
-                      }
+                      type="primary"
+                      onClick={() => navigate('/dialysis/entry')}
                     >
-                      {r.status === 'critical' ? '处理' : '记录'}
+                      记录
                     </Button>
                   </div>
                 ),
@@ -344,8 +433,10 @@ export default function DashboardPage() {
             ]}
           />
           <div style={{ padding: '10px 16px', textAlign: 'right', color: '#7B92BC', fontSize: 12 }}>
-            下午班共10人 · 显示{filteredSessions.length}条 ·
-            <a href="#" onClick={e => { e.preventDefault(); }} style={{ color: '#0EA5E9', marginLeft: 4 }}>查看全部</a>
+            今日排班共 {shiftCounts.total} 人 · 当前筛选显示 {filteredSessions.length} 条 ·
+            <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => navigate('/schedule')}>
+              查看排班
+            </Button>
           </div>
         </div>
       </Card>
@@ -359,16 +450,23 @@ export default function DashboardPage() {
           title={<span style={{ fontWeight: 600, color: '#0D1B3E' }}>🚨 活跃预警</span>}
           extra={<Button size="small" onClick={() => navigate('/alerts')}>查看全部</Button>}
         >
-          {ALERTS.map(a => (
-            <div key={a.id} className={`hd-alert-item ${a.level}`}>
-              <span className="hd-alert-icon">{a.icon}</span>
-              <div className="hd-alert-content">
-                <div className="hd-alert-title">{a.title}</div>
-                <div className="hd-alert-desc">{a.desc}</div>
-                <div className="hd-alert-time">⏱ {a.time}</div>
-              </div>
-            </div>
-          ))}
+          {alertItems.length === 0 ? (
+            <Empty description="暂无活跃预警" />
+          ) : (
+            alertItems.map((a) => {
+              const { level, icon } = alertDisplayMeta(a);
+              return (
+                <div key={a.id} className={`hd-alert-item ${level}`}>
+                  <span className="hd-alert-icon">{icon}</span>
+                  <div className="hd-alert-content">
+                    <div className="hd-alert-title">{a.title}</div>
+                    <div className="hd-alert-desc">{a.message}</div>
+                    <div className="hd-alert-time">⏱ {dayjs(a.created_at).format('YYYY-MM-DD HH:mm')}</div>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </Card>
 
         {/* 今日排班快照 */}
@@ -379,7 +477,7 @@ export default function DashboardPage() {
           extra={<Button size="small" onClick={() => navigate('/schedule')}>排班管理</Button>}
         >
           <Table
-            dataSource={SCHEDULES.map((s, i) => ({ ...s, key: i }))}
+            dataSource={scheduleSnapshot}
             size="small"
             pagination={false}
             columns={[
@@ -416,7 +514,7 @@ export default function DashboardPage() {
         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
         title={
           <span style={{ fontWeight: 600, color: '#0D1B3E' }}>
-            📊 本月质控指标 ({dayjs().format('YYYY年MM月')} 截至{dayjs().date() - 1}日)
+            📊 本月质控指标 ({dayjs().format('YYYY年MM月')} 截至{asOfDay}日)
           </span>
         }
         extra={
@@ -439,16 +537,20 @@ export default function DashboardPage() {
         {/* 卡片视图 */}
         {qcViewType === 'card' && (
           <div className="grid-5">
-            {QC_INDICATORS.map(q => (
-              <div key={q.index} className="hd-qc-card">
-                <div className="hd-qc-index">{q.index}</div>
-                <div className="hd-qc-value" style={{ color: q.color }}>{q.value}</div>
-                <div className="hd-qc-formula">{q.formula}</div>
-                <div className="hd-qc-bar-wrap">
-                  <div className={`hd-qc-bar ${q.barClass}`} style={{ width: q.barWidth }} />
+            {qcIndicatorCards.length === 0 ? (
+              <Empty description="质控月报加载中或暂无数据" />
+            ) : (
+              qcIndicatorCards.map((q) => (
+                <div key={q.index} className="hd-qc-card">
+                  <div className="hd-qc-index">{q.index}</div>
+                  <div className="hd-qc-value" style={{ color: q.color }}>{q.value}</div>
+                  <div className="hd-qc-formula">{q.formula}</div>
+                  <div className="hd-qc-bar-wrap">
+                    <div className={`hd-qc-bar ${q.barClass}`} style={{ width: q.barWidth }} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
 
@@ -457,33 +559,37 @@ export default function DashboardPage() {
           <div>
             <div style={{ color: '#7B92BC', fontSize: 12, marginBottom: 12 }}>
               各指标实际值占合规上限的百分比，
-              <span style={{ color: '#F43F5E', fontWeight: 500 }}>超过 100%</span> 表示超标，悬停查看详情
+              <span style={{ color: '#F43F5E', fontWeight: 500 }}>超过 100%</span> 表示超标，悬停查看详情（数据来自本月质控月报草稿/已报）
             </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={QC_BAR_DATA} margin={{ top: 24, right: 60, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E8F0FB" />
-                <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#4B5563' }} />
-                <YAxis
-                  tickFormatter={(v) => `${v}%`}
-                  tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                  domain={[0, 160]}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <Tooltip content={<QcBarTooltip />} />
-                <ReferenceLine
-                  y={100}
-                  stroke="#F43F5E"
-                  strokeDasharray="6 4"
-                  label={{ value: '合规上限 100%', position: 'right', fontSize: 11, fill: '#F43F5E' }}
-                />
-                <Bar dataKey="pct" radius={[4, 4, 0, 0]} maxBarSize={64} label={{ position: 'top', fontSize: 11, formatter: (v: unknown) => v != null && v !== false ? `${v}%` : '' }}>
-                  {QC_BAR_DATA.map((entry) => (
-                    <Cell key={entry.name} fill={entry.pct >= 100 ? '#F43F5E' : '#10B981'} fillOpacity={0.85} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {qcBarData.length === 0 ? (
+              <Empty description="暂无质控月报数据" />
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={qcBarData} margin={{ top: 24, right: 60, left: 0, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E8F0FB" />
+                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#4B5563' }} />
+                  <YAxis
+                    tickFormatter={(v) => `${v}%`}
+                    tick={{ fontSize: 11, fill: '#9CA3AF' }}
+                    domain={[0, 160]}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip content={<QcBarTooltip />} />
+                  <ReferenceLine
+                    y={100}
+                    stroke="#F43F5E"
+                    strokeDasharray="6 4"
+                    label={{ value: '合规上限 100%', position: 'right', fontSize: 11, fill: '#F43F5E' }}
+                  />
+                  <Bar dataKey="pct" radius={[4, 4, 0, 0]} maxBarSize={64} label={{ position: 'top', fontSize: 11, formatter: (v: unknown) => v != null && v !== false ? `${v}%` : '' }}>
+                    {qcBarData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.pct >= 100 ? '#F43F5E' : '#10B981'} fillOpacity={0.85} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         )}
 
@@ -492,8 +598,11 @@ export default function DashboardPage() {
           <div>
             <div style={{ color: '#7B92BC', fontSize: 12, marginBottom: 14 }}>
               各轴刻度为占合规上限的百分比，<span style={{ color: '#F43F5E', fontWeight: 600 }}>100%</span>
-              为合规阈值；霓虹蓝面 = 本月，星云灰面 = 上月（2月）
+              为合规阈值；霓虹蓝面 = 本月，星云灰面 = 上月（取自已提交/已确认月报趋势）
             </div>
+            {qcRadarData.length === 0 ? (
+              <Empty description="暂无雷达图数据" />
+            ) : (
             <div
               style={{
                 display: 'flex',
@@ -516,7 +625,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <ResponsiveContainer width="100%" height={320}>
-                  <RadarChart data={QC_RADAR_DATA} margin={{ top: 6, right: 24, bottom: 6, left: 24 }}>
+                  <RadarChart data={qcRadarData} margin={{ top: 6, right: 24, bottom: 6, left: 24 }}>
                     <defs>
                       <linearGradient id="qcRadarMonth" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#38BDF8" stopOpacity={0.48} />
@@ -562,7 +671,7 @@ export default function DashboardPage() {
                       wrapperStyle={{ paddingTop: 6 }}
                       formatter={(value) => <span style={{ fontSize: 12, color: '#334155', fontWeight: 500 }}>{value}</span>}
                     />
-                    <Tooltip content={<QcRadarTooltip />} />
+                    <Tooltip content={<QcRadarTooltip radarRows={qcRadarData} />} />
                   </RadarChart>
                 </ResponsiveContainer>
               </div>
@@ -581,7 +690,7 @@ export default function DashboardPage() {
                 <div style={{ fontWeight: 700, color: '#0F172A', fontSize: 13, marginBottom: 10 }}>
                   本月达标雷达看板
                 </div>
-                {QC_RADAR_DATA.map((row) => (
+                {qcRadarData.map((row) => (
                   <div
                     key={row.subject}
                     style={{
@@ -613,6 +722,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             </div>
+            )}
           </div>
         )}
 
@@ -632,75 +742,80 @@ export default function DashboardPage() {
                 红色虚线为合规上限（{currentTrendOpt.standard}{currentTrendOpt.unit}）
               </span>
             </div>
-            <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={QC_TREND_DATA} margin={{ top: 10, right: 60, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E8F0FB" />
-                <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#4B5563' }} />
-                <YAxis
-                  tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                  tickFormatter={(v) => `${v}${currentTrendOpt.unit}`}
-                  axisLine={false}
-                  tickLine={false}
-                  domain={['auto', 'auto']}
-                />
-                <Tooltip
-                  content={(props) => (
-                    <QcTrendTooltip
-                      {...props}
-                      unit={currentTrendOpt.unit}
-                      standard={currentTrendOpt.standard}
+            {qcTrendChart.length === 0 ? (
+              <Empty description="暂无质控趋势数据（需 qc_reports 中存在已提交/已确认记录）" />
+            ) : (
+              <Fragment>
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={qcTrendChart} margin={{ top: 10, right: 60, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8F0FB" />
+                    <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#4B5563' }} />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: '#9CA3AF' }}
+                      tickFormatter={(v) => `${v}${currentTrendOpt.unit}`}
+                      axisLine={false}
+                      tickLine={false}
+                      domain={['auto', 'auto']}
                     />
-                  )}
-                />
-                <ReferenceLine
-                  y={currentTrendOpt.standard}
-                  stroke="#F43F5E"
-                  strokeDasharray="6 4"
-                  label={{
-                    value: `上限 ${currentTrendOpt.standard}${currentTrendOpt.unit}`,
-                    position: 'right',
-                    fontSize: 10,
-                    fill: '#F43F5E',
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey={currentTrendOpt.key}
-                  name={currentTrendOpt.label}
-                  stroke={currentTrendOpt.color}
-                  strokeWidth={2.5}
-                  dot={{ r: 4, fill: currentTrendOpt.color, strokeWidth: 0 }}
-                  activeDot={{ r: 6, strokeWidth: 0 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-
-            {/* 各月达标状态小标签 */}
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              {QC_TREND_DATA.map((row) => {
-                const val = row[currentTrendOpt.key as keyof typeof row] as number;
-                const isOver = val > currentTrendOpt.standard;
-                return (
-                  <span
-                    key={row.month}
-                    style={{
-                      background: isOver ? '#FFF1F2' : '#ECFDF5',
-                      color: isOver ? '#BE123C' : '#059669',
-                      border: `1px solid ${isOver ? '#FECDD3' : '#A7F3D0'}`,
-                      padding: '2px 10px',
-                      borderRadius: 20,
-                      fontSize: 12,
-                      fontWeight: 500,
-                    }}
-                  >
-                    {row.month} {val}{currentTrendOpt.unit} {isOver ? '▲' : '✓'}
-                  </span>
-                );
-              })}
-            </div>
+                    <Tooltip
+                      content={(props) => (
+                        <QcTrendTooltip
+                          {...props}
+                          unit={currentTrendOpt.unit}
+                          standard={currentTrendOpt.standard}
+                        />
+                      )}
+                    />
+                    <ReferenceLine
+                      y={currentTrendOpt.standard}
+                      stroke="#F43F5E"
+                      strokeDasharray="6 4"
+                      label={{
+                        value: `上限 ${currentTrendOpt.standard}${currentTrendOpt.unit}`,
+                        position: 'right',
+                        fontSize: 10,
+                        fill: '#F43F5E',
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey={currentTrendOpt.key}
+                      name={currentTrendOpt.label}
+                      stroke={currentTrendOpt.color}
+                      strokeWidth={2.5}
+                      dot={{ r: 4, fill: currentTrendOpt.color, strokeWidth: 0 }}
+                      activeDot={{ r: 6, strokeWidth: 0 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                  {qcTrendChart.map((row) => {
+                    const val = row[currentTrendOpt.key as keyof typeof row] as number;
+                    const isOver = val > currentTrendOpt.standard;
+                    return (
+                      <span
+                        key={row.month}
+                        style={{
+                          background: isOver ? '#FFF1F2' : '#ECFDF5',
+                          color: isOver ? '#BE123C' : '#059669',
+                          border: `1px solid ${isOver ? '#FECDD3' : '#A7F3D0'}`,
+                          padding: '2px 10px',
+                          borderRadius: 20,
+                          fontSize: 12,
+                          fontWeight: 500,
+                        }}
+                      >
+                        {row.month} {val}{currentTrendOpt.unit} {isOver ? '▲' : '✓'}
+                      </span>
+                    );
+                  })}
+                </div>
+              </Fragment>
+            )}
           </div>
         )}
       </Card>
+      </Spin>
     </PageShell>
   );
 }

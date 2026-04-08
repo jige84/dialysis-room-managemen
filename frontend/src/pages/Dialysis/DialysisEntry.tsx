@@ -14,13 +14,20 @@ import {
   WarningFilled, InfoCircleFilled, EditOutlined, CloseOutlined,
   FileTextOutlined, PrinterOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import { DIALYSIS_DEMO_PATIENTS, type DialysisDemoPatient } from '../../constants/dialysisDemoPatients';
-import { dialysisApi, type CreateDialysisPayload, type PrepareDialysisData } from '../../api/dialysis';
-import { patientsApi, type Patient } from '../../api/patients';
+import {
+  dialysisApi,
+  parsePrepareDialysisResponse,
+  type CreateDialysisPayload,
+  type PrepareDialysisData,
+  type OrderForSession,
+} from '../../api/dialysis';
+import { patientsApi } from '../../api/patients';
+import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import {
   mergePrescriptionDefaultsForPatient,
   shiftCodeToChinese,
@@ -31,6 +38,8 @@ import {
   dialysisModeLabel,
   formatSodiumCurveSummary,
   yesNoAssessLabel,
+  loadPrescriptionBasicParamsFromStorage,
+  splitPrescriptionNotesFromDb,
 } from '../../utils/prescriptionFormFromDemo';
 import {
   readPostDialysisSync,
@@ -38,6 +47,24 @@ import {
   POST_DIALYSIS_SYNC_EVENT,
   type PostDialysisSyncPayload,
 } from '../../utils/postDialysisAssessmentSync';
+import { useAuthStore } from '../../stores/authStore';
+import AnomalyAnalysisModal from '../../components/AnomalyAnalysisModal/AnomalyAnalysisModal';
+import type { AnomalyType } from '../../utils/anomalyAnalysis';
+import {
+  HD_PRESCRIPTION_SAVED_EVENT,
+  type PrescriptionSavedDetail,
+} from '../../constants/prescriptionSyncEvents';
+import ordersApi, { FREQ_LABELS, EXEC_TIMING_LABELS, type LongTermOrder } from '../../api/orders';
+import { describeFrequencyDetailForOrder } from '../../utils/longTermOrderScheduleText';
+import {
+  DIALYSIS_ENTRY_DRAFT_VERSION,
+  type DialysisEntryDraftSnapshot,
+  dialysisEntryDraftStorageKey,
+  loadDialysisEntryDraft,
+  removeDialysisEntryDraft,
+  saveDialysisEntryDraft,
+  serializeFormValuesForDraft,
+} from '../../utils/dialysisEntryDraft';
 
 // ── 演示数据（与透析处方工作台共用） ─────────────────────────
 const PATIENTS_LIST = DIALYSIS_DEMO_PATIENTS;
@@ -334,7 +361,186 @@ const PENDING_ORDERS = [
   { key: '2', drug: '蔗糖铁注射液 200mg', detail: '静脉输注（透析中）· qw · 上次 2026-03-12', executed: false },
 ];
 
+/** 与长期医嘱页「具体执行」同源，并按床旁核对习惯将「透析前/中/后」排在频次说明附近 */
+function formatOrderSessionDetail(o: OrderForSession): string {
+  const parts: string[] = [];
+  if (o.route?.trim()) parts.push(o.route.trim());
+  const freqKey = String(o.frequency ?? '');
+  const fl = FREQ_LABELS[freqKey] || freqKey;
+  const scheduleText = describeFrequencyDetailForOrder(freqKey, o.frequency_detail ?? null);
+  parts.push(`${fl}（${scheduleText}）`);
+  const timing = typeof o.execute_timing === 'string' ? o.execute_timing.trim() : '';
+  if (timing) {
+    parts.push(`执行时段：${EXEC_TIMING_LABELS[timing] || timing}`);
+  }
+  const doseText = [o.dose != null && o.dose !== '' ? String(o.dose) : '', o.dose_unit ?? '']
+    .join(' ')
+    .trim();
+  if (doseText) parts.push(doseText);
+  if (o.notes?.trim()) parts.push(o.notes.trim());
+  return parts.join(' · ');
+}
+
+const BEDSIDE_TIMING_SORT: Record<string, number> = {
+  pre_dialysis: 0,
+  during_dialysis: 1,
+  post_dialysis: 2,
+  anytime: 3,
+};
+
+/** 主药按「床旁执行时段」排序，子药紧随主药（与长期医嘱单展示一致） */
+function sortSessionsForBedsideDisplay(sessions: OrderForSession[]): OrderForSession[] {
+  if (!sessions.length) return [];
+  const byParent = new Map<string, OrderForSession[]>();
+  for (const o of sessions) {
+    if (o.parent_order_id) {
+      const pid = String(o.parent_order_id);
+      if (!byParent.has(pid)) byParent.set(pid, []);
+      byParent.get(pid)!.push(o);
+    }
+  }
+  const roots = sessions.filter((o) => !o.parent_order_id);
+  const sortedRoots = [...roots].sort((a, b) => {
+    const ta = BEDSIDE_TIMING_SORT[String(a.execute_timing || '')] ?? 99;
+    const tb = BEDSIDE_TIMING_SORT[String(b.execute_timing || '')] ?? 99;
+    if (ta !== tb) return ta - tb;
+    return String(a.id).localeCompare(String(b.id));
+  });
+  const out: OrderForSession[] = [];
+  const seen = new Set<string>();
+  for (const r of sortedRoots) {
+    out.push(r);
+    seen.add(r.id);
+    const ch = [...(byParent.get(String(r.id)) ?? [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    for (const c of ch) {
+      out.push(c);
+      seen.add(c.id);
+    }
+  }
+  for (const o of sessions) {
+    if (!seen.has(o.id)) out.push(o);
+  }
+  return out;
+}
+
+/** 今日医嘱执行确认：组合医嘱多行合并为一条卡片展示 */
+type DialysisOrderExecRow = {
+  key: string;
+  drug: string;
+  detail: string;
+  alreadyExecuted: boolean;
+  isComboChild: boolean;
+};
+
+type DialysisOrderExecGroup = {
+  groupId: string;
+  isCombo: boolean;
+  rows: DialysisOrderExecRow[];
+};
+
+function buildDialysisOrderExecutionGroups(sessions: OrderForSession[]): DialysisOrderExecGroup[] {
+  /** 先按床旁执行时段排主药，再挂子药；避免仅按 id 排序打乱「透析前→中→后」 */
+  const sorted = sortSessionsForBedsideDisplay(sessions);
+  const byParent = new Map<string, OrderForSession[]>();
+  for (const o of sorted) {
+    if (!o.parent_order_id) continue;
+    const pid = o.parent_order_id;
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid)!.push(o);
+  }
+  const roots = sorted.filter((o) => !o.parent_order_id);
+  const assigned = new Set<string>();
+  const groups: DialysisOrderExecGroup[] = [];
+
+  for (const root of roots) {
+    const children = [...(byParent.get(root.id) ?? [])].sort((a, b) =>
+      String(a.id).localeCompare(String(b.id)),
+    );
+    const rows: DialysisOrderExecRow[] = [
+      {
+        key: root.id,
+        drug: (root.drug_name || '（未命名药品）').trim(),
+        detail: formatOrderSessionDetail(root),
+        alreadyExecuted: root.alreadyExecuted,
+        isComboChild: false,
+      },
+      ...children.map((ch) => ({
+        key: ch.id,
+        drug: (ch.drug_name || '（未命名药品）').trim(),
+        detail: formatOrderSessionDetail(ch),
+        alreadyExecuted: ch.alreadyExecuted,
+        isComboChild: true,
+      })),
+    ];
+    rows.forEach((r) => assigned.add(r.key));
+    groups.push({
+      groupId: root.id,
+      isCombo: children.length > 0,
+      rows,
+    });
+  }
+
+  for (const o of sorted) {
+    if (assigned.has(o.id)) continue;
+    groups.push({
+      groupId: o.id,
+      isCombo: false,
+      rows: [
+        {
+          key: o.id,
+          drug: (o.drug_name || '（未命名药品）').trim(),
+          detail: formatOrderSessionDetail(o),
+          alreadyExecuted: o.alreadyExecuted,
+          isComboChild: !!o.parent_order_id,
+        },
+      ],
+    });
+    assigned.add(o.id);
+  }
+
+  return groups;
+}
+
+/** 组合医嘱：主药与子药共用同一勾选状态（与床旁一次确认一致） */
+function buildInitialOrdersMapFromSessions(list: OrderForSession[]): Record<string, boolean> {
+  const byId = new Map(list.map((o) => [o.id, o]));
+  const groups = buildDialysisOrderExecutionGroups(list);
+  const out: Record<string, boolean> = {};
+  for (const g of groups) {
+    if (g.isCombo) {
+      const checked = g.rows.every((r) => !!byId.get(r.key)?.alreadyExecuted);
+      for (const r of g.rows) out[r.key] = checked;
+    } else {
+      const r = g.rows[0];
+      out[r.key] = !!byId.get(r.key)?.alreadyExecuted;
+    }
+  }
+  return out;
+}
+
+/** 恢复草稿时与当前服务端医嘱 id 对齐，忽略已删除的医嘱勾选 */
+function mergeDraftOrdersWithSessions(
+  list: OrderForSession[] | undefined,
+  draft: Record<string, boolean>,
+): Record<string, boolean> {
+  if (!list?.length) return { ...draft };
+  const base = buildInitialOrdersMapFromSessions(list);
+  const valid = new Set(list.map((o) => o.id));
+  const out = { ...base };
+  for (const k of Object.keys(draft)) {
+    if (valid.has(k)) out[k] = draft[k];
+  }
+  return out;
+}
+
 type VitalSignRow = { id: string; time: string; values: Record<string, string> };
+
+/** 生命体征行：除签名外任一有内容即视为「已填数据」，此时再自动带填写人签名 */
+const VITAL_SIGN_DATA_KEYS = ['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark'] as const;
+
+function vitalSignRowHasData(values: Record<string, string>): boolean {
+  return VITAL_SIGN_DATA_KEYS.some((k) => String(values[k] ?? '').trim() !== '');
+}
 
 function createVitalSignRow(): VitalSignRow {
   const now = dayjs();
@@ -468,6 +674,7 @@ interface PrintData {
   complications: string[];
   complicationRecords: Record<string, Record<string, unknown>>;
   orders: Record<string, boolean>;
+  orderRows: { key: string; drug: string; detail: string }[];
   vitalRows: VitalSignRow[];
   ktv: number | null;
   urr: number | null;
@@ -519,9 +726,11 @@ function generatePrintHtml(d: PrintData): string {
     }).join('');
 
   // 医嘱执行情况
-  const orderItems = PENDING_ORDERS.map(o =>
-    `<div style="margin-bottom:2px">${d.orders[o.key] ? '☑' : '☐'} ${o.drug} <span style="color:${d.orders[o.key] ? '#008000' : '#CC6600'}">${d.orders[o.key] ? '已执行' : '未执行'}</span></div>`
-  ).join('');
+  const orderItems = d.orderRows.length === 0
+    ? '<span style="color:#666">无</span>'
+    : d.orderRows.map(o =>
+      `<div style="margin-bottom:2px">${d.orders[o.key] ? '☑' : '☐'} ${o.drug} <span style="color:${d.orders[o.key] ? '#008000' : '#CC6600'}">${d.orders[o.key] ? '已执行' : '未执行'}</span></div>`
+    ).join('');
 
   // Kt/V 区域
   const ktvSection = d.ktv !== null ? `
@@ -658,9 +867,9 @@ function generatePrintHtml(d: PrintData): string {
       <div class="block-hd">护士签名（上机前）</div>
       <div class="block-bd">
         <div class="sign-line">
-          <div class="sign-cell"><div class="lbl">穿刺护士</div><div class="val">&nbsp;</div></div>
-          <div class="sign-cell"><div class="lbl">上机护士</div><div class="val">&nbsp;</div></div>
-          <div class="sign-cell"><div class="lbl">二次核对</div><div class="val">&nbsp;</div></div>
+          <div class="sign-cell"><div class="lbl">穿刺护士</div><div class="val">${String(d.formValues.nurse_puncture_sign ?? '').trim() || '&nbsp;'}</div></div>
+          <div class="sign-cell"><div class="lbl">上机护士</div><div class="val">${String(d.formValues.nurse_on_machine_sign ?? '').trim() || '&nbsp;'}</div></div>
+          <div class="sign-cell"><div class="lbl">二次核对</div><div class="val">${String(d.formValues.nurse_double_check_sign ?? '').trim() || '&nbsp;'}</div></div>
         </div>
       </div>
     </div>
@@ -740,9 +949,9 @@ function generatePrintHtml(d: PrintData): string {
         ${(d.formValues.remark as string) ? (d.formValues.remark as string) : '&nbsp;'}
       </div>
       <div class="sign-line" style="border-top:none;padding-top:0">
-        <div class="sign-cell"><div class="lbl">记录护士签名</div><div class="val">&nbsp;</div></div>
-        <div class="sign-cell"><div class="lbl">穿刺护士签名</div><div class="val">&nbsp;</div></div>
-        <div class="sign-cell"><div class="lbl">上机护士签名</div><div class="val">&nbsp;</div></div>
+        <div class="sign-cell"><div class="lbl">记录护士签名</div><div class="val">${String(d.formValues.nurse_record_sign ?? '').trim() || '&nbsp;'}</div></div>
+        <div class="sign-cell"><div class="lbl">穿刺护士签名</div><div class="val">${String(d.formValues.nurse_puncture_sign ?? '').trim() || '&nbsp;'}</div></div>
+        <div class="sign-cell"><div class="lbl">上机护士签名</div><div class="val">${String(d.formValues.nurse_on_machine_sign ?? '').trim() || '&nbsp;'}</div></div>
         <div class="sign-cell" style="flex:1.5"><div class="lbl">记录日期</div><div class="val" style="font-weight:bold">${d.printDate}</div></div>
       </div>
     </div>
@@ -843,15 +1052,112 @@ function Grid({ cols = 4, gap = 14, children, style }: {
   );
 }
 
+/** 透析后评估区块内二级分组标题 */
+function SubsectionTitle({ children, first }: { children: React.ReactNode; first?: boolean }) {
+  return (
+    <div style={{
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#334155',
+      letterSpacing: '0.03em',
+      marginBottom: 10,
+      marginTop: first ? 0 : 18,
+      paddingBottom: 6,
+      borderBottom: '1px solid #E8EEF4',
+    }}>{children}</div>
+  );
+}
+
 // ── UUID 校验（用于区分真实患者 ID 与演示 ID）──────────────
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const isRealPatientId = (v: string) => UUID_RE.test(v);
 
+function normNum(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** 与处方工作台 localStorage 同源：库中无 form_extra 时补齐透前评估/钠曲线等 */
+const FORM_EXTRA_STORAGE_KEYS = [
+  'preMachineWeight',
+  'ultrafiltrationMl',
+  'preAssessSbp',
+  'preAssessDbp',
+  'preAssessPulse',
+  'preAssessEdema',
+  'preAssessEdemaSite',
+  'preAssessBleeding',
+  'preAssessBleedingDesc',
+  'sodiumCurve',
+  'sodiumCurveCustom',
+  'naCurveStart',
+  'naCurveEnd',
+  'naCurveTimeStart',
+  'naCurveTimeEnd',
+  'preAssessOther',
+] as const;
+
+function mergeFormExtraFromStorage(patientId: string, fe: Record<string, unknown>): Record<string, unknown> {
+  const stored = loadPrescriptionBasicParamsFromStorage(patientId);
+  const out = { ...fe };
+  for (const key of FORM_EXTRA_STORAGE_KEYS) {
+    if (
+      (out[key] === undefined || out[key] === null) &&
+      stored[key] !== undefined &&
+      stored[key] !== null
+    ) {
+      out[key] = stored[key];
+    }
+  }
+  return out;
+}
+
+function frequencyWeekLabel(perWeek: number | null | undefined): string {
+  if (perWeek == null || !Number.isFinite(Number(perWeek))) return '—';
+  return `每周 ${perWeek} 次`;
+}
+
+function hdfReplacementModeLabel(code: string | null | undefined): string {
+  if (!code) return '—';
+  const m: Record<string, string> = { pre: '前置换', post: '后置换', both: '前后置换' };
+  return m[String(code).toLowerCase()] ?? String(code);
+}
+
+function modalityCodeFromScheduleOrRx(
+  sessionMode: string | null | undefined,
+  rxModality: string | null | undefined,
+): string {
+  const raw = (sessionMode?.trim() || rxModality?.trim() || 'HD');
+  const u = String(raw).toUpperCase().replace(/\+/g, '_');
+  if (u === 'HDF') return 'HDF';
+  if (u === 'HD_HP' || u === 'HDHP') return 'HD_HP';
+  return 'HD';
+}
+
 // ── 主组件 ──────────────────────────────────────────────────
 export default function DialysisEntryPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  /** 本人签名展示名：优先真实姓名，空则回退登录名（避免库内 real_name 未维护时整段为空） */
+  const signerLabel = useAuthStore((s) => {
+    const u = s.user;
+    if (!u) return '';
+    return (u.real_name?.trim() || u.username?.trim() || '');
+  });
+  /** 仅「记录护士签名」（文末）默认带出当前用户；③上机前穿刺/上机/核对须手填，不自动写入 */
+  const nurseSignatureInitialValues = useMemo(
+    () => (signerLabel ? { nurse_record_sign: signerLabel } : {}),
+    [signerLabel],
+  );
+  const canAnomaly = useAuthStore((s) => s.hasRole(['admin', 'doctor', 'head_nurse']));
+  const [anomalyOpen, setAnomalyOpen] = useState(false);
+  const [anomalyCtx, setAnomalyCtx] = useState<{
+    anomalyType: AnomalyType;
+    contextId?: string;
+  } | null>(null);
 
   const [selectedPatient, setSelectedPatient] = useState<string>('');
   /** 选中的日期（DatePicker），默认今日 */
@@ -860,6 +1166,8 @@ export default function DialysisEntryPage() {
   const [rxDefaults, setRxDefaults] = useState<Record<string, unknown> | null>(null);
   /** 真实患者：从 /api/dialysis/prepare 获取的处方与医嘱数据 */
   const [realPrepareData, setRealPrepareData] = useState<PrepareDialysisData | null>(null);
+  /** 处方工作台保存成功后递增，触发重新拉取 prepare（同页停留也能同步） */
+  const [prepareRefreshNonce, setPrepareRefreshNonce] = useState(0);
   const [dryWeight, setDryWeight] = useState<number | null>(null);
 
   const [postWeight, setPostWeight] = useState<number | null>(null);
@@ -878,100 +1186,273 @@ export default function DialysisEntryPage() {
   const [treatmentForm] = Form.useForm();
   const [postDialysisSyncMeta, setPostDialysisSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
   const [orders, setOrders] = useState<Record<string, boolean>>({});
-  const [vitalRows, setVitalRows] = useState<VitalSignRow[]>([createVitalSignRow()]);
+  const [vitalRows, setVitalRows] = useState<VitalSignRow[]>(() => [createVitalSignRow()]);
+  /** 间期用药（非透析日）：仅展示长期医嘱中的执行约定，不在此页勾选执行 */
+  const [intervalOrdersReadonly, setIntervalOrdersReadonly] = useState<LongTermOrder[]>([]);
 
-  // 真实患者搜索
-  const [patientSearchOptions, setPatientSearchOptions] = useState<{ value: string; label: string }[]>([]);
-  const [patientSearchLoading, setPatientSearchLoading] = useState(false);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 来自 URL / 排班快捷入口，用于展示当前患者标签 */
+  const [pinnedPatientOption, setPinnedPatientOption] = useState<{ value: string; label: string } | null>(null);
+  const [todayDialysisQuickList, setTodayDialysisQuickList] = useState<TodaySchedulePatientRow[]>([]);
+  const urlPatientInitRef = useRef(false);
 
-  const handlePatientSearch = useCallback((keyword: string) => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    if (!keyword.trim()) { setPatientSearchOptions([]); return; }
-    searchTimerRef.current = setTimeout(async () => {
-      setPatientSearchLoading(true);
-      try {
-        const resp = await patientsApi.list({ keyword, status: 'active', page_size: 20 });
-        const patients: Patient[] = resp.data.data.list;
-        setPatientSearchOptions(
-          patients.map(p => ({
-            value: p.id,
-            label: `${p.name} — ${p.primary_diagnosis} — ${p.isolation_zone === 'normal' ? '普通区' : p.isolation_zone === 'hbv' ? '乙肝区' : '丙肝区'}`,
-          }))
-        );
-      } catch {
-        // 搜索失败静默处理，保留演示列表
-      } finally {
-        setPatientSearchLoading(false);
+  /** 切换患者/透析日前一状态，用于临时保存草稿 key 与快照日期 */
+  const prevPatientRef = useRef<string>(selectedPatient);
+  const prevSessionDateRef = useRef<Dayjs>(sessionDate);
+  const draftDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressDraftSaveUntilRef = useRef(0);
+  const [draftSavedAtIso, setDraftSavedAtIso] = useState<string | null>(null);
+
+  const collectDraftSnapshotWithSessionDate = useCallback(
+    (metaDate: Dayjs): DialysisEntryDraftSnapshot => ({
+      v: DIALYSIS_ENTRY_DRAFT_VERSION,
+      savedAt: new Date().toISOString(),
+      sessionDateStr: metaDate.format('YYYY-MM-DD'),
+      formValues: serializeFormValuesForDraft(form.getFieldsValue(true) as Record<string, unknown>),
+      vitalRows,
+      complications,
+      complicationRecords,
+      orders,
+      accessType,
+      catheterLocation,
+      catheterPlacedDate,
+      postWeight,
+      durationHours,
+      preBun,
+      postBun,
+      dryWeight,
+    }),
+    [
+      form,
+      vitalRows,
+      complications,
+      complicationRecords,
+      orders,
+      accessType,
+      catheterLocation,
+      catheterPlacedDate,
+      postWeight,
+      durationHours,
+      preBun,
+      postBun,
+      dryWeight,
+    ],
+  );
+
+  const collectDialysisEntryDraftSnapshot = useCallback(
+    () => collectDraftSnapshotWithSessionDate(sessionDate),
+    [collectDraftSnapshotWithSessionDate, sessionDate],
+  );
+
+  const applyDialysisEntryDraftSnapshot = useCallback(
+    (d: DialysisEntryDraftSnapshot) => {
+      form.setFieldsValue(d.formValues);
+      setVitalRows(d.vitalRows.length ? d.vitalRows : [createVitalSignRow()]);
+      setComplications(d.complications);
+      setComplicationRecords(d.complicationRecords);
+      if (isRealPatientId(selectedPatient) && realPrepareData?.ordersToday?.length) {
+        setOrders(mergeDraftOrdersWithSessions(realPrepareData.ordersToday, d.orders));
+      } else {
+        setOrders(d.orders);
       }
-    }, 300);
+      setAccessType(d.accessType);
+      setCatheterLocation(d.catheterLocation);
+      setCatheterPlacedDate(d.catheterPlacedDate);
+      setPostWeight(d.postWeight);
+      setDurationHours(d.durationHours);
+      setPreBun(d.preBun);
+      setPostBun(d.postBun);
+      setDryWeight(d.dryWeight);
+    },
+    [form, selectedPatient, realPrepareData],
+  );
+
+  /** 切换患者或透析日期：先写入上一桶草稿，再清空本页状态，避免串患者 */
+  useEffect(() => {
+    const prevP = prevPatientRef.current;
+    const prevD = prevSessionDateRef.current;
+    const nextP = selectedPatient;
+    const nextD = sessionDate;
+
+    const prevKey = prevP
+      ? dialysisEntryDraftStorageKey(prevP, prevD.format('YYYY-MM-DD'))
+      : null;
+    const nextKey = nextP
+      ? dialysisEntryDraftStorageKey(nextP, nextD.format('YYYY-MM-DD'))
+      : null;
+
+    if (prevKey && nextKey && prevKey !== nextKey) {
+      saveDialysisEntryDraft(prevKey, collectDraftSnapshotWithSessionDate(prevD));
+      suppressDraftSaveUntilRef.current = Date.now() + 1200;
+      form.resetFields();
+      setVitalRows([createVitalSignRow()]);
+      setComplications([]);
+      setComplicationRecords({});
+      setOrders({});
+      setAccessType('AVF');
+      setCatheterLocation('');
+      setCatheterPlacedDate(null);
+      setPostWeight(null);
+      setDurationHours(null);
+      setPreBun(null);
+      setPostBun(null);
+      setDryWeight(null);
+      if (signerLabel) form.setFieldsValue({ nurse_record_sign: signerLabel });
+    }
+
+    prevPatientRef.current = nextP;
+    prevSessionDateRef.current = nextD;
+  }, [selectedPatient, sessionDate, form, collectDraftSnapshotWithSessionDate, signerLabel]);
+
+  const schedulePersistDialysisDraft = useCallback(() => {
+    if (!selectedPatient) return;
+    if (Date.now() < suppressDraftSaveUntilRef.current) return;
+    if (isRealPatientId(selectedPatient) && realPrepareData === null) return;
+
+    if (draftDebounceTimerRef.current) clearTimeout(draftDebounceTimerRef.current);
+    draftDebounceTimerRef.current = setTimeout(() => {
+      draftDebounceTimerRef.current = null;
+      const key = dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD'));
+      saveDialysisEntryDraft(key, collectDialysisEntryDraftSnapshot());
+      setDraftSavedAtIso(new Date().toISOString());
+    }, 600);
+  }, [selectedPatient, sessionDate, realPrepareData, collectDialysisEntryDraftSnapshot]);
+
+  useEffect(
+    () => () => {
+      if (draftDebounceTimerRef.current) clearTimeout(draftDebounceTimerRef.current);
+    },
+    [],
+  );
+
+  /** 今日上机名单（与排班管理 / 处方页同源），用于顶栏快捷点选 */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await scheduleApi.getToday();
+        if (!cancelled) setTodayDialysisQuickList(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setTodayDialysisQuickList([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const handlePatientChange = useCallback(async (val: string) => {
-    setSelectedPatient(val);
-    setRealPrepareData(null);
+  /** 间期用药：拉取有效长期医嘱并筛选类型，用于下方「周几/日期」说明 */
+  useEffect(() => {
+    if (!selectedPatient || !isRealPatientId(selectedPatient)) {
+      setIntervalOrdersReadonly([]);
+      return;
+    }
+    let cancelled = false;
+    ordersApi
+      .getActive(selectedPatient)
+      .then((res) => {
+        if (cancelled) return;
+        const list = res.data.data ?? [];
+        setIntervalOrdersReadonly(list.filter((o) => o.order_type === 'interval_drug'));
+      })
+      .catch(() => {
+        if (!cancelled) setIntervalOrdersReadonly([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPatient]);
 
-    if (isRealPatientId(val)) {
-      // 真实患者：从 API 获取处方与今日医嘱
+  /** URL：?patient_id=&date= 与排班页跳转一致 */
+  useEffect(() => {
+    const pid = searchParams.get('patient_id');
+    const ds = searchParams.get('date');
+    if (ds && /^\d{4}-\d{2}-\d{2}$/.test(ds) && dayjs(ds, 'YYYY-MM-DD', true).isValid()) {
+      setSessionDate(dayjs(ds));
+    }
+    if (pid && isRealPatientId(pid) && !urlPatientInitRef.current) {
+      urlPatientInitRef.current = true;
+      patientsApi
+        .get(pid)
+        .then((res) => {
+          const p = res.data.data;
+          if (!p) return;
+          const label = `${p.name} — ${p.primary_diagnosis} — ${
+            p.isolation_zone === 'normal' ? '普通区' : p.isolation_zone === 'hbv' ? '乙肝区' : '丙肝区'
+          }`;
+          setPinnedPatientOption({ value: pid, label });
+          setSelectedPatient(pid);
+        })
+        .catch(() => {});
+    }
+  }, [searchParams]);
+
+  /** 处方页保存成功广播：当前选中患者一致时刷新 prepare */
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const ce = ev as CustomEvent<PrescriptionSavedDetail>;
+      const d = ce.detail;
+      if (!d?.patientId) return;
+      if (d.patientId === selectedPatient && isRealPatientId(selectedPatient)) {
+        setPrepareRefreshNonce((n) => n + 1);
+      }
+    };
+    window.addEventListener(HD_PRESCRIPTION_SAVED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(HD_PRESCRIPTION_SAVED_EVENT, handler as EventListener);
+  }, [selectedPatient]);
+
+  /** 真实患者：随患者或透析日期变化重新加载当前处方与当日医嘱（与透析处方管理保存结果一致） */
+  useEffect(() => {
+    if (!selectedPatient || !isRealPatientId(selectedPatient)) {
+      return;
+    }
+    let cancelled = false;
+    setRealPrepareData(null);
+    (async () => {
       try {
         const dateStr = sessionDate.format('YYYY-MM-DD');
-        const resp = await dialysisApi.prepare(val, dateStr);
-        const prep = resp.data.data;
+        const resp = await dialysisApi.prepare(selectedPatient, dateStr);
+        if (cancelled) return;
+        const prep = parsePrepareDialysisResponse(resp);
         setRealPrepareData(prep);
         if (prep.prescription) {
           const rx = prep.prescription;
-          setDryWeight(rx.dry_weight);
-          setDurationHours(rx.duration_hours);
-          // 将处方参数预填到表单（可被护士覆盖）
+          const feRaw =
+            rx.form_extra != null && typeof rx.form_extra === 'object' && !Array.isArray(rx.form_extra)
+              ? (rx.form_extra as Record<string, unknown>)
+              : {};
+          const fe = mergeFormExtraFromStorage(selectedPatient, feRaw);
+          const preFromRx = normNum(fe.preMachineWeight);
+          setDryWeight(normNum(rx.dry_weight) ?? null);
+          const dur = normNum(rx.duration_hours);
+          setDurationHours(dur ?? null);
           form.setFieldsValue({
-            blood_flow_rate: rx.blood_flow_rate,
-            dialysate_flow_rate: rx.dialysate_flow_rate,
-            dialysate_na: rx.dialysate_na,
-            dialysate_ca: rx.dialysate_ca,
-            dialysate_k: rx.dialysate_k,
-            dialysate_temp: rx.dialysate_temp,
-            heparin_prime_dose: rx.heparin_prime_dose,
-            heparin_maintain: rx.heparin_maintain,
+            blood_flow_rate: normNum(rx.blood_flow_rate),
+            dialysate_flow_rate: normNum(rx.dialysate_flow_rate),
+            dialysate_na: normNum(rx.dialysate_na),
+            dialysate_ca: normNum(rx.dialysate_ca),
+            dialysate_k: normNum(rx.dialysate_k),
+            dialysate_temp: normNum(rx.dialysate_temp),
+            heparin_prime_dose: normNum(rx.heparin_prime_dose),
+            heparin_maintain: normNum(rx.heparin_maintain),
+            pre_weight: preFromRx ?? normNum(rx.dry_weight),
           });
+        } else {
+          setDryWeight(null);
+          setDurationHours(null);
+          form.setFieldsValue({ pre_weight: undefined });
         }
         setRxDefaults(null);
       } catch {
-        message.error('加载患者处方数据失败，请检查网络或联系管理员');
+        if (!cancelled) {
+          message.error('加载患者处方数据失败，请检查网络或联系管理员');
+          setRealPrepareData(null);
+        }
       }
-    } else {
-      // 演示患者：使用本地数据
-      const p = PATIENTS_LIST.find(p => p.value === val);
-      if (p) {
-        const defaults = mergePrescriptionDefaultsForPatient(p);
-        setRxDefaults(defaults);
-        setDryWeight(typeof defaults.dryWeight === 'number' ? defaults.dryWeight : p.dryWeight);
-        setDurationHours(typeof defaults.duration === 'number' ? defaults.duration : p.prescription.duration);
-        setAccessType(p.vascular.accessType);
-        setCatheterLocation(p.vascular.catheterLocation);
-        setCatheterPlacedDate(p.vascular.catheterPlacedDate);
-      } else {
-        setRxDefaults(null);
-      }
-    }
-
-    const sync = val ? readPostDialysisSync(val) : null;
-    setPostDialysisSyncMeta(sync);
-    if (sync?.filledBy === 'doctor') {
-      setPostWeight(sync.postWeightKg);
-      form.setFieldsValue({
-        post_sbp: sync.postSbp ?? undefined,
-        post_dbp: sync.postDbp ?? undefined,
-        post_pulse: sync.postPulse ?? undefined,
-      });
-    } else {
-      setPostWeight(null);
-      form.setFieldsValue({
-        post_sbp: undefined,
-        post_dbp: undefined,
-        post_pulse: undefined,
-      });
-    }
-  }, [form, sessionDate]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPatient, sessionDate, form, prepareRefreshNonce]);
 
   const selectedDemoPatient = useMemo(
     () => isRealPatientId(selectedPatient)
@@ -979,6 +1460,28 @@ export default function DialysisEntryPage() {
       : (PATIENTS_LIST.find((p) => p.value === selectedPatient) ?? null),
     [selectedPatient],
   );
+
+  /** 异常分析弹窗展示用（真实患者来自排班/URL 固定标签；演示患者来自演示列表） */
+  const selectedPatientDisplayLabel = useMemo(() => {
+    if (!selectedPatient) return undefined;
+    if (pinnedPatientOption?.value === selectedPatient) return pinnedPatientOption.label;
+    const fromSchedule = todayDialysisQuickList.find((r) => r.patient_id === selectedPatient);
+    if (fromSchedule) {
+      const zone =
+        fromSchedule.isolation_zone === 'hbv'
+          ? '乙肝区'
+          : fromSchedule.isolation_zone === 'hcv'
+            ? '丙肝区'
+            : '普通区';
+      return `${fromSchedule.patient_name || '患者'} — ${zone} — 今日排班`;
+    }
+    const demo = PATIENTS_LIST.find((p) => p.value === selectedPatient);
+    if (demo) {
+      const name = demo.label.split(' — ')[0]?.trim();
+      return name || demo.label;
+    }
+    return undefined;
+  }, [selectedPatient, pinnedPatientOption, todayDialysisQuickList]);
 
   /** 与 PrescriptionWorkspace 处方表单字段同源（只读） */
   const rxPreview = useMemo(() => {
@@ -1040,18 +1543,218 @@ export default function DialysisEntryPage() {
     };
   }, [rxDefaults, selectedDemoPatient]);
 
+  /** 当日排班条（仅当透析日期为今天时与 prepare 合并展示） */
+  const scheduleTodayRow = useMemo(() => {
+    if (!selectedPatient || !isRealPatientId(selectedPatient)) return null;
+    if (!sessionDate.isSame(dayjs(), 'day')) return null;
+    return todayDialysisQuickList.find((r) => r.patient_id === selectedPatient) ?? null;
+  }, [selectedPatient, sessionDate, todayDialysisQuickList]);
+
+  /** 今日医嘱执行确认：真实患者为长期医嘱「透析用药」且服务端按频次筛入；演示患者为本地示例 */
+  const orderDisplayList = useMemo(() => {
+    if (!isRealPatientId(selectedPatient)) {
+      return PENDING_ORDERS.map((o) => ({
+        key: o.key,
+        drug: o.drug,
+        detail: o.detail,
+        alreadyExecuted: false,
+      }));
+    }
+    if (!realPrepareData?.ordersToday?.length) {
+      return [];
+    }
+    const sorted = sortSessionsForBedsideDisplay(realPrepareData.ordersToday);
+    return sorted.map((o: OrderForSession) => ({
+      key: o.id,
+      drug: `${o.parent_order_id ? '↳ ' : ''}${(o.drug_name || '（未命名药品）').trim()}`,
+      detail: formatOrderSessionDetail(o),
+      alreadyExecuted: o.alreadyExecuted,
+    }));
+  }, [selectedPatient, realPrepareData]);
+
+  /** 组合医嘱合并为一条卡片；演示患者仍为单行组 */
+  const orderExecutionGroups = useMemo((): DialysisOrderExecGroup[] => {
+    if (!isRealPatientId(selectedPatient)) {
+      return PENDING_ORDERS.map((p) => ({
+        groupId: p.key,
+        isCombo: false,
+        rows: [
+          {
+            key: p.key,
+            drug: p.drug,
+            detail: p.detail,
+            alreadyExecuted: false,
+            isComboChild: false,
+          },
+        ],
+      }));
+    }
+    if (!realPrepareData?.ordersToday?.length) return [];
+    return buildDialysisOrderExecutionGroups(realPrepareData.ordersToday);
+  }, [selectedPatient, realPrepareData]);
+
+  useEffect(() => {
+    if (!selectedPatient) {
+      setOrders({});
+      return;
+    }
+    if (!isRealPatientId(selectedPatient)) {
+      setOrders(Object.fromEntries(PENDING_ORDERS.map((o) => [o.key, false])));
+      return;
+    }
+    const list = realPrepareData?.ordersToday;
+    if (!list?.length) {
+      setOrders({});
+      return;
+    }
+    setOrders(buildInitialOrdersMapFromSessions(list));
+  }, [selectedPatient, sessionDate, realPrepareData]);
+
+  /** prepare 就绪后恢复 sessionStorage 草稿（与处方刷新后再次叠加，以本地未入库编辑为准） */
+  useEffect(() => {
+    if (!selectedPatient) return;
+    if (isRealPatientId(selectedPatient) && realPrepareData === null) return;
+
+    const key = dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD'));
+    const draft = loadDialysisEntryDraft(key);
+    if (!draft) {
+      setDraftSavedAtIso(null);
+      return;
+    }
+    applyDialysisEntryDraftSnapshot(draft);
+    setDraftSavedAtIso(draft.savedAt);
+  }, [
+    selectedPatient,
+    sessionDate,
+    realPrepareData,
+    prepareRefreshNonce,
+    applyDialysisEntryDraftSnapshot,
+  ]);
+
   const postSbpWatch = Form.useWatch('post_sbp', form);
   const postDbpWatch = Form.useWatch('post_dbp', form);
   const postPulseWatch = Form.useWatch('post_pulse', form);
+  const preWeightWatch = Form.useWatch('pre_weight', form);
   const postDialysisLockedByDoctor = postDialysisSyncMeta?.filledBy === 'doctor';
+
+  /** 真实患者：与处方管理 / 排班合并后的只读摘要（依赖表单上机前体重用于超滤估算） */
+  const realPatientRxPreview = useMemo(() => {
+    if (!isRealPatientId(selectedPatient) || !realPrepareData?.prescription) return null;
+    const rx = realPrepareData.prescription;
+    const feRaw =
+      rx.form_extra != null && typeof rx.form_extra === 'object' && !Array.isArray(rx.form_extra)
+        ? (rx.form_extra as Record<string, unknown>)
+        : {};
+    const fe = mergeFormExtraFromStorage(selectedPatient, feRaw);
+    const notesForSplit =
+      rx.notes == null ? null : typeof rx.notes === 'string' ? rx.notes : String(rx.notes);
+    const splitNotes = splitPrescriptionNotesFromDb(notesForSplit);
+    const preAssessOtherText =
+      String(fe.preAssessOther ?? '').trim() || splitNotes.preAssessOther || '';
+    const prescriptionNotesOnly = String(splitNotes.notes ?? '').trim();
+    const edema = String(fe.preAssessEdema ?? '');
+    const edemaSite = String(fe.preAssessEdemaSite ?? '').trim();
+    const bleeding = String(fe.preAssessBleeding ?? '');
+    const bleedingDesc = String(fe.preAssessBleedingDesc ?? '').trim();
+    const edemaDisplay =
+      edema === 'yes' ? (edemaSite ? `有 · ${edemaSite}` : '有') : yesNoAssessLabel(edema);
+    const bleedingDisplay =
+      bleeding === 'yes' ? (bleedingDesc ? `有 · ${bleedingDesc}` : '有') : yesNoAssessLabel(bleeding);
+    const sodiumCurveDisplay =
+      typeof fe.sodiumCurve === 'string' && fe.sodiumCurve
+        ? formatSodiumCurveSummary(fe)
+        : '—';
+    const modeCode = modalityCodeFromScheduleOrRx(
+      scheduleTodayRow?.session_dialysis_mode,
+      rx.hemodialysis_modality,
+    );
+    const dw = normNum(rx.dry_weight);
+    const dur = normNum(rx.duration_hours);
+    if (dw == null || dur == null) return null;
+    const preFromExtra = normNum(fe.preMachineWeight);
+    const preM =
+      preWeightWatch != null && Number.isFinite(Number(preWeightWatch))
+        ? Number(preWeightWatch)
+        : preFromExtra ?? dw;
+    const ufMl = computePrescriptionUltrafiltrationMl(preM, dw, modeCode);
+    const ufRate = dur > 0 ? (ufMl / dur).toFixed(0) : null;
+    const ufPerHrPerDryKg = dur > 0 && dw > 0 ? ((ufMl / dur) / dw).toFixed(2) : null;
+    const ufAlert = ufMl / (dw * 1000) > 0.05;
+    const modeDisplay = dialysisModeLabel(
+      modeCode === 'HD_HP' ? 'HD_HP' : modeCode === 'HDF' ? 'HDF' : 'HD',
+      undefined,
+    );
+    const rxOnlyMod = modalityCodeFromScheduleOrRx(undefined, rx.hemodialysis_modality);
+    const prescriptionModeOnly = dialysisModeLabel(
+      rxOnlyMod === 'HD_HP' ? 'HD_HP' : rxOnlyMod === 'HDF' ? 'HDF' : 'HD',
+      undefined,
+    );
+    const schedMc = scheduleTodayRow?.session_dialysis_mode
+      ? modalityCodeFromScheduleOrRx(scheduleTodayRow.session_dialysis_mode, undefined)
+      : null;
+    const scheduleModeOnly = schedMc
+      ? dialysisModeLabel(schedMc === 'HD_HP' ? 'HD_HP' : schedMc === 'HDF' ? 'HDF' : 'HD', undefined)
+      : null;
+    const scheduleDiffers =
+      !!scheduleTodayRow?.session_dialysis_mode?.trim() &&
+      modalityCodeFromScheduleOrRx(scheduleTodayRow.session_dialysis_mode, rx.hemodialysis_modality) !== rxOnlyMod;
+    const hdfExtra =
+      modeCode === 'HDF' && (rx.hdf_replacement_mode || rx.hdf_replacement_volume_l != null)
+        ? `${hdfReplacementModeLabel(rx.hdf_replacement_mode)}${
+            rx.hdf_replacement_volume_l != null ? ` · ${rx.hdf_replacement_volume_l} L` : ''
+          }`
+        : null;
+    const shiftShort: Record<string, string> = { am: '早', pm: '中', eve: '晚' };
+    return {
+      frequencyLabel: frequencyWeekLabel(rx.frequency_per_week),
+      modeDisplay,
+      prescriptionModeOnly,
+      scheduleModeOnly,
+      scheduleDiffers,
+      bloodFlow: normNum(rx.blood_flow_rate) ?? 0,
+      dialysateFlow: normNum(rx.dialysate_flow_rate) ?? 0,
+      duration: dur,
+      dialyzerShort: dialyzerShortFromFormValue(rx.dialyzer_model ?? ''),
+      anticoagulantLabel: anticoagulantLabelFromCode(String(rx.anticoagulant ?? '')),
+      heparinFirst: normNum(rx.heparin_prime_dose) ?? null,
+      heparinMaint: normNum(rx.heparin_maintain) ?? null,
+      na: normNum(rx.dialysate_na) ?? 0,
+      k: normNum(rx.dialysate_k) ?? 0,
+      ca: normNum(rx.dialysate_ca) ?? 0,
+      dialysateTemp: normNum(rx.dialysate_temp) ?? null,
+      sodiumCurveDisplay,
+      prescriptionNotesDisplay: prescriptionNotesOnly ? prescriptionNotesOnly : '—',
+      preAssessSbp: normNum(fe.preAssessSbp),
+      preAssessDbp: normNum(fe.preAssessDbp),
+      preAssessPulse: normNum(fe.preAssessPulse),
+      edemaDisplay,
+      bleedingDisplay,
+      preAssessOtherDisplay: preAssessOtherText ? preAssessOtherText : '—',
+      shiftChinese: scheduleTodayRow ? shiftShort[scheduleTodayRow.shift] ?? scheduleTodayRow.shift : '—',
+      machineNo: scheduleTodayRow?.machine_no ?? '—',
+      preMachineWeightRx: preM,
+      prescriptionUfMl: ufMl,
+      prescriptionUfRate: ufRate,
+      prescriptionUfPerHrPerDryKg: ufPerHrPerDryKg,
+      ufAlertPrescription: ufAlert,
+      hemodialysisRemark: rx.hemodialysis_remark?.trim() || null,
+      hdfExtra,
+    };
+  }, [
+    selectedPatient,
+    realPrepareData,
+    scheduleTodayRow,
+    preWeightWatch,
+  ]);
 
   /**
    * 实际脱水量（mL）：
    * - 演示患者：处方上机前体重 - 透后体重
-   * - 真实患者：表单填写的透前体重 - 透后体重（fallback：干体重+估算）
+   * - 真实患者：表单上机前体重 - 透后体重
    */
-  const preWeightForUF = rxPreview?.preMachineWeightRx
-    ?? (form.getFieldValue('pre_weight') as number | undefined)
+  const preWeightForUF =
+    rxPreview?.preMachineWeightRx
+    ?? (preWeightWatch != null && Number.isFinite(Number(preWeightWatch)) ? Number(preWeightWatch) : null)
     ?? null;
   const computedUF =
     preWeightForUF != null && postWeight != null
@@ -1118,23 +1821,63 @@ export default function DialysisEntryPage() {
     return () => window.clearTimeout(t);
   }, [selectedPatient, postWeight, postSbpWatch, postDbpWatch, postPulseWatch]);
 
-  const handleVitalChange = (rowId: string, field: string, val: string) => {
-    setVitalRows(prev => prev.map(row =>
-      row.id === rowId ? { ...row, values: { ...row.values, [field]: val } } : row
-    ));
+  const handleVitalChange = useCallback(
+    (rowId: string, field: string, val: string) => {
+      setVitalRows((prev) =>
+        prev.map((row) => {
+          if (row.id !== rowId) return row;
+          const nextValues = { ...row.values, [field]: val };
+          if (field !== 'signature' && signerLabel) {
+            if (vitalSignRowHasData(nextValues) && !String(nextValues.signature ?? '').trim()) {
+              nextValues.signature = signerLabel;
+            }
+          }
+          return { ...row, values: nextValues };
+        }),
+      );
+      schedulePersistDialysisDraft();
+    },
+    [signerLabel, schedulePersistDialysisDraft],
+  );
+
+  const handleAddVitalRow = () => {
+    setVitalRows((prev) => [...prev, createVitalSignRow()]);
+    schedulePersistDialysisDraft();
   };
 
-  const handleAddVitalRow = () => setVitalRows(prev => [...prev, createVitalSignRow()]);
+  /** 仅补充「记录护士签名」默认带出；③上机前三项不自动填充 */
+  useEffect(() => {
+    if (!signerLabel) return;
+    queueMicrotask(() => {
+      const cur = form.getFieldValue('nurse_record_sign');
+      if (cur == null || String(cur).trim() === '') {
+        form.setFieldValue('nurse_record_sign', signerLabel);
+      }
+    });
+  }, [signerLabel, selectedPatient, form]);
 
   const handleRemoveVitalRow = (rowId: string) => {
     setVitalRows(prev => {
       if (prev.length <= 1) { message.warning('至少保留 1 条生命体征记录'); return prev; }
       return prev.filter(row => row.id !== rowId);
     });
+    schedulePersistDialysisDraft();
   };
 
-  const handleOrderToggle = (key: string, checked: boolean) =>
-    setOrders(prev => ({ ...prev, [key]: checked }));
+  const handleOrderToggle = (key: string, checked: boolean) => {
+    setOrders((prev) => ({ ...prev, [key]: checked }));
+    schedulePersistDialysisDraft();
+  };
+
+  /** 组合医嘱：一次勾选同步主药 + 所有子药 */
+  const handleComboGroupToggle = (g: DialysisOrderExecGroup, checked: boolean) => {
+    setOrders((prev) => {
+      const next = { ...prev };
+      for (const r of g.rows) next[r.key] = checked;
+      return next;
+    });
+    schedulePersistDialysisDraft();
+  };
 
   const handleSubmit = async () => {
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
@@ -1143,8 +1886,14 @@ export default function DialysisEntryPage() {
     const hasDemoRx = !isRealPatientId(selectedPatient) && rxPreview !== null;
     if (!hasRealRx && !hasDemoRx) { message.warning('处方数据未加载，请重新选择患者'); return; }
     if (postWeight == null) { message.warning('请填写透后体重'); return; }
-    const hasUnsignedVitalRow = vitalRows.some(row => !row.values.signature?.trim());
-    if (hasUnsignedVitalRow) { message.warning('透析中生命体征记录每行都需要护士签名'); return; }
+    const hasUnsignedVitalRow = vitalRows.some((row) => {
+      if (!vitalSignRowHasData(row.values)) return false;
+      return !row.values.signature?.trim();
+    });
+    if (hasUnsignedVitalRow) {
+      message.warning('已填写数据的每一行生命体征须填写护士签名（录入数据后将自动带出填写人姓名）');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -1152,9 +1901,7 @@ export default function DialysisEntryPage() {
         // ── 真实患者：构建 API 请求体 ──
         const formValues = form.getFieldsValue() as Record<string, unknown>;
         const dateStr = sessionDate.format('YYYY-MM-DD');
-        const preWeightVal = realPrepareData?.prescription?.dry_weight
-          ? (rxPreview?.preMachineWeightRx ?? null)
-          : null;
+        const preWeightVal = normNum(formValues.pre_weight);
 
         // 生命体征数组
         const vitalSignsPayload = vitalRows
@@ -1219,6 +1966,10 @@ export default function DialysisEntryPage() {
 
         await dialysisApi.create(payload);
         message.success('透析记录已保存，Kt/V已计算并记录');
+        removeDialysisEntryDraft(
+          dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD')),
+        );
+        setDraftSavedAtIso(null);
         // 清除透后同步缓存
         if (selectedPatient) {
           writePostDialysisSync({
@@ -1236,6 +1987,10 @@ export default function DialysisEntryPage() {
         // ── 演示患者：保持原有模拟逻辑 ──
         await new Promise(r => setTimeout(r, 800));
         message.success('透析记录已保存（演示模式，未写入数据库）');
+        removeDialysisEntryDraft(
+          dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD')),
+        );
+        setDraftSavedAtIso(null);
         navigate('/dashboard');
       }
     } catch {
@@ -1273,6 +2028,7 @@ export default function DialysisEntryPage() {
       complications,
       complicationRecords,
       orders,
+      orderRows: orderDisplayList.map(({ key, drug, detail }) => ({ key, drug, detail })),
       vitalRows,
       ktv,
       urr,
@@ -1288,7 +2044,7 @@ export default function DialysisEntryPage() {
     selectedPatient, prescribingDoctorName, rxDefaults, dryWeight, postWeight,
     durationHours, preBun, postBun, computedUF, ufPercent, ufAlert,
     accessType, catheterLocation, catheterDays, complications, complicationRecords,
-    orders, vitalRows, ktv, urr, ktvAdequate, urrAdequate, form,
+    orders, orderDisplayList, vitalRows, ktv, urr, ktvAdequate, urrAdequate, form,
   ]);
 
   return (
@@ -1309,29 +2065,8 @@ export default function DialysisEntryPage() {
           </div>
         </div>
 
-        {/* 患者快选 + 日期 内联到顶栏 */}
+        {/* 透析日期（患者请从「今日上机名单」或带 patient_id 的链接进入） */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Select
-            placeholder="搜索真实患者或选择演示患者…"
-            value={selectedPatient || undefined}
-            onChange={handlePatientChange}
-            onSearch={handlePatientSearch}
-            loading={patientSearchLoading}
-            options={[
-              ...(patientSearchOptions.length > 0 ? [{
-                label: '── 在线患者（实时搜索）──',
-                options: patientSearchOptions,
-              }] : []),
-              {
-                label: '── 演示患者 ──',
-                options: PATIENTS_LIST.map(p => ({ value: p.value, label: p.label })),
-              },
-            ]}
-            style={{ width: 280 }}
-            showSearch
-            filterOption={false}
-            size="middle"
-          />
           <DatePicker
             value={sessionDate}
             onChange={(val) => val && setSessionDate(val)}
@@ -1344,12 +2079,25 @@ export default function DialysisEntryPage() {
         <Button icon={<PrinterOutlined />} onClick={handlePrint} size="middle">
           打印记录单
         </Button>
+        {draftSavedAtIso && selectedPatient && (
+          <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+            临时保存 {dayjs(draftSavedAtIso).format('HH:mm:ss')}
+          </Tag>
+        )}
         <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit} size="middle">
           保存记录
         </Button>
       </div>
 
-      <Form form={form} layout="vertical" size="middle">
+      <Form
+        form={form}
+        layout="vertical"
+        size="middle"
+        initialValues={nurseSignatureInitialValues}
+        onValuesChange={() => {
+          schedulePersistDialysisDraft();
+        }}
+      >
 
         {/* ══════════════════ ① 患者信息 + 处方 + 体重 ══════════════════ */}
         <Section>
@@ -1361,7 +2109,7 @@ export default function DialysisEntryPage() {
                 color: '#94A3B8', background: '#F8FAFC', borderRadius: 8,
                 border: '1px dashed #CBD5E1', fontSize: 13,
               }}>
-                请在顶部选择患者，系统将自动带入处方与评估信息
+                请从侧栏「今日上机名单」选择患者，或由排班/处方页携带患者链接进入；系统将自动带入处方与评估信息
               </div>
             )}
 
@@ -1530,6 +2278,191 @@ export default function DialysisEntryPage() {
                 </div>
               </>
             )}
+
+            {isRealPatientId(selectedPatient) && realPrepareData && (
+              <>
+                {realPatientRxPreview ? (
+                  <>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      padding: '8px 12px',
+                      background: 'linear-gradient(90deg,#EFF6FF,#F0F9FF)',
+                      borderRadius: 8, marginBottom: 14,
+                      border: '1px solid #BFDBFE',
+                    }}>
+                      <span style={{ fontWeight: 700, fontSize: 15, color: '#1E40AF' }}>
+                        {selectedPatientDisplayLabel?.split(' — ')[0] ?? '患者'}
+                      </span>
+                      <Tag color="blue">{realPatientRxPreview.shiftChinese}班</Tag>
+                      <Tag color="geekblue">机位 {realPatientRxPreview.machineNo}</Tag>
+                      <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
+                        与「透析处方管理」当前保存参数同步；上机前体重可在下方第⑦段修改
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                      <div style={{
+                        padding: 12, background: '#F8FAFC', borderRadius: 8,
+                        border: '1px solid #DBEAFE',
+                      }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                          处方参数（数据库当前处方）
+                        </div>
+                        <Grid cols={3} gap={10}>
+                          <ReadonlyValue label="透析频次" value={realPatientRxPreview.frequencyLabel} />
+                          <ReadonlyValue label="透析方式（生效）" value={realPatientRxPreview.modeDisplay} />
+                          <ReadonlyValue label="标准时长" value={`${realPatientRxPreview.duration} h`} />
+                          {realPatientRxPreview.scheduleDiffers && realPatientRxPreview.scheduleModeOnly ? (
+                            <ReadonlyValue
+                              label="处方 / 今日排班"
+                              value={`${realPatientRxPreview.prescriptionModeOnly} / ${realPatientRxPreview.scheduleModeOnly}`}
+                            />
+                          ) : null}
+                          {realPatientRxPreview.hdfExtra ? (
+                            <ReadonlyValue label="HDF 置换" value={realPatientRxPreview.hdfExtra} />
+                          ) : null}
+                          <ReadonlyValue label="血流速" value={`${realPatientRxPreview.bloodFlow} mL/min`} />
+                          <ReadonlyValue label="透析液流速" value={`${realPatientRxPreview.dialysateFlow} mL/min`} />
+                          <ReadonlyValue label="透析器" value={realPatientRxPreview.dialyzerShort} />
+                          <ReadonlyValue label="Na / K / Ca" value={`${realPatientRxPreview.na} / ${realPatientRxPreview.k} / ${realPatientRxPreview.ca}`} />
+                          <ReadonlyValue
+                            label="透析液温度 (℃)"
+                            value={realPatientRxPreview.dialysateTemp != null ? `${realPatientRxPreview.dialysateTemp} ℃` : '—'}
+                          />
+                          <ReadonlyValue label="钠曲线" value={realPatientRxPreview.sodiumCurveDisplay} />
+                          <ReadonlyValue
+                            label="处方备注"
+                            value={
+                              realPatientRxPreview.prescriptionNotesDisplay !== '—' ? (
+                                <span style={{ whiteSpace: 'pre-wrap', fontWeight: 600, fontSize: 13 }}>
+                                  {realPatientRxPreview.prescriptionNotesDisplay}
+                                </span>
+                              ) : (
+                                '—'
+                              )
+                            }
+                          />
+                          <ReadonlyValue label="抗凝方案" value={realPatientRxPreview.anticoagulantLabel} />
+                          <ReadonlyValue
+                            label="首剂"
+                            value={realPatientRxPreview.heparinFirst != null ? `${realPatientRxPreview.heparinFirst} IU` : '—'}
+                          />
+                          <ReadonlyValue
+                            label="追加"
+                            value={realPatientRxPreview.heparinMaint != null ? `${realPatientRxPreview.heparinMaint} IU/h` : '—'}
+                          />
+                        </Grid>
+                      </div>
+
+                      <div style={{
+                        padding: 12, background: '#F8FAFC', borderRadius: 8,
+                        border: '1px solid #DBEAFE',
+                      }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                          透前评估（与透析处方管理同步）
+                        </div>
+                        <Grid cols={3} gap={10}>
+                          <ReadonlyValue
+                            label="收缩压"
+                            value={
+                              realPatientRxPreview.preAssessSbp != null
+                                ? `${realPatientRxPreview.preAssessSbp} mmHg`
+                                : '—'
+                            }
+                          />
+                          <ReadonlyValue
+                            label="舒张压"
+                            value={
+                              realPatientRxPreview.preAssessDbp != null
+                                ? `${realPatientRxPreview.preAssessDbp} mmHg`
+                                : '—'
+                            }
+                          />
+                          <ReadonlyValue
+                            label="脉搏"
+                            value={
+                              realPatientRxPreview.preAssessPulse != null
+                                ? `${realPatientRxPreview.preAssessPulse} 次/分`
+                                : '—'
+                            }
+                          />
+                          <ReadonlyValue label="水肿" value={realPatientRxPreview.edemaDisplay} />
+                          <ReadonlyValue label="活动性出血" value={realPatientRxPreview.bleedingDisplay} />
+                        </Grid>
+                        <div style={{ marginTop: 10 }}>
+                          <ReadonlyValue
+                            label="其他（透前补充）"
+                            value={
+                              realPatientRxPreview.preAssessOtherDisplay !== '—' ? (
+                                <span style={{ whiteSpace: 'pre-wrap', fontWeight: 700, fontSize: 13 }}>
+                                  {realPatientRxPreview.preAssessOtherDisplay}
+                                </span>
+                              ) : (
+                                '—'
+                              )
+                            }
+                          />
+                        </div>
+                        <div style={{ marginTop: 10 }}>
+                          <ReadonlyValue
+                            label="血透方式备注（处方）"
+                            value={realPatientRxPreview.hemodialysisRemark ?? '—'}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      padding: '12px 14px', background: '#FFFDF0', borderRadius: 8,
+                      border: '1px solid #FDE68A',
+                    }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 10, letterSpacing: 0.5 }}>
+                        体重与超滤（与处方工作台公式一致；上机前体重默认取干体重，请在第⑦段改为实测值）
+                      </div>
+                      <Grid cols={4} gap={14}>
+                        <ReadonlyValue label="干体重（处方）" value={`${dryWeight ?? '—'} kg`} color="#1D4ED8" bg="#EFF6FF" border="#BFDBFE" />
+                        <ReadonlyValue label="上机前体重（用于估算）" value={`${realPatientRxPreview.preMachineWeightRx} kg`} />
+                        <ReadonlyValue
+                          label="处方超滤量"
+                          value={
+                            `${realPatientRxPreview.prescriptionUfMl} mL${realPatientRxPreview.ufAlertPrescription ? ' ⚠️' : ''}`
+                          }
+                          color={realPatientRxPreview.ufAlertPrescription ? '#BE123C' : '#15803D'}
+                          bg={realPatientRxPreview.ufAlertPrescription ? '#FFF1F2' : '#F0FDF4'}
+                          border={realPatientRxPreview.ufAlertPrescription ? '#FECDD3' : '#BBF7D0'}
+                        />
+                        <ReadonlyValue
+                          label="超滤率 = 超滤量 ÷ 时长"
+                          value={realPatientRxPreview.prescriptionUfRate != null ? `${realPatientRxPreview.prescriptionUfRate} mL/h` : '—'}
+                          color="#0369A1"
+                          bg="#F0F9FF"
+                          border="#BAE6FD"
+                        />
+                        <ReadonlyValue
+                          label="每公斤体重每小时超滤率（干体重）"
+                          value={
+                            realPatientRxPreview.prescriptionUfPerHrPerDryKg != null
+                              ? `${realPatientRxPreview.prescriptionUfPerHrPerDryKg} mL·h⁻¹·kg⁻¹`
+                              : '—'
+                          }
+                          color="#0369A1"
+                          bg="#F0F9FF"
+                          border="#BAE6FD"
+                        />
+                      </Grid>
+                    </div>
+                  </>
+                ) : (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="暂无当前有效透析处方"
+                    description="请医生在「透析处方管理」中保存处方后，本页将自动从数据库带入参数。"
+                  />
+                )}
+              </>
+            )}
           </SectionBody>
         </Section>
 
@@ -1544,7 +2477,15 @@ export default function DialysisEntryPage() {
               borderRadius: 8, border: '1px solid #BAE6FD', marginBottom: 14,
             }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: '#0369A1', whiteSpace: 'nowrap' }}>通路类型</span>
-              <Radio.Group value={accessType} onChange={e => setAccessType(e.target.value)} optionType="button" buttonStyle="solid">
+              <Radio.Group
+                value={accessType}
+                onChange={(e) => {
+                  setAccessType(e.target.value);
+                  schedulePersistDialysisDraft();
+                }}
+                optionType="button"
+                buttonStyle="solid"
+              >
                 <Radio.Button value="AVF">AVF 自体内瘘</Radio.Button>
                 <Radio.Button value="AVG">AVG 人工血管</Radio.Button>
                 <Radio.Button value="TCC">TCC 长期导管</Radio.Button>
@@ -1626,7 +2567,10 @@ export default function DialysisEntryPage() {
                 <Form.Item label={<FieldLabel text="导管位置" />} style={{ marginBottom: 0 }}>
                   <Select
                     value={catheterLocation || undefined}
-                    onChange={setCatheterLocation}
+                    onChange={(v) => {
+                      setCatheterLocation(v);
+                      schedulePersistDialysisDraft();
+                    }}
                     options={[
                       { value: 'right_jugular', label: '右颈内静脉' },
                       { value: 'left_jugular', label: '左颈内静脉' },
@@ -1695,14 +2639,24 @@ export default function DialysisEntryPage() {
           <SectionTitle step={3} color="#7C3AED" title="护士签名（上机前）" />
           <SectionBody>
             <Grid cols={3} gap={14}>
-              <Form.Item label={<FieldLabel text="穿刺护士" required />} style={{ marginBottom: 0 }}>
-                <Input placeholder="请输入护士姓名" />
+              <Form.Item
+                label={<FieldLabel text="穿刺护士" required />}
+                name="nurse_puncture_sign"
+                rules={[{ required: true, message: '请填写或确认穿刺护士签名' }]}
+                style={{ marginBottom: 0 }}
+              >
+                <Input placeholder="请填写护士姓名" />
               </Form.Item>
-              <Form.Item label={<FieldLabel text="上机护士" required />} style={{ marginBottom: 0 }}>
-                <Input placeholder="请输入护士姓名" />
+              <Form.Item
+                label={<FieldLabel text="上机护士" required />}
+                name="nurse_on_machine_sign"
+                rules={[{ required: true, message: '请填写或确认上机护士签名' }]}
+                style={{ marginBottom: 0 }}
+              >
+                <Input placeholder="请填写护士姓名" />
               </Form.Item>
-              <Form.Item label={<FieldLabel text="二次核对护士" />} style={{ marginBottom: 0 }}>
-                <Input placeholder="请输入护士姓名" />
+              <Form.Item label={<FieldLabel text="二次核对护士" />} name="nurse_double_check_sign" style={{ marginBottom: 0 }}>
+                <Input placeholder="选填" />
               </Form.Item>
             </Grid>
           </SectionBody>
@@ -1778,7 +2732,7 @@ export default function DialysisEntryPage() {
                             type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
-                            placeholder={field === 'signature' ? '签名' : ''}
+                            placeholder={field === 'signature' ? '录入数据后自动填写' : ''}
                             style={{
                               width: '100%', padding: '4px 6px',
                               border: '1px solid transparent',
@@ -1822,31 +2776,165 @@ export default function DialysisEntryPage() {
           <Section style={{ marginBottom: 0 }}>
             <SectionTitle step={5} color="#D97706" title="今日医嘱执行确认" />
             <SectionBody>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {PENDING_ORDERS.map(o => (
-                  <div
-                    key={o.key}
-                    onClick={() => handleOrderToggle(o.key, !orders[o.key])}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '10px 12px',
-                      border: `1.5px solid ${orders[o.key] ? '#6EE7B7' : '#FDE68A'}`,
-                      borderRadius: 8, cursor: 'pointer',
-                      background: orders[o.key] ? '#F0FDF4' : '#FFFBEB',
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    <Checkbox checked={!!orders[o.key]} onChange={() => {}} onClick={e => e.stopPropagation()} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, color: '#0D1B3E', fontSize: 13 }}>{o.drug}</div>
-                      <div style={{ fontSize: 11, color: '#7B92BC', marginTop: 1 }}>{o.detail}</div>
+              {isRealPatientId(selectedPatient) && realPrepareData && orderExecutionGroups.length === 0 && (
+                <Alert
+                  type="info" showIcon
+                  message="本透析日暂无待确认的透析用药医嘱（未开立、已停止，或频次不在今日执行）"
+                  style={{ marginBottom: 10, fontSize: 12 }}
+                />
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {orderExecutionGroups.map((g) => {
+                  const allDone = g.rows.length > 0 && g.rows.every((r) => orders[r.key]);
+                  const borderOk = allDone ? '#6EE7B7' : '#FDE68A';
+                  const bgOuter = allDone ? '#ECFDF5' : '#FFFBF0';
+                  const anyPriorExec = g.rows.some((r) => r.alreadyExecuted);
+
+                  if (g.isCombo) {
+                    return (
+                      <div
+                        key={g.groupId}
+                        style={{
+                          border: `1.5px solid ${borderOk}`,
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          background: bgOuter,
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        <div
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: '#B45309',
+                            background: '#FEF3C7',
+                            borderBottom: '1px solid #FDE68A',
+                          }}
+                        >
+                          组合医嘱（共用用法与频次）
+                        </div>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleComboGroupToggle(g, !allDone)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleComboGroupToggle(g, !allDone);
+                            }
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: 10,
+                            padding: '12px',
+                            cursor: 'pointer',
+                            background: allDone ? '#F0FDF4' : '#FFFBEB',
+                          }}
+                        >
+                          <Checkbox
+                            checked={allDone}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleComboGroupToggle(g, e.target.checked);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            {g.rows.map((o, idx) => (
+                              <div
+                                key={o.key}
+                                style={{
+                                  marginBottom: idx < g.rows.length - 1 ? 10 : 0,
+                                  paddingBottom: idx < g.rows.length - 1 ? 10 : 0,
+                                  borderBottom: idx < g.rows.length - 1 ? '1px dashed #E7DCC8' : undefined,
+                                }}
+                              >
+                                <div style={{ fontWeight: 600, color: '#0D1B3E', fontSize: 13 }}>
+                                  {o.isComboChild ? (
+                                    <>
+                                      <span style={{ color: '#94A3B8', marginRight: 4 }}>↳</span>
+                                      {o.drug}
+                                    </>
+                                  ) : (
+                                    o.drug
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11, color: '#7B92BC', marginTop: 2 }}>{o.detail}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+                            {anyPriorExec && (
+                              <Tag color="processing" style={{ fontSize: 10, margin: 0 }}>已有执行记录</Tag>
+                            )}
+                            {allDone
+                              ? <Tag color="success" icon={<CheckCircleFilled />}>已执行</Tag>
+                              : <Tag color="warning">待执行</Tag>
+                            }
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={g.groupId}
+                      style={{
+                        border: `1.5px solid ${borderOk}`,
+                        borderRadius: 8,
+                        overflow: 'hidden',
+                        background: bgOuter,
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {g.rows.map((o) => (
+                        <div
+                          key={o.key}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleOrderToggle(o.key, !orders[o.key])}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleOrderToggle(o.key, !orders[o.key]);
+                            }
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            padding: '10px 12px',
+                            cursor: 'pointer',
+                            background: orders[o.key] ? '#F0FDF4' : '#FFFBEB',
+                            transition: 'background 0.12s',
+                          }}
+                        >
+                          <Checkbox
+                            checked={!!orders[o.key]}
+                            onChange={() => {}}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, color: '#0D1B3E', fontSize: 13 }}>{o.drug}</div>
+                            <div style={{ fontSize: 11, color: '#7B92BC', marginTop: 1 }}>{o.detail}</div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                            {o.alreadyExecuted && (
+                              <Tag color="processing" style={{ fontSize: 10, margin: 0 }}>已有执行记录</Tag>
+                            )}
+                            {orders[o.key]
+                              ? <Tag color="success" icon={<CheckCircleFilled />}>已执行</Tag>
+                              : <Tag color="warning">待执行</Tag>
+                            }
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {orders[o.key]
-                      ? <Tag color="success" icon={<CheckCircleFilled />}>已执行</Tag>
-                      : <Tag color="warning">待执行</Tag>
-                    }
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </SectionBody>
           </Section>
@@ -1886,6 +2974,8 @@ export default function DialysisEntryPage() {
                           setTreatmentModalTarget(c.value);
                           treatmentForm.resetFields();
                           treatmentForm.setFieldValue('occurrenceTime', dayjs().format('HH:mm'));
+                          treatmentForm.setFieldValue('nurse', signerLabel);
+                          schedulePersistDialysisDraft();
                         }}
                       >
                         <Checkbox
@@ -1912,7 +3002,12 @@ export default function DialysisEntryPage() {
                               style={{ padding: '0 4px', fontSize: 12, color: c.emergency ? '#DC2626' : '#0369A1' }}
                               onClick={() => {
                                 setTreatmentModalTarget(c.value);
-                                treatmentForm.setFieldsValue(record ?? { occurrenceTime: dayjs().format('HH:mm') });
+                                const base = record ?? { occurrenceTime: dayjs().format('HH:mm') };
+                                const n = String((base as Record<string, unknown>).nurse ?? '').trim();
+                                treatmentForm.setFieldsValue({
+                                  ...base,
+                                  nurse: n || signerLabel,
+                                });
                               }}
                             >
                               {hasFilled ? '编辑记录' : '填写处理记录'}
@@ -1928,6 +3023,7 @@ export default function DialysisEntryPage() {
                                   delete next[c.value];
                                   return next;
                                 });
+                                schedulePersistDialysisDraft();
                               }}
                             />
                           </div>
@@ -1970,6 +3066,58 @@ export default function DialysisEntryPage() {
           </Section>
         </div>
 
+        {/* 间期用药（非透析日）：标准展示为「周几或每月几日」，不在此页执行确认 */}
+        {isRealPatientId(selectedPatient) && intervalOrdersReadonly.length > 0 && (
+          <div style={{
+            marginBottom: 12,
+            border: '1px solid #E2E8F0',
+            borderRadius: 8,
+            overflow: 'hidden',
+            background: '#fff',
+          }}>
+            <div style={{
+              padding: '10px 16px',
+              background: '#F8FAFC',
+              borderBottom: '1px solid #E2E8F0',
+              fontWeight: 600,
+              fontSize: 14,
+              color: '#475569',
+            }}>
+              间期用药（非透析日）· 具体执行约定
+            </div>
+            <div style={{ padding: 12 }}>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 10, fontSize: 12 }}
+                message="以下药品在透析间期使用；执行时间以长期医嘱填写的「周几或日期」为准，不在上方「今日医嘱执行确认」中勾选。"
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {intervalOrdersReadonly.map((o) => (
+                  <div
+                    key={o.id}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #EEF2F7',
+                      borderRadius: 8,
+                      background: '#FAFBFC',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: '#0D1B3E', fontSize: 13 }}>{o.drug_name}</div>
+                    <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
+                      {[o.dose, o.dose_unit].filter(Boolean).join(' ')} · {o.route} · {FREQ_LABELS[o.frequency] || o.frequency}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#0369A1', marginTop: 6 }}>
+                      <strong>具体执行：</strong>
+                      {describeFrequencyDetailForOrder(o.frequency, o.frequency_detail)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ══════════════════ ⑦ 透析后评估 ══════════════════ */}
         <Section>
           <SectionTitle step={7} color="#0D1B3E" title="透析后评估 · 充分性计算（Kt/V）" />
@@ -1984,14 +3132,29 @@ export default function DialysisEntryPage() {
               />
             )}
 
-            {/* 第一行：时长、体重、脱水、入量 */}
-            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
+            <SubsectionTitle first>体重、时间与液体</SubsectionTitle>
+            <Grid cols={4} gap={14} style={{ marginBottom: 10 }}>
               <Form.Item label={<FieldLabel text="实际透析时长" required />} style={{ marginBottom: 0 }}>
                 <InputNumber
                   min={0} max={8} step={0.1} precision={1}
                   style={{ width: '100%' }} addonAfter="h"
                   value={durationHours ?? undefined}
-                  onChange={v => setDurationHours(v)}
+                  onChange={(v) => {
+                    setDurationHours(v);
+                    schedulePersistDialysisDraft();
+                  }}
+                />
+              </Form.Item>
+              <Form.Item
+                name="pre_weight"
+                label={<FieldLabel text="上机前体重（kg）" />}
+                style={{ marginBottom: 0 }}
+                tooltip="默认取处方干体重，请改为当日实测值；用于脱水量与 Kt/V 计算"
+              >
+                <InputNumber
+                  min={20} max={200} step={0.1} precision={1}
+                  style={{ width: '100%' }} addonAfter="kg"
+                  placeholder="实测上机前体重"
                 />
               </Form.Item>
               <Form.Item label={<FieldLabel text="透析后体重" required />} style={{ marginBottom: 0 }}>
@@ -1999,57 +3162,52 @@ export default function DialysisEntryPage() {
                   min={20} max={200} step={0.1} precision={1}
                   style={{ width: '100%' }} addonAfter="kg"
                   value={postWeight ?? undefined}
-                  onChange={v => setPostWeight(v)}
+                  onChange={(v) => {
+                    setPostWeight(v);
+                    schedulePersistDialysisDraft();
+                  }}
                   placeholder="如：62.0"
                   disabled={postDialysisLockedByDoctor}
                 />
               </Form.Item>
-              <div>
-                <FieldLabel text="实际脱水量（自动）" />
-                <div style={{
-                  marginTop: 4, padding: '5px 11px',
-                  background: computedUF !== null ? (ufAlert ? '#FFF1F2' : '#F0FDF4') : '#F8FAFC',
-                  border: `1px solid ${computedUF !== null ? (ufAlert ? '#FECDD3' : '#BBF7D0') : '#E2E8F0'}`,
-                  borderRadius: 6, fontWeight: 700, fontSize: 15,
-                  color: computedUF !== null ? (ufAlert ? '#BE123C' : '#15803D') : '#94A3B8',
-                  fontFamily: 'DM Mono, monospace',
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  height: 32,
-                }}>
-                  {computedUF !== null
-                    ? <>{computedUF} mL {ufPercent && <span style={{ fontSize: 12, fontWeight: 400 }}>({ufPercent}%)</span>}{ufAlert && <WarningFilled />}</>
-                    : '—'
-                  }
-                </div>
-              </div>
               <Form.Item label={<FieldLabel text="透析期间入量" />} style={{ marginBottom: 0 }}>
                 <InputNumber min={0} max={10000} style={{ width: '100%' }} addonAfter="mL" />
               </Form.Item>
             </Grid>
+            <div style={{ marginBottom: 14 }}>
+              <FieldLabel text="实际脱水量（自动）" />
+              <div style={{
+                marginTop: 4, padding: '8px 12px',
+                background: computedUF !== null ? (ufAlert ? '#FFF1F2' : '#F0FDF4') : '#F8FAFC',
+                border: `1px solid ${computedUF !== null ? (ufAlert ? '#FECDD3' : '#BBF7D0') : '#E2E8F0'}`,
+                borderRadius: 6, fontWeight: 700, fontSize: 15,
+                color: computedUF !== null ? (ufAlert ? '#BE123C' : '#15803D') : '#94A3B8',
+                fontFamily: 'DM Mono, monospace',
+                display: 'flex', alignItems: 'center', gap: 6,
+                minHeight: 36,
+              }}>
+                {computedUF !== null
+                  ? <>{computedUF} mL {ufPercent && <span style={{ fontSize: 12, fontWeight: 400 }}>({ufPercent}%)</span>}{ufAlert && <WarningFilled />}</>
+                  : '—'
+                }
+              </div>
+            </div>
 
-            {/* 第二行：BUN + 透后生命体征 */}
-            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
-              <Form.Item label={<FieldLabel text="透前 BUN" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
-                  value={preBun ?? undefined} onChange={v => setPreBun(v)} placeholder="透析前" addonAfter="mmol/L" />
-              </Form.Item>
-              <Form.Item label={<FieldLabel text="透后 BUN" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
-                  value={postBun ?? undefined} onChange={v => setPostBun(v)} placeholder="透析后" addonAfter="mmol/L" />
-              </Form.Item>
-              <Form.Item name="post_sbp" label={<FieldLabel text="透后收缩压" />} style={{ marginBottom: 0 }}>
+            <SubsectionTitle>透后生命体征</SubsectionTitle>
+            <Grid cols={3} gap={14} style={{ marginBottom: 14 }}>
+              <Form.Item name="post_sbp" label={<FieldLabel text="收缩压" />} style={{ marginBottom: 0 }}>
                 <InputNumber min={60} max={250} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
-              <Form.Item name="post_dbp" label={<FieldLabel text="透后舒张压" />} style={{ marginBottom: 0 }}>
+              <Form.Item name="post_dbp" label={<FieldLabel text="舒张压" />} style={{ marginBottom: 0 }}>
                 <InputNumber min={40} max={160} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
+              </Form.Item>
+              <Form.Item name="post_pulse" label={<FieldLabel text="脉搏" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={30} max={220} style={{ width: '100%' }} addonAfter="次/分" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
             </Grid>
 
-            {/* 第三行：脉搏、凝血、渗血、封管 */}
-            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
-              <Form.Item name="post_pulse" label={<FieldLabel text="透后脉搏" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={30} max={220} style={{ width: '100%' }} addonAfter="次/分" disabled={postDialysisLockedByDoctor} />
-              </Form.Item>
+            <SubsectionTitle>凝血与通路</SubsectionTitle>
+            <Grid cols={3} gap={14} style={{ marginBottom: 14 }}>
               <Form.Item label={<FieldLabel text="凝血分级" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="0" options={[
                   { value: '0', label: '0级（无凝血）' },
@@ -2066,8 +3224,8 @@ export default function DialysisEntryPage() {
               </Form.Item>
             </Grid>
 
-            {/* 第四行：状态、机器、消毒、皮肤 */}
-            <Grid cols={4} gap={14} style={{ marginBottom: 14 }}>
+            <SubsectionTitle>透析过程与设备</SubsectionTitle>
+            <Grid cols={3} gap={14} style={{ marginBottom: 14 }}>
               <Form.Item label={<FieldLabel text="透析期间患者状态" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="stable" options={[
                   { value: 'stable', label: '平稳' },
@@ -2088,22 +3246,78 @@ export default function DialysisEntryPage() {
                   { value: 'other', label: '其他' },
                 ]} />
               </Form.Item>
-              <div style={{ display: 'flex', gap: 20 }}>
-                <Form.Item label={<FieldLabel text="局部皮肤完好" />} style={{ marginBottom: 0, flex: 1 }}>
-                  <Radio.Group defaultValue="yes">
-                    <Radio value="yes">是</Radio>
-                    <Radio value="no">否</Radio>
-                  </Radio.Group>
-                </Form.Item>
-                <Form.Item label={<FieldLabel text="透后用药执行" />} style={{ marginBottom: 0, flex: 1 }}>
-                  <Radio.Group defaultValue="yes">
-                    <Radio value="yes">是</Radio>
-                    <Radio value="no">否</Radio>
-                  </Radio.Group>
-                </Form.Item>
-              </div>
             </Grid>
 
+            <SubsectionTitle>护理确认</SubsectionTitle>
+            <Grid cols={2} gap={20} style={{ marginBottom: 14 }}>
+              <Form.Item label={<FieldLabel text="局部皮肤完好" />} style={{ marginBottom: 0 }}>
+                <Radio.Group defaultValue="yes" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  <Radio value="yes">是</Radio>
+                  <Radio value="no">否</Radio>
+                </Radio.Group>
+              </Form.Item>
+              <Form.Item label={<FieldLabel text="透后用药执行" />} style={{ marginBottom: 0 }}>
+                <Radio.Group defaultValue="yes" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  <Radio value="yes">是</Radio>
+                  <Radio value="no">否</Radio>
+                </Radio.Group>
+              </Form.Item>
+            </Grid>
+
+            <SubsectionTitle>尿素（Kt/V / URR）</SubsectionTitle>
+            <Grid cols={2} gap={14} style={{ marginBottom: 14, maxWidth: 560 }}>
+              <Form.Item label={<FieldLabel text="透前 BUN" />} style={{ marginBottom: 0 }}>
+                <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
+                  value={preBun ?? undefined}
+                  onChange={(v) => {
+                    setPreBun(v);
+                    schedulePersistDialysisDraft();
+                  }}
+                  placeholder="透析前"
+                  addonAfter="mmol/L"
+                />
+              </Form.Item>
+              <Form.Item label={<FieldLabel text="透后 BUN" />} style={{ marginBottom: 0 }}>
+                <InputNumber
+                  min={1}
+                  max={100}
+                  step={0.1}
+                  precision={1}
+                  style={{ width: '100%' }}
+                  value={postBun ?? undefined}
+                  onChange={(v) => {
+                    setPostBun(v);
+                    schedulePersistDialysisDraft();
+                  }}
+                  placeholder="透析后"
+                  addonAfter="mmol/L"
+                />
+              </Form.Item>
+            </Grid>
+
+            {/* BUN 数据异常提示 */}
+            {preBun && postBun && ktv === null && (
+              <Alert
+                type="error" showIcon
+                message="BUN 数值异常（透后BUN应小于透前BUN），请核查数据。"
+                style={{ marginBottom: 14 }}
+                action={
+                  canAnomaly && isRealPatientId(selectedPatient) ? (
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setAnomalyCtx({ anomalyType: 'bun_invalid' });
+                        setAnomalyOpen(true);
+                      }}
+                    >
+                      分析
+                    </Button>
+                  ) : undefined
+                }
+              />
+            )}
+
+            <SubsectionTitle>充分性计算（自动）</SubsectionTitle>
             {/* Kt/V + URR + 超滤 结果卡片 */}
             <div style={{
               display: 'grid',
@@ -2134,6 +3348,20 @@ export default function DialysisEntryPage() {
                     >
                       {ktvAdequate ? '达标 ≥ 1.2' : '不达标 < 1.2'}
                     </Tag>
+                    {canAnomaly && isRealPatientId(selectedPatient) && !ktvAdequate ? (
+                      <div style={{ marginTop: 8 }}>
+                        <Button
+                          type="link"
+                          size="small"
+                          onClick={() => {
+                            setAnomalyCtx({ anomalyType: 'ktv_inadequate' });
+                            setAnomalyOpen(true);
+                          }}
+                        >
+                          分析
+                        </Button>
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 8 }}>
@@ -2167,6 +3395,20 @@ export default function DialysisEntryPage() {
                     >
                       {urrAdequate ? '达标 ≥ 65%' : '不达标 < 65%'}
                     </Tag>
+                    {canAnomaly && isRealPatientId(selectedPatient) && urr !== null && !urrAdequate ? (
+                      <div style={{ marginTop: 8 }}>
+                        <Button
+                          type="link"
+                          size="small"
+                          onClick={() => {
+                            setAnomalyCtx({ anomalyType: 'urr_inadequate' });
+                            setAnomalyOpen(true);
+                          }}
+                        >
+                          分析
+                        </Button>
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 8 }}>
@@ -2209,6 +3451,20 @@ export default function DialysisEntryPage() {
                         超滤量超过干体重5%，需通知医生
                       </div>
                     )}
+                    {canAnomaly && isRealPatientId(selectedPatient) && ufAlert ? (
+                      <div style={{ marginTop: 8 }}>
+                        <Button
+                          type="link"
+                          size="small"
+                          onClick={() => {
+                            setAnomalyCtx({ anomalyType: 'uf_exceed' });
+                            setAnomalyOpen(true);
+                          }}
+                        >
+                          分析
+                        </Button>
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 8 }}>
@@ -2219,23 +3475,19 @@ export default function DialysisEntryPage() {
               </div>
             </div>
 
-            {/* BUN 数据异常提示 */}
-            {preBun && postBun && ktv === null && (
-              <Alert
-                type="error" showIcon
-                message="BUN 数值异常（透后BUN应小于透前BUN），请核查数据。"
-                style={{ marginBottom: 14 }}
-              />
-            )}
-
             {/* 备注 + 签名 */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'flex-start' }}>
-              <Form.Item label={<FieldLabel text="护士备注" />} style={{ marginBottom: 0 }}>
+              <Form.Item name="remark" label={<FieldLabel text="护士备注" />} style={{ marginBottom: 0 }}>
                 <Input.TextArea rows={3} placeholder="记录本次透析特殊情况、护理观察、患者反馈等…" />
               </Form.Item>
               <div style={{ width: 280 }}>
-                <Form.Item label={<FieldLabel text="护士签名" required />} style={{ marginBottom: 10 }}>
-                  <Input placeholder="请输入护士姓名" prefix={<span style={{ color: '#7C3AED' }}>✍</span>} />
+                <Form.Item
+                  label={<FieldLabel text="护士签名" required />}
+                  name="nurse_record_sign"
+                  rules={[{ required: true, message: '请填写或确认记录护士签名' }]}
+                  style={{ marginBottom: 10 }}
+                >
+                  <Input placeholder="默认当前登录用户，可修改" prefix={<span style={{ color: '#7C3AED' }}>✍</span>} />
                 </Form.Item>
                 <Form.Item label={<FieldLabel text="记录日期" />} style={{ marginBottom: 0 }}>
                   <Input value={autoGeneratedDate} readOnly style={{ background: '#F8FAFC', color: '#475569' }} />
@@ -2268,6 +3520,7 @@ export default function DialysisEntryPage() {
                   setTreatmentModalTarget(null);
                   treatmentForm.resetFields();
                   message.success(`${comp.label}处理记录已保存`);
+                  schedulePersistDialysisDraft();
                 }).catch(() => {
                   message.warning('请填写必填项');
                 });
@@ -2394,6 +3647,16 @@ export default function DialysisEntryPage() {
           </div>
         </div>
       </Form>
+      {anomalyCtx && selectedPatient && isRealPatientId(selectedPatient) ? (
+        <AnomalyAnalysisModal
+          open={anomalyOpen}
+          onClose={() => setAnomalyOpen(false)}
+          patientId={selectedPatient}
+          anomalyType={anomalyCtx.anomalyType}
+          contextId={anomalyCtx.contextId}
+          patientLabel={selectedPatientDisplayLabel}
+        />
+      ) : null}
     </PageShell>
   );
 }

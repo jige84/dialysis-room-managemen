@@ -38,7 +38,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      'SELECT id, username, password_hash, real_name, role, is_active FROM users WHERE username = $1',
+      'SELECT id, username, password_hash, real_name, role, is_active, menu_permissions FROM users WHERE username = $1',
       [username]
     );
 
@@ -78,7 +78,13 @@ router.post('/login', async (req, res, next) => {
 
     return success(res, {
       token,
-      user: { id: user.id, username: user.username, real_name: user.real_name, role: user.role }
+      user: {
+        id: user.id,
+        username: user.username,
+        real_name: user.real_name,
+        role: user.role,
+        menu_permissions: user.menu_permissions,
+      },
     }, '登录成功');
   } catch (err) {
     next(err);
@@ -138,7 +144,7 @@ router.post('/change-password', auth, async (req, res, next) => {
 router.get('/me', auth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, username, real_name, role, last_login_at, created_at FROM users WHERE id = $1',
+      'SELECT id, username, real_name, role, menu_permissions, last_login_at, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
     if (rows.length === 0) return error(res, '用户不存在', 404);

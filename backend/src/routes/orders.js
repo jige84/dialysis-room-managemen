@@ -10,6 +10,7 @@ const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const auditLog = require('../middleware/audit');
 const OrderAutoFill = require('../services/OrderAutoFill');
+const OrderGuidanceService = require('../services/OrderGuidanceService');
 const { success, created, paginated, error, notFound } = require('../utils/response');
 
 // ── 静态路由（必须在通配符路由之前）────────────────────────
@@ -114,10 +115,16 @@ router.get('/:patientId/history', auth, async (req, res, next) => {
 });
 
 // GET /api/orders/:patientId/today-tasks - 今日应执行的医嘱
+// 可选 query：date=YYYY-MM-DD；order_types=dialysis_drug,interval_drug（逗号分隔，与透析准备一致时可仅传 dialysis_drug）
 router.get('/:patientId/today-tasks', auth, async (req, res, next) => {
   try {
-    const { date } = req.query;
-    const data = await OrderAutoFill.prepareForDialysis(req.params.patientId, date);
+    const { date, order_types: orderTypesRaw } = req.query;
+    const types = typeof orderTypesRaw === 'string' && orderTypesRaw.trim()
+      ? orderTypesRaw.split(',').map((t) => t.trim()).filter(Boolean)
+      : null;
+    const data = await OrderAutoFill.prepareForDialysis(req.params.patientId, date, {
+      orderTypes: types && types.length ? types : null,
+    });
     return success(res, data.ordersToday);
   } catch (err) { next(err); }
 });
@@ -127,39 +134,80 @@ router.get('/:patientId/today-tasks', auth, async (req, res, next) => {
 router.post('/:patientId', auth, rbac(['admin','doctor']),
   auditLog('long_term_orders', 'CREATE'),
   async (req, res, next) => {
+    const client = await pool.connect();
     try {
       const {
         order_type, drug_name, drug_spec, dose, dose_unit, route,
         frequency, frequency_detail, execute_timing,
-        valid_from, valid_until, notes
+        valid_from, valid_until, notes,
+        child_orders: childOrdersRaw,
       } = req.body;
 
       if (!drug_name || !order_type || !frequency) {
         return error(res, '医嘱内容、类型、频次为必填项');
       }
 
-      const { rows: rxRows } = await pool.query(
+      const child_orders = Array.isArray(childOrdersRaw) ? childOrdersRaw : [];
+
+      const { rows: rxRows } = await client.query(
         'SELECT id FROM prescriptions WHERE patient_id = $1 AND is_current = true LIMIT 1',
         [req.params.patientId]
       );
 
-      const { rows } = await pool.query(
+      const vf = valid_from || new Date().toISOString().slice(0, 10);
+
+      await client.query('BEGIN');
+
+      const { rows: parentRows } = await client.query(
         `INSERT INTO long_term_orders (
            patient_id, prescription_id, order_type, drug_name, drug_spec,
            dose, dose_unit, route, frequency, frequency_detail, execute_timing,
-           valid_from, valid_until, notes, ordered_by, ordered_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+           valid_from, valid_until, notes, ordered_by, ordered_at, parent_order_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),NULL)
          RETURNING *`,
         [
           req.params.patientId, rxRows[0]?.id || null,
           order_type, drug_name, drug_spec, dose, dose_unit, route,
           frequency, frequency_detail || null, execute_timing || null,
-          valid_from || new Date().toISOString().slice(0, 10),
-          valid_until || null, notes, req.user.id
+          vf, valid_until || null, notes, req.user.id,
         ]
       );
-      return created(res, rows[0], '医嘱开具成功');
-    } catch (err) { next(err); }
+      const parent = parentRows[0];
+
+      for (const ch of child_orders) {
+        if (!ch || typeof ch !== 'object') continue;
+        const cn = String(ch.drug_name || '').trim();
+        if (!cn) continue;
+        await client.query(
+          `INSERT INTO long_term_orders (
+             patient_id, prescription_id, order_type, drug_name, drug_spec,
+             dose, dose_unit, route, frequency, frequency_detail, execute_timing,
+             valid_from, valid_until, notes, ordered_by, ordered_at, parent_order_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),$16)`,
+          [
+            req.params.patientId, rxRows[0]?.id || null,
+            order_type, cn, ch.drug_spec || null, ch.dose || null, ch.dose_unit || null,
+            route, frequency, frequency_detail || null, execute_timing || null,
+            vf, valid_until || null, notes, req.user.id,
+            parent.id,
+          ]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      const guidance = await OrderGuidanceService.buildGuidanceForNewOrder({
+        patientId: req.params.patientId,
+        drugName: drug_name,
+        orderType: order_type,
+      });
+      return created(res, { ...parent, guidance_suggestions: guidance.guidance_suggestions }, '医嘱开具成功');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+      next(err);
+    } finally {
+      client.release();
+    }
   }
 );
 
@@ -210,7 +258,12 @@ router.put('/:orderId', auth, rbac(['admin','doctor']),
       );
 
       await client.query('COMMIT');
-      return success(res, rows[0], '医嘱修改成功（旧医嘱已归档）');
+      const guidance = await OrderGuidanceService.buildGuidanceForNewOrder({
+        patientId: old.patient_id,
+        drugName: rows[0].drug_name,
+        orderType: rows[0].order_type,
+      });
+      return success(res, { ...rows[0], guidance_suggestions: guidance.guidance_suggestions }, '医嘱修改成功（旧医嘱已归档）');
     } catch (err) {
       await client.query('ROLLBACK');
       next(err);
@@ -227,15 +280,29 @@ router.patch('/:orderId/stop', auth, rbac(['admin','doctor']),
   async (req, res, next) => {
     try {
       const { stop_reason } = req.body;
+      const { rows: cur } = await pool.query(
+        'SELECT id, parent_order_id, drug_name FROM long_term_orders WHERE id = $1',
+        [req.params.orderId]
+      );
+      if (cur.length === 0) return notFound(res, '医嘱不存在');
+
+      const isComboParent = !cur[0].parent_order_id;
+      const whereCombo = isComboParent
+        ? `(id = $3::uuid OR parent_order_id = $3::uuid) AND status = 'active'`
+        : `id = $3::uuid AND status = 'active'`;
+
       const { rows } = await pool.query(
         `UPDATE long_term_orders
          SET status = 'stopped', stopped_by = $1, stopped_at = NOW(),
              stop_reason = $2, updated_at = NOW()
-         WHERE id = $3 RETURNING id, drug_name, status`,
+         WHERE ${whereCombo}
+         RETURNING id, drug_name, status, parent_order_id`,
         [req.user.id, stop_reason || '医嘱停止', req.params.orderId]
       );
-      if (rows.length === 0) return notFound(res, '医嘱不存在');
-      return success(res, rows[0], `医嘱【${rows[0].drug_name}】已停止`);
+      if (rows.length === 0) return notFound(res, '医嘱不存在或已停止');
+      const main = rows.find((r) => r.id === req.params.orderId) || rows[0];
+      const extra = isComboParent && rows.length > 1 ? `（含子医嘱共 ${rows.length} 条）` : '';
+      return success(res, main, `医嘱【${main.drug_name}】已停止${extra}`);
     } catch (err) { next(err); }
   }
 );

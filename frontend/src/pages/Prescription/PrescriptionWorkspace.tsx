@@ -18,8 +18,10 @@ import {
   dialysisModeLabel,
   formatSodiumCurveSummary,
   yesNoAssessLabel,
-  PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY,
   loadPrescriptionBasicParamsFromStorage,
+  savePrescriptionBasicParamsToStorage,
+  PRESCRIPTION_NOTES_COMBINED_SEPARATOR,
+  splitPrescriptionNotesFromDb,
 } from '../../utils/prescriptionFormFromDemo';
 import {
   readPostDialysisSync,
@@ -27,6 +29,13 @@ import {
   POST_DIALYSIS_SYNC_EVENT,
   type PostDialysisSyncPayload,
 } from '../../utils/postDialysisAssessmentSync';
+import prescriptionsApi, { type PrescriptionRecord } from '../../api/prescriptions';
+import { patientsApi, type Patient } from '../../api/patients';
+import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
+import { isUuid } from '../../utils/anomalyAnalysis';
+import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantToDb } from '../../constants/prescriptionAnticoagulant';
+import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
+import { useAuthStore } from '../../stores/authStore';
 
 const FREQUENCY_PRESET_OPTIONS = [
   { value: 'weekly_2', label: '每周2次' },
@@ -43,15 +52,18 @@ const MODE_OPTIONS = [
   { value: 'other', label: '其他' },
 ] as const;
 
-const ANTICOAGULANT_OPTIONS = [
-  { value: 'heparin', label: '普通肝素' },
-  { value: 'lmwh', label: '低分子肝素' },
-  { value: 'enoxaparin', label: '依诺肝素' },
-  { value: 'bemiparin', label: '贝米肝素' },
-  { value: 'nafamostat', label: '甲磺酸萘莫司他' },
-  { value: 'citrate', label: '枸橼酸' },
-  { value: 'none', label: '无抗凝' },
+/** HDF 置换方式（与 prescriptions.hdf_replacement_mode 一致） */
+const HDF_REPLACEMENT_MODE_OPTIONS = [
+  { value: 'pre', label: '前置换' },
+  { value: 'post', label: '后置换' },
+  { value: 'both', label: '前后置换' },
 ] as const;
+
+const HDF_REPLACEMENT_MODE_LABEL: Record<string, string> = {
+  pre: '前置换',
+  post: '后置换',
+  both: '前后置换',
+};
 
 const YES_NO_ASSESS_OPTIONS = [
   { value: 'no', label: '无' },
@@ -85,7 +97,7 @@ const SODIUM_CURVE_OPTIONS = [
   { value: 'other', label: '其他（手动说明）' },
 ] as const;
 
-/** 低分子肝素类：首剂按透析方式叠加 IU（规程演示用） */
+/** 低分子肝素类：首剂按透析模式叠加 IU（规程演示用） */
 const LMWH_FAMILY = new Set(['lmwh', 'enoxaparin', 'bemiparin']);
 
 /** 超滤量：HD/HDF 额外 +200mL，HD+HP 额外 +500mL（预冲/置换等协议量） */
@@ -154,6 +166,14 @@ type BasicParamsStored = Partial<{
   preAssessEdemaSite: string;
   preAssessBleeding: string;
   preAssessBleedingDesc: string;
+  /** HDF：pre / post / both */
+  hdfReplacementMode: string;
+  hdfReplacementVolumeL: number;
+  /** 处方备注卡片（与 preAssessOther 合并入库 prescriptions.notes） */
+  notes: string;
+  /** 血透方式备注 → prescriptions.hemodialysis_remark */
+  hemodialysisRemark: string;
+  doctorSignature: string;
 }>;
 
 const BASIC_PARAM_KEYS = [
@@ -185,10 +205,15 @@ const BASIC_PARAM_KEYS = [
   'preAssessEdemaSite',
   'preAssessBleeding',
   'preAssessBleedingDesc',
+  'hdfReplacementMode',
+  'hdfReplacementVolumeL',
+  'notes',
+  'hemodialysisRemark',
+  'doctorSignature',
 ] as const satisfies readonly (keyof BasicParamsStored)[];
 
-function loadStoredBasicParams(): BasicParamsStored {
-  return loadPrescriptionBasicParamsFromStorage() as BasicParamsStored;
+function loadStoredBasicParams(patientId?: string): BasicParamsStored {
+  return loadPrescriptionBasicParamsFromStorage(patientId) as BasicParamsStored;
 }
 
 function pickBasicParams(values: Record<string, unknown>): BasicParamsStored {
@@ -199,6 +224,47 @@ function pickBasicParams(values: Record<string, unknown>): BasicParamsStored {
     }
   }
   return out;
+}
+
+function coerceNumberField(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * DB 未带 form_extra 时，用同浏览器 localStorage 补齐 BASIC_PARAM_KEYS；
+ * 干体重与上机前体重齐全时补算超滤量；若已存超滤与公式差异较大则视为曾手动修改，避免被自动公式覆盖。
+ */
+function enrichMappedPrescriptionForm(
+  mapped: Record<string, unknown>,
+  patientId: string,
+): { form: Record<string, unknown>; ultrafiltrationManualFromLoad: boolean } {
+  const stored = loadStoredBasicParams(patientId);
+  const form: Record<string, unknown> = { ...mapped };
+  for (const key of BASIC_PARAM_KEYS) {
+    if (
+      (form[key] === undefined || form[key] === null) &&
+      stored[key] !== undefined &&
+      stored[key] !== null
+    ) {
+      (form as Record<string, unknown>)[key] = stored[key];
+    }
+  }
+  const mode = typeof form.mode === 'string' ? form.mode : undefined;
+  const pre = coerceNumberField(form.preMachineWeight);
+  const dry = coerceNumberField(form.dryWeight);
+  const computedUf = computeUltrafiltrationMl(pre, dry, mode);
+  const existingUf = coerceNumberField(form.ultrafiltrationMl);
+  let ultrafiltrationManualFromLoad = false;
+  if (computedUf != null) {
+    if (existingUf == null) {
+      form.ultrafiltrationMl = computedUf;
+    } else if (Math.abs(existingUf - computedUf) > 1) {
+      ultrafiltrationManualFromLoad = true;
+    }
+  }
+  return { form, ultrafiltrationManualFromLoad };
 }
 
 /** 与「录入透析记录」患者列表、数值同源 */
@@ -288,11 +354,233 @@ const PRESCRIPTION_HISTORY = [
 
 const DIALYZER_OPTIONS = getDialyzerSelectOptions();
 
+function frequencyPresetToPerWeek(preset: string | undefined): number {
+  switch (preset) {
+    case 'weekly_2':
+      return 2;
+    case 'weekly_3':
+      return 3;
+    case 'weekly_1':
+      return 1;
+    case 'biweekly_5':
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function perWeekToFrequencyFields(week: number): { frequencyPreset: string; frequencyCustom: string } {
+  if (week === 1) return { frequencyPreset: 'weekly_1', frequencyCustom: '' };
+  if (week === 2) return { frequencyPreset: 'weekly_2', frequencyCustom: '' };
+  if (week === 3) return { frequencyPreset: 'weekly_3', frequencyCustom: '' };
+  return { frequencyPreset: 'other', frequencyCustom: `每周约 ${week} 次` };
+}
+
+/** 与排班 / 服务端 HD·HDF·HD_HP 一致 */
+function hemoModalityFromApi(raw: string | null | undefined): { mode: string; modeOther: string } {
+  if (!raw || !String(raw).trim()) return { mode: 'HD', modeOther: '' };
+  const s = String(raw).trim();
+  const u = s.toUpperCase().replace(/\+/g, '_');
+  if (u === 'HD') return { mode: 'HD', modeOther: '' };
+  if (u === 'HDF') return { mode: 'HDF', modeOther: '' };
+  if (u === 'HD_HP' || u === 'HDHP') return { mode: 'HD_HP', modeOther: '' };
+  return { mode: 'other', modeOther: s };
+}
+
+function dialyzerStringForForm(model: string | null | undefined): string {
+  if (!model) return '';
+  const s = String(model).trim();
+  if (!s) return '';
+  return s.startsWith('透析器') ? s : `透析器 ${s}`;
+}
+
+function mapFormModeToHemodialysisModality(mode: string | undefined, modeOther: string | undefined): string {
+  if (mode === 'other') {
+    const t = String(modeOther ?? '').trim();
+    return t || 'HD';
+  }
+  if (mode === 'HDF' || mode === 'HD_HP' || mode === 'HD') return mode;
+  return 'HD';
+}
+
+function mergePrescriptionNotesForDb(
+  preAssessOther: string | undefined,
+  prescriptionNotes: string | undefined,
+): string | undefined {
+  const a = typeof preAssessOther === 'string' ? preAssessOther.trim() : '';
+  const b = typeof prescriptionNotes === 'string' ? prescriptionNotes.trim() : '';
+  if (a && b) return `${a}${PRESCRIPTION_NOTES_COMBINED_SEPARATOR}${b}`;
+  return a || b || undefined;
+}
+
+function mapCurrentPrescriptionToFormValues(rx: PrescriptionRecord): Record<string, unknown> {
+  const rawExtra = rx.form_extra;
+  const formExtra =
+    rawExtra != null && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
+      ? (rawExtra as Record<string, unknown>)
+      : {};
+  const freq = perWeekToFrequencyFields(Number(rx.frequency_per_week) || 3);
+  const hemo = hemoModalityFromApi(rx.hemodialysis_modality);
+  const notesForSplit =
+    rx.notes == null ? null : typeof rx.notes === 'string' ? rx.notes : String(rx.notes);
+  const splitNotes = splitPrescriptionNotesFromDb(notesForSplit);
+  const fromColumns: Record<string, unknown> = {
+    ...freq,
+    duration: Number(rx.duration_hours) || 4,
+    mode: hemo.mode,
+    modeOther: hemo.modeOther,
+    dialyzer: dialyzerStringForForm(rx.dialyzer_model),
+    bloodFlow: rx.blood_flow_rate ?? 250,
+    dialysateFlow: rx.dialysate_flow_rate ?? 500,
+    anticoagulant: mapDbAnticoagulantToForm(rx.anticoagulant),
+    heparinFirst: rx.heparin_prime_dose ?? undefined,
+    heparinMaint: rx.heparin_maintain != null ? Number(rx.heparin_maintain) : undefined,
+    na: rx.dialysate_na != null ? Number(rx.dialysate_na) : 138,
+    k: rx.dialysate_k != null ? Number(rx.dialysate_k) : 2.0,
+    ca: rx.dialysate_ca != null ? Number(rx.dialysate_ca) : 1.5,
+    temp: rx.dialysate_temp != null ? Number(rx.dialysate_temp) : 36.5,
+    dryWeight: rx.dry_weight != null ? Number(rx.dry_weight) : undefined,
+    dryWeightChangeReason: rx.dry_weight_reason ?? '',
+    hdfReplacementMode: rx.hdf_replacement_mode ?? undefined,
+    hdfReplacementVolumeL:
+      rx.hdf_replacement_volume_l != null && Number.isFinite(Number(rx.hdf_replacement_volume_l))
+        ? Number(rx.hdf_replacement_volume_l)
+        : undefined,
+    preAssessOther: splitNotes.preAssessOther,
+    notes: splitNotes.notes,
+    hemodialysisRemark: rx.hemodialysis_remark != null ? String(rx.hemodialysis_remark) : '',
+  };
+  const m: Record<string, unknown> = { ...formExtra, ...fromColumns };
+  const dialysateNa = rx.dialysate_na != null ? Number(rx.dialysate_na) : 138;
+  return {
+    ...m,
+    sodiumCurve: typeof m.sodiumCurve === 'string' && m.sodiumCurve ? m.sodiumCurve : 'fixed',
+    sodiumCurveCustom: typeof m.sodiumCurveCustom === 'string' ? m.sodiumCurveCustom : '',
+    naCurveStart:
+      typeof m.naCurveStart === 'number' && Number.isFinite(m.naCurveStart) ? m.naCurveStart : dialysateNa,
+    naCurveEnd:
+      typeof m.naCurveEnd === 'number' && Number.isFinite(m.naCurveEnd) ? m.naCurveEnd : dialysateNa,
+    naCurveTimeStart: typeof m.naCurveTimeStart === 'string' ? m.naCurveTimeStart : '',
+    naCurveTimeEnd: typeof m.naCurveTimeEnd === 'string' ? m.naCurveTimeEnd : '',
+  };
+}
+
+function applyHeparinCoreFromLoadedRx(
+  hemoMode: string,
+  anticoagulant: string | undefined,
+  heparinFirst: number | undefined,
+): number {
+  const first = heparinFirst ?? 0;
+  if (!LMWH_FAMILY.has(anticoagulant ?? '')) return first;
+  let core = first;
+  if (hemoMode === 'HDF') core -= 200;
+  if (hemoMode === 'HD_HP') core -= 500;
+  return Math.max(0, core);
+}
+
+function scheduleDbShiftLabel(shift: string | undefined): string {
+  const m: Record<string, string> = {
+    morning: '上午',
+    afternoon: '下午',
+    evening: '晚',
+    am: '上午',
+    pm: '下午',
+    eve: '晚',
+  };
+  return (shift && m[shift]) || shift || '—';
+}
+
+/**
+ * 排班 scheduled_date 与「今日」比较用。node-pg/JSON 常把 DATE 序列化为 ISO 串，
+ * 若仅用 slice(0,10) 会得到 UTC 日期，东八区易与本地日历差一天，导致匹配不到今日本条排班、透析模式无法覆盖。
+ */
+/** 医生签名为空时填入当前登录用户（优先 real_name，否则 username；可修改） */
+function ensureDoctorSignatureFromCurrentUser(form: {
+  getFieldValue: (name: string) => unknown;
+  setFieldValue: (name: string, value: string) => void;
+}) {
+  const u = useAuthStore.getState().user;
+  const name = u ? (u.real_name?.trim() || u.username?.trim() || '') : '';
+  if (!name) return;
+  const cur = form.getFieldValue('doctorSignature');
+  if (cur == null || String(cur).trim() === '') {
+    form.setFieldValue('doctorSignature', name);
+  }
+}
+
+function scheduleDateKeyLocal(raw: unknown): string {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+    const dj = dayjs(t);
+    return dj.isValid() ? dj.format('YYYY-MM-DD') : '';
+  }
+  if (raw instanceof Date) {
+    return dayjs(raw).format('YYYY-MM-DD');
+  }
+  return scheduleDateKeyLocal(String(raw));
+}
+
+function todayScheduleModeShort(mode: string | null | undefined): string {
+  if (!mode) return 'HD';
+  const u = String(mode).trim().toUpperCase().replace(/\+/g, '_');
+  if (u === 'HD_HP' || u === 'HDHP') return 'HD+HP';
+  if (u === 'HDF') return 'HDF';
+  return 'HD';
+}
+
+/** 与排班 shift 字段对齐，用于今日上机名单按时段分组 */
+type ScheduleTimeGroup = 'am' | 'pm' | 'eve' | 'other';
+
+const SCHEDULE_TIME_SECTIONS: { key: ScheduleTimeGroup; title: string; accent: string }[] = [
+  { key: 'am', title: '上午', accent: '#1D4ED8' },
+  { key: 'pm', title: '下午', accent: '#0369A1' },
+  { key: 'eve', title: '晚班', accent: '#7C3AED' },
+  { key: 'other', title: '其他时段', accent: '#64748B' },
+];
+
+function scheduleRowToTimeGroup(shift: string | undefined | null): ScheduleTimeGroup {
+  const s = String(shift ?? '')
+    .trim()
+    .toLowerCase();
+  if (s === 'am' || s === 'morning') return 'am';
+  if (s === 'pm' || s === 'afternoon') return 'pm';
+  if (s === 'eve' || s === 'evening' || s === 'night') return 'eve';
+  if (!s) return 'other';
+  return 'other';
+}
+
+function groupTodayScheduleByTime(rows: TodaySchedulePatientRow[]): Record<ScheduleTimeGroup, TodaySchedulePatientRow[]> {
+  const empty: Record<ScheduleTimeGroup, TodaySchedulePatientRow[]> = {
+    am: [],
+    pm: [],
+    eve: [],
+    other: [],
+  };
+  for (const row of rows) {
+    empty[scheduleRowToTimeGroup(row.shift)].push(row);
+  }
+  const sortInGroup = (a: TodaySchedulePatientRow, b: TodaySchedulePatientRow) => {
+    const ma = Number.parseInt(String(a.machine_no ?? '').replace(/\D/g, ''), 10);
+    const mb = Number.parseInt(String(b.machine_no ?? '').replace(/\D/g, ''), 10);
+    if (Number.isFinite(ma) && Number.isFinite(mb) && ma !== mb) return ma - mb;
+    return String(a.patient_name ?? '').localeCompare(String(b.patient_name ?? ''), 'zh-Hans-CN');
+  };
+  empty.am.sort(sortInGroup);
+  empty.pm.sort(sortInGroup);
+  empty.eve.sort(sortInGroup);
+  empty.other.sort(sortInGroup);
+  return empty;
+}
+
 export default function PrescriptionWorkspacePage() {
   const [form] = Form.useForm();
   const [selectedPatient, setSelectedPatient] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [realPatients, setRealPatients] = useState<Patient[]>([]);
+  const [saveSubmitting, setSaveSubmitting] = useState(false);
   const [postSyncMeta, setPostSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
   const [baselineDryWeight, setBaselineDryWeight] = useState<number | null>(null);
   const skipPersistRef = useRef(false);
@@ -302,6 +590,12 @@ export default function PrescriptionWorkspacePage() {
   const heparinUserEditedRef = useRef(false);
   const ufProgrammaticRef = useRef(false);
   const heparinProgrammaticRef = useRef(false);
+  /** 与排班同步的备注，新开方时回传避免被清空 */
+  const hemodialysisRemarkRef = useRef<string | null>(null);
+  /** 避免快速切换患者或 StrictMode 下异步回填覆盖当前选中患者表单 */
+  const prescriptionLoadSeqRef = useRef(0);
+  /** 今日排班实例（与 /schedule/today 一致，用于快捷选患者与合并当日透析模式） */
+  const [scheduleTodayRows, setScheduleTodayRows] = useState<TodaySchedulePatientRow[]>([]);
 
   const frequencyPreset = Form.useWatch('frequencyPreset', form);
   const modeWatched = Form.useWatch('mode', form);
@@ -331,6 +625,8 @@ export default function PrescriptionWorkspacePage() {
   const dialysateFlowWatched = Form.useWatch('dialysateFlow', form);
   const frequencyCustomWatched = Form.useWatch('frequencyCustom', form);
   const modeOtherWatched = Form.useWatch('modeOther', form);
+  const hdfReplacementModeWatched = Form.useWatch('hdfReplacementMode', form);
+  const hdfReplacementVolumeLWatched = Form.useWatch('hdfReplacementVolumeL', form);
   const heparinFirstWatched = Form.useWatch('heparinFirst', form);
   const heparinMaintWatched = Form.useWatch('heparinMaint', form);
   const tempWatched = Form.useWatch('temp', form);
@@ -341,6 +637,60 @@ export default function PrescriptionWorkspacePage() {
   const preAssessBleedingDescWatched = Form.useWatch('preAssessBleedingDesc', form);
 
   const patientInfo = PATIENTS.find((p) => p.value === selectedPatient);
+
+  useEffect(() => {
+    patientsApi
+      .list({ page: 1, page_size: 300, status: 'active' })
+      .then((res) => {
+        const list = res.data.data?.list;
+        if (Array.isArray(list)) setRealPatients(list);
+      })
+      .catch(() => {
+        /* 演示环境可离线 */
+      });
+  }, []);
+
+  useEffect(() => {
+    const load = () => {
+      scheduleApi
+        .getToday()
+        .then((rows) => setScheduleTodayRows(rows))
+        .catch(() => setScheduleTodayRows([]));
+    };
+    load();
+    const timer = window.setInterval(load, 120000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const patientSelectOptions = useMemo(() => {
+    const real = realPatients.map((p) => ({
+      value: p.id,
+      label: `${p.name} — ${p.primary_diagnosis ?? ''}（档案）`,
+    }));
+    const demo = PATIENTS.map((p) => ({
+      value: p.value,
+      label: `${p.label}（演示）`,
+    }));
+    return [...real, ...demo];
+  }, [realPatients]);
+
+  const scheduleTodayByTime = useMemo(
+    () => groupTodayScheduleByTime(scheduleTodayRows),
+    [scheduleTodayRows],
+  );
+
+  /** 保存确认弹窗展示用（演示患者 / 档案列表 / 今日排班） */
+  const confirmPatientDisplayName = useMemo(() => {
+    const demo = PATIENTS.find((p) => p.value === selectedPatient);
+    if (demo) return demo.label.split(' — ')[0]?.trim() || '演示患者';
+    const rp = realPatients.find((p) => p.id === selectedPatient);
+    if (rp?.name) return rp.name.trim();
+    const sched = scheduleTodayRows.find((r) => r.patient_id === selectedPatient);
+    if (sched?.patient_name != null && String(sched.patient_name).trim()) {
+      return String(sched.patient_name).trim();
+    }
+    return '当前患者';
+  }, [selectedPatient, realPatients, scheduleTodayRows]);
 
   const frequencyLabel = frequencyPresetLabel(frequencyPreset, frequencyCustomWatched as string | undefined);
   const modeDisplay = dialysisModeLabel(modeWatched, modeOtherWatched as string | undefined);
@@ -407,7 +757,8 @@ export default function PrescriptionWorkspacePage() {
     (patientValue: string) => {
       const base = PATIENTS.find((p) => p.value === patientValue)?.defaults;
       if (!base) return;
-      const stored = loadStoredBasicParams();
+      hemodialysisRemarkRef.current = null;
+      const stored = loadStoredBasicParams(patientValue);
       const nextBaseline =
         typeof base.dryWeight === 'number' ? base.dryWeight : null;
       baselineDryWeightRef.current = nextBaseline;
@@ -416,6 +767,7 @@ export default function PrescriptionWorkspacePage() {
       ufUserEditedRef.current = false;
       heparinUserEditedRef.current = false;
       skipPersistRef.current = true;
+      form.resetFields();
       form.setFieldsValue({
         ...base,
         ...stored,
@@ -429,6 +781,7 @@ export default function PrescriptionWorkspacePage() {
           postDialysisWeightKg: postSync.postWeightKg ?? undefined,
         });
       }
+      ensureDoctorSignatureFromCurrentUser(form);
       window.setTimeout(() => {
         skipPersistRef.current = false;
       }, 0);
@@ -438,10 +791,202 @@ export default function PrescriptionWorkspacePage() {
 
   useEffect(() => {
     if (!selectedPatient) return;
-    queueMicrotask(() => {
-      applyPatientFormValues(selectedPatient);
-    });
-  }, [selectedPatient, applyPatientFormValues]);
+    if (!isUuid(selectedPatient)) {
+      queueMicrotask(() => {
+        applyPatientFormValues(selectedPatient);
+      });
+      return;
+    }
+
+    skipPersistRef.current = true;
+    const loadSeq = ++prescriptionLoadSeqRef.current;
+    (async () => {
+      try {
+        const todayList = await scheduleApi.getToday();
+        if (loadSeq !== prescriptionLoadSeqRef.current) return;
+        setScheduleTodayRows(todayList);
+
+        const res = await prescriptionsApi.getCurrent(selectedPatient);
+        if (loadSeq !== prescriptionLoadSeqRef.current) return;
+        const rx = res.data.data;
+        form.resetFields();
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const todayRowForPatient = todayList.find((r) => {
+          const d = scheduleDateKeyLocal(r.scheduled_date);
+          return r.patient_id === selectedPatient && d === todayStr;
+        });
+
+        if (rx) {
+          const mappedRaw = mapCurrentPrescriptionToFormValues(rx);
+          const { form: mapped, ultrafiltrationManualFromLoad } = enrichMappedPrescriptionForm(
+            mappedRaw,
+            selectedPatient,
+          );
+          const hemo = hemoModalityFromApi(rx.hemodialysis_modality);
+          const coreMode = hemo.mode === 'other' ? 'HD' : hemo.mode;
+          hemodialysisRemarkRef.current =
+            typeof mapped.hemodialysisRemark === 'string' && mapped.hemodialysisRemark.trim()
+              ? mapped.hemodialysisRemark.trim()
+              : null;
+          baselineDryWeightRef.current =
+            rx.dry_weight != null && Number.isFinite(Number(rx.dry_weight)) ? Number(rx.dry_weight) : null;
+          setBaselineDryWeight(baselineDryWeightRef.current);
+          ufUserEditedRef.current = ultrafiltrationManualFromLoad;
+          heparinUserEditedRef.current = false;
+          heparinCoreIURef.current = applyHeparinCoreFromLoadedRx(
+            coreMode,
+            mapped.anticoagulant as string | undefined,
+            mapped.heparinFirst as number | undefined,
+          );
+          form.setFieldsValue(mapped);
+        } else {
+          hemodialysisRemarkRef.current = null;
+          const stored = loadStoredBasicParams(selectedPatient);
+          baselineDryWeightRef.current = null;
+          setBaselineDryWeight(null);
+          let fromProfile: {
+            anticoagulant?: string;
+            heparinFirst?: number;
+            heparinMaint?: number;
+            dryWeight?: number;
+            dryWeightChangeReason?: string;
+          } = {};
+          try {
+            const pr = await patientsApi.get(selectedPatient);
+            if (pr.data.code === 200 && pr.data.data) {
+              const pat = pr.data.data;
+              fromProfile = {
+                anticoagulant: mapDbAnticoagulantToForm(pat.profile_anticoagulant ?? undefined),
+                heparinFirst: pat.profile_heparin_prime_dose ?? undefined,
+                heparinMaint:
+                  pat.profile_heparin_maintain != null ? Number(pat.profile_heparin_maintain) : undefined,
+                dryWeight:
+                  pat.profile_dry_weight != null
+                    ? Number(pat.profile_dry_weight)
+                    : undefined,
+                dryWeightChangeReason: pat.profile_dry_weight_reason ?? '',
+              };
+              if (pat.profile_dry_weight != null && Number.isFinite(Number(pat.profile_dry_weight))) {
+                const b = Number(pat.profile_dry_weight);
+                baselineDryWeightRef.current = b;
+                setBaselineDryWeight(b);
+              }
+            }
+          } catch {
+            /* 无当前处方时用档案抗凝失败则回退默认 */
+          }
+          const coreMode = 'HD';
+          heparinUserEditedRef.current = false;
+          heparinCoreIURef.current = applyHeparinCoreFromLoadedRx(
+            coreMode,
+            fromProfile.anticoagulant,
+            fromProfile.heparinFirst,
+          );
+          form.setFieldsValue({
+            frequencyPreset: 'weekly_3',
+            frequencyCustom: '',
+            duration: 4,
+            mode: 'HD',
+            modeOther: '',
+            sodiumCurve: 'fixed',
+            sodiumCurveCustom: '',
+            ...stored,
+            ...fromProfile,
+          });
+        }
+
+        if (todayRowForPatient) {
+          const hm = hemoModalityFromApi(todayRowForPatient.session_dialysis_mode as string | undefined);
+          form.setFieldsValue({ mode: hm.mode, modeOther: hm.modeOther });
+          if (todayRowForPatient.schedule_remark != null && String(todayRowForPatient.schedule_remark).trim()) {
+            const t = String(todayRowForPatient.schedule_remark).trim();
+            hemodialysisRemarkRef.current = t;
+            form.setFieldsValue({ hemodialysisRemark: t });
+          }
+        }
+
+        const postSync = readPostDialysisSync(selectedPatient);
+        if (postSync) {
+          form.setFieldsValue({
+            postDialysisSbp: postSync.postSbp ?? undefined,
+            postDialysisDbp: postSync.postDbp ?? undefined,
+            postDialysisPulse: postSync.postPulse ?? undefined,
+            postDialysisWeightKg: postSync.postWeightKg ?? undefined,
+          });
+        }
+      } catch {
+        hemodialysisRemarkRef.current = null;
+      } finally {
+        ensureDoctorSignatureFromCurrentUser(form);
+        window.setTimeout(() => {
+          skipPersistRef.current = false;
+        }, 0);
+      }
+    })();
+    return () => {
+      prescriptionLoadSeqRef.current += 1;
+    };
+  }, [selectedPatient, applyPatientFormValues, form]);
+
+  useEffect(() => {
+    const onScheduleSynced = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ patientId?: string; scheduledDate?: string | null }>).detail;
+      const pid = detail?.patientId;
+      const scheduledDate = detail?.scheduledDate;
+      const todayStr = dayjs().format('YYYY-MM-DD');
+      if (
+        scheduledDate != null &&
+        scheduledDate !== '' &&
+        scheduleDateKeyLocal(scheduledDate) !== todayStr
+      ) {
+        return;
+      }
+      if (!pid || pid !== selectedPatient || !isUuid(selectedPatient)) return;
+      skipPersistRef.current = true;
+      Promise.all([prescriptionsApi.getCurrent(pid), scheduleApi.getToday()])
+        .then(([rxRes, todayRows]) => {
+          setScheduleTodayRows(todayRows);
+          const rx = rxRes.data.data;
+          const row = todayRows.find((r) => {
+            const d = scheduleDateKeyLocal(r.scheduled_date);
+            return r.patient_id === pid && d === todayStr;
+          });
+          if (row) {
+            const hm = hemoModalityFromApi(row.session_dialysis_mode as string | undefined);
+            form.setFieldsValue({
+              mode: hm.mode,
+              modeOther: hm.modeOther,
+            });
+            if (row.schedule_remark != null && String(row.schedule_remark).trim()) {
+              const t = String(row.schedule_remark).trim();
+              hemodialysisRemarkRef.current = t;
+              form.setFieldsValue({ hemodialysisRemark: t });
+            }
+            return;
+          }
+          if (!rx) return;
+          const remarkFromRx =
+            rx.hemodialysis_remark != null && String(rx.hemodialysis_remark).trim()
+              ? String(rx.hemodialysis_remark).trim()
+              : '';
+          hemodialysisRemarkRef.current = remarkFromRx || null;
+          const hemo = hemoModalityFromApi(rx.hemodialysis_modality);
+          form.setFieldsValue({
+            mode: hemo.mode,
+            modeOther: hemo.modeOther,
+            hemodialysisRemark: remarkFromRx,
+          });
+        })
+        .finally(() => {
+          ensureDoctorSignatureFromCurrentUser(form);
+          window.setTimeout(() => {
+            skipPersistRef.current = false;
+          }, 0);
+        });
+    };
+    window.addEventListener('hd-hemodialysis-modality-synced', onScheduleSynced);
+    return () => window.removeEventListener('hd-hemodialysis-modality-synced', onScheduleSynced);
+  }, [selectedPatient, form]);
 
   useEffect(() => {
     const refresh = () => {
@@ -493,10 +1038,12 @@ export default function PrescriptionWorkspacePage() {
   ]);
 
   useEffect(() => {
+    if (skipPersistRef.current) return;
     ufUserEditedRef.current = false;
   }, [dryWeightWatched, preMachineWeightWatched, modeWatched]);
 
   useEffect(() => {
+    if (skipPersistRef.current) return;
     if (ufUserEditedRef.current) return;
     const u = computeUltrafiltrationMl(preMachineWeightWatched, dryWeightWatched, modeWatched);
     if (u == null) return;
@@ -512,6 +1059,12 @@ export default function PrescriptionWorkspacePage() {
   }, [modeWatched, anticoagulantWatched]);
 
   useEffect(() => {
+    if (skipPersistRef.current) return;
+    if (modeWatched === 'HDF') return;
+    form.setFieldsValue({ hdfReplacementMode: undefined, hdfReplacementVolumeL: undefined });
+  }, [modeWatched, form]);
+
+  useEffect(() => {
     if (heparinUserEditedRef.current) return;
     const v = computeLmwhFamilyFirstDoseIU(heparinCoreIURef.current, modeWatched, anticoagulantWatched);
     heparinProgrammaticRef.current = true;
@@ -525,12 +1078,8 @@ export default function PrescriptionWorkspacePage() {
     if (skipPersistRef.current) return;
     const all = form.getFieldsValue() as Record<string, unknown>;
     const subset = pickBasicParams(all);
-    try {
-      localStorage.setItem(PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY, JSON.stringify(subset));
-    } catch {
-      /* ignore quota */
-    }
-  }, [form]);
+    savePrescriptionBasicParamsToStorage(selectedPatient, subset);
+  }, [form, selectedPatient]);
 
   const handleSave = async () => {
     if (!selectedPatient) {
@@ -545,10 +1094,196 @@ export default function PrescriptionWorkspacePage() {
     }
   };
 
-  const handleConfirm = () => {
-    setShowConfirm(false);
+  const handleConfirm = async () => {
     persistBasicParamsFromForm();
-    message.success('透析处方已保存，护士下次录入时将自动带入');
+    if (!isUuid(selectedPatient)) {
+      setShowConfirm(false);
+      message.success('透析处方已保存（演示数据），护士下次录入时将自动带入');
+      return;
+    }
+
+    setSaveSubmitting(true);
+    try {
+      const v = await form.validateFields();
+      const antKey = String(v.anticoagulant ?? 'heparin');
+      const checkRes = await prescriptionsApi.checkMedication({
+        patientId: selectedPatient,
+        anticoagulantKey: antKey,
+      });
+      const issues = checkRes.data.data?.issues ?? [];
+      const blocks = issues.filter((i) => i.severity === 'block');
+      const warns = issues.filter((i) => i.severity === 'warn');
+
+      if (blocks.length > 0) {
+        Modal.error({
+          title: '用药规则阻断',
+          content: (
+            <div>
+              {blocks.map((b) => (
+                <p key={b.rule_id}>{b.message}</p>
+              ))}
+              <p style={{ marginTop: 8, color: '#64748B', fontSize: 12 }}>请调整处方或医嘱后重试。</p>
+            </div>
+          ),
+        });
+        setShowConfirm(false);
+        return;
+      }
+
+      const runSave = async () => {
+        const dryW = Number(v.dryWeight);
+        const dateStr = dayjs().format('YYYY-MM-DD');
+        const dryReason =
+          typeof v.dryWeightChangeReason === 'string' && v.dryWeightChangeReason.trim()
+            ? v.dryWeightChangeReason.trim()
+            : undefined;
+        const formExtraPayload = pickBasicParams(v as Record<string, unknown>);
+        const saveResp = await prescriptionsApi.create(selectedPatient, {
+          frequency_per_week: frequencyPresetToPerWeek(v.frequencyPreset as string | undefined),
+          duration_hours: Number(v.duration) || 4,
+          dialyzer_model: String(v.dialyzer ?? ''),
+          blood_flow_rate: Number(v.bloodFlow) || 250,
+          dialysate_flow_rate: Number(v.dialysateFlow) || 500,
+          anticoagulant: mapFormAnticoagulantToDb(antKey),
+          heparin_prime_dose: v.heparinFirst != null ? Number(v.heparinFirst) : undefined,
+          heparin_maintain: v.heparinMaint != null ? Number(v.heparinMaint) : undefined,
+          dry_weight: dryW,
+          dry_weight_date: dateStr,
+          dry_weight_reason: dryReason,
+          dialysate_na: v.na != null ? Number(v.na) : 138,
+          dialysate_ca: v.ca != null ? Number(v.ca) : 1.5,
+          dialysate_k: v.k != null ? Number(v.k) : 2.0,
+          dialysate_temp: v.temp != null ? Number(v.temp) : 36.5,
+          notes: mergePrescriptionNotesForDb(
+            typeof v.preAssessOther === 'string' ? v.preAssessOther : undefined,
+            typeof v.notes === 'string' ? v.notes : undefined,
+          ),
+          hemodialysis_modality: mapFormModeToHemodialysisModality(
+            v.mode as string | undefined,
+            v.modeOther as string | undefined,
+          ),
+          hemodialysis_remark: (() => {
+            const fromForm =
+              typeof v.hemodialysisRemark === 'string' ? v.hemodialysisRemark.trim() : '';
+            if (fromForm) return fromForm;
+            const fromRef = hemodialysisRemarkRef.current?.trim();
+            return fromRef || null;
+          })(),
+          hdf_replacement_mode:
+            v.mode === 'HDF' && typeof v.hdfReplacementMode === 'string' ? v.hdfReplacementMode : undefined,
+          hdf_replacement_volume_l:
+            v.mode === 'HDF' && v.hdfReplacementVolumeL != null ? Number(v.hdfReplacementVolumeL) : undefined,
+          form_extra: formExtraPayload,
+        });
+        const newRx = saveResp.data.data;
+        savePrescriptionBasicParamsToStorage(selectedPatient, formExtraPayload);
+        setShowConfirm(false);
+
+        if (newRx) {
+          try {
+            skipPersistRef.current = true;
+            const mappedRaw = mapCurrentPrescriptionToFormValues(newRx as PrescriptionRecord);
+            const { form: mapped, ultrafiltrationManualFromLoad } = enrichMappedPrescriptionForm(
+              mappedRaw,
+              selectedPatient,
+            );
+            const hemoLoaded = hemoModalityFromApi(newRx.hemodialysis_modality);
+            const coreModeLoaded = hemoLoaded.mode === 'other' ? 'HD' : hemoLoaded.mode;
+            hemodialysisRemarkRef.current =
+              typeof mapped.hemodialysisRemark === 'string' && mapped.hemodialysisRemark.trim()
+                ? mapped.hemodialysisRemark.trim()
+                : null;
+            baselineDryWeightRef.current =
+              newRx.dry_weight != null && Number.isFinite(Number(newRx.dry_weight))
+                ? Number(newRx.dry_weight)
+                : null;
+            setBaselineDryWeight(baselineDryWeightRef.current);
+            ufUserEditedRef.current = ultrafiltrationManualFromLoad;
+            heparinUserEditedRef.current = false;
+            heparinCoreIURef.current = applyHeparinCoreFromLoadedRx(
+              coreModeLoaded,
+              mapped.anticoagulant as string | undefined,
+              mapped.heparinFirst as number | undefined,
+            );
+            form.setFieldsValue(mapped);
+            const todayStr = dayjs().format('YYYY-MM-DD');
+            const todayRowForPatient = scheduleTodayRows.find((r) => {
+              const d = scheduleDateKeyLocal(r.scheduled_date);
+              return r.patient_id === selectedPatient && d === todayStr;
+            });
+            if (todayRowForPatient) {
+              const hm = hemoModalityFromApi(todayRowForPatient.session_dialysis_mode as string | undefined);
+              form.setFieldsValue({ mode: hm.mode, modeOther: hm.modeOther });
+              if (todayRowForPatient.schedule_remark != null && String(todayRowForPatient.schedule_remark).trim()) {
+                const t = String(todayRowForPatient.schedule_remark).trim();
+                hemodialysisRemarkRef.current = t;
+                form.setFieldsValue({ hemodialysisRemark: t });
+              }
+            }
+            const postSync = readPostDialysisSync(selectedPatient);
+            if (postSync) {
+              form.setFieldsValue({
+                postDialysisSbp: postSync.postSbp ?? undefined,
+                postDialysisDbp: postSync.postDbp ?? undefined,
+                postDialysisPulse: postSync.postPulse ?? undefined,
+                postDialysisWeightKg: postSync.postWeightKg ?? undefined,
+              });
+            }
+            ensureDoctorSignatureFromCurrentUser(form);
+            window.setTimeout(() => {
+              skipPersistRef.current = false;
+            }, 0);
+          } catch (syncErr) {
+            console.error(syncErr);
+            message.warning('处方已保存，本地表单回填异常，请重新选择患者或刷新页面');
+            skipPersistRef.current = false;
+          }
+        }
+
+        message.success('透析处方已保存，护士下次录入时将自动带入');
+        window.dispatchEvent(
+          new CustomEvent(HD_PRESCRIPTION_SAVED_EVENT, {
+            detail: { patientId: selectedPatient, savedAt: new Date().toISOString() },
+          }),
+        );
+      };
+
+      if (warns.length > 0) {
+        setShowConfirm(false);
+        Modal.confirm({
+          title: '用药风险提示',
+          content: (
+            <div>
+              {warns.map((w) => (
+                <p key={w.rule_id}>{w.message}</p>
+              ))}
+            </div>
+          ),
+          okText: '仍要保存',
+          cancelText: '返回修改',
+          onOk: async () => {
+            try {
+              await runSave();
+            } catch (we) {
+              const wm =
+                we && typeof we === 'object' && 'message' in we
+                  ? String((we as { message?: string }).message)
+                  : '保存失败';
+              message.error(wm);
+              throw we;
+            }
+          },
+        });
+        return;
+      }
+
+      await runSave();
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message?: string }).message) : '保存失败';
+      message.error(msg);
+    } finally {
+      setSaveSubmitting(false);
+    }
   };
 
   return (
@@ -574,9 +1309,10 @@ export default function PrescriptionWorkspacePage() {
           placeholder="选择患者…"
           value={selectedPatient || undefined}
           onChange={(v) => setSelectedPatient(v)}
-          options={PATIENTS.map((p) => ({ value: p.value, label: p.label }))}
-          style={{ width: 280 }}
+          options={patientSelectOptions}
+          style={{ width: 380 }}
           showSearch
+          optionFilterProp="label"
         />
         <Button icon={<HistoryOutlined />} onClick={() => setShowHistory(true)} disabled={!selectedPatient}>
           处方历史
@@ -585,6 +1321,110 @@ export default function PrescriptionWorkspacePage() {
           保存处方
         </Button>
       </div>
+
+      {scheduleTodayRows.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="今日排班 · 上机日处方"
+          description={
+            <div>
+              <span style={{ color: '#64748B', fontSize: 12, display: 'block', marginBottom: 14 }}>
+                以下患者今日有排班；透析处方宜在<strong>上机当日</strong>书写。点选卡片打开并完善处方（透析模式优先采用「今日本条排班」中的透析模式与备注；与提前一周的排班表一致）。
+              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {SCHEDULE_TIME_SECTIONS.map(({ key, title, accent }) => {
+                  const rows = scheduleTodayByTime[key];
+                  if (!rows.length) return null;
+                  return (
+                    <div key={key}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          marginBottom: 10,
+                          paddingBottom: 6,
+                          borderBottom: `2px solid ${accent}33`,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            fontSize: 13,
+                            color: accent,
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          {title}
+                        </span>
+                        <Tag color="default" style={{ margin: 0, fontSize: 11 }}>
+                          {rows.length} 人
+                        </Tag>
+                      </div>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                          gap: 10,
+                        }}
+                      >
+                        {rows.map((row) => {
+                          const active = selectedPatient === row.patient_id;
+                          return (
+                            <Card
+                              key={row.id}
+                              size="small"
+                              hoverable
+                              onClick={() => setSelectedPatient(row.patient_id)}
+                              styles={{
+                                body: { padding: '10px 12px' },
+                              }}
+                              style={{
+                                cursor: 'pointer',
+                                borderRadius: 8,
+                                border: active ? `1px solid ${accent}` : '1px solid #E2E8F0',
+                                background: active ? `${accent}0D` : '#fff',
+                                boxShadow: active ? `0 0 0 1px ${accent}40` : '0 1px 2px rgba(15,23,42,0.06)',
+                                transition: 'border-color 0.2s, box-shadow 0.2s, background 0.2s',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontWeight: 700,
+                                  fontSize: 14,
+                                  color: '#0D1B3E',
+                                  marginBottom: 6,
+                                  lineHeight: 1.3,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {String(row.patient_name ?? '患者')}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.5 }}>
+                                <span style={{ color: '#334155' }}>
+                                  机位 {row.machine_no != null ? String(row.machine_no) : '—'}
+                                </span>
+                                <span style={{ margin: '0 6px', color: '#CBD5E1' }}>|</span>
+                                <span style={{ fontWeight: 600, color: '#0369A1' }}>
+                                  {todayScheduleModeShort(row.session_dialysis_mode as string | null)}
+                                </span>
+                              </div>
+                            </Card>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          }
+        />
+      )}
 
       {!selectedPatient && (
         <div
@@ -708,7 +1548,26 @@ export default function PrescriptionWorkspacePage() {
                     <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 10 }}>方案与体外循环</div>
                     <RxGrid cols={3} gap={10}>
                       <RxReadonlyValue label="透析频次" value={frequencyLabel} />
-                      <RxReadonlyValue label="透析方式" value={modeDisplay} />
+                      <RxReadonlyValue label="透析模式" value={modeDisplay} />
+                      {modeWatched === 'HDF' && (
+                        <>
+                          <RxReadonlyValue
+                            label="置换方式"
+                            value={
+                              HDF_REPLACEMENT_MODE_LABEL[String(hdfReplacementModeWatched ?? '')] ?? '—'
+                            }
+                          />
+                          <RxReadonlyValue
+                            label="置换液量"
+                            value={
+                              hdfReplacementVolumeLWatched != null &&
+                              Number.isFinite(Number(hdfReplacementVolumeLWatched))
+                                ? `${hdfReplacementVolumeLWatched} L`
+                                : '—'
+                            }
+                          />
+                        </>
+                      )}
                       <RxReadonlyValue label="标准时长" value={`${durationWatched ?? '—'} h`} />
                       <RxReadonlyValue label="血流速" value={`${bloodFlowWatched ?? '—'} mL/min`} />
                       <RxReadonlyValue label="透析液流速" value={`${dialysateFlowWatched ?? '—'} mL/min`} />
@@ -837,7 +1696,7 @@ export default function PrescriptionWorkspacePage() {
                 key: 'rx',
                 label: (
                   <span style={{ fontWeight: 600, fontSize: 14 }}>
-                    ② 处方与透前评估（频次 · 方式 · 抗凝 · 干体重 · 透前）
+                    ② 处方与透前评估（频次 · 透析模式 · 抗凝 · 干体重 · 透前）
                   </span>
                 ),
                 children: (
@@ -865,13 +1724,39 @@ export default function PrescriptionWorkspacePage() {
               <Form.Item label="标准时长（小时）" name="duration">
                 <InputNumber min={2} max={8} step={0.5} style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item label="透析方式" name="mode" rules={[{ required: true, message: '请选择透析方式' }]}>
+              <Form.Item label="透析模式" name="mode" rules={[{ required: true, message: '请选择透析模式' }]}>
                 <Select options={[...MODE_OPTIONS]} />
               </Form.Item>
               {modeWatched === 'other' && (
-                <Form.Item label="透析方式说明" name="modeOther" rules={[{ required: true, message: '请填写透析方式' }]}>
-                  <Input placeholder="请描述具体透析方式" />
+                <Form.Item label="透析模式说明" name="modeOther" rules={[{ required: true, message: '请填写透析模式' }]}>
+                  <Input placeholder="请描述具体透析模式" />
                 </Form.Item>
+              )}
+              {modeWatched === 'HDF' && (
+                <>
+                  <Form.Item
+                    label="置换方式"
+                    name="hdfReplacementMode"
+                    rules={[{ required: true, message: '请选择置换方式' }]}
+                  >
+                    <Select options={[...HDF_REPLACEMENT_MODE_OPTIONS]} placeholder="前置换 / 后置换 / 前后置换" />
+                  </Form.Item>
+                  <Form.Item
+                    label="置换液量"
+                    name="hdfReplacementVolumeL"
+                    rules={[
+                      { required: true, message: '请填写置换液量' },
+                      {
+                        type: 'number',
+                        min: 0.1,
+                        max: 100,
+                        message: '置换液量须在 0.1～100 L',
+                      },
+                    ]}
+                  >
+                    <InputNumber min={0.1} max={100} step={0.1} precision={2} style={{ width: '100%' }} addonAfter="L" />
+                  </Form.Item>
+                </>
               )}
               <Form.Item label="透析器" name="dialyzer" rules={[{ required: true, message: '请选择透析器' }]}>
                 <Select options={DIALYZER_OPTIONS} showSearch optionFilterProp="label" placeholder="从耗材目录选择" />
@@ -1256,8 +2141,18 @@ export default function PrescriptionWorkspacePage() {
             styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
             title={<span style={{ fontWeight: 600, color: '#0369A1' }}>📝 处方备注</span>}
           >
-            <Form.Item name="notes" noStyle>
-              <Input.TextArea rows={2} placeholder="特殊说明（选填）" />
+            <Form.Item
+              label="血透方式备注（入库 hemodialysis_remark，可与排班备注同步）"
+              name="hemodialysisRemark"
+              style={{ marginBottom: 12 }}
+            >
+              <Input.TextArea rows={2} placeholder="如：无肝素、置换说明、与科室对接说明…" />
+            </Form.Item>
+            <Form.Item
+              label="其他说明（与上方「透前补充」合并保存至 prescriptions.notes）"
+              name="notes"
+            >
+              <Input.TextArea rows={2} placeholder="特殊说明（选填）；保存时与「其他（透前补充）」一并写入数据库" />
             </Form.Item>
           </Card>
                   </div>
@@ -1295,7 +2190,7 @@ export default function PrescriptionWorkspacePage() {
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <Form.Item label="医生签名" name="doctorSignature" style={{ marginBottom: 8 }}>
-                <Input placeholder="手写或电子签名" style={{ width: 220 }} />
+                <Input placeholder="默认当前登录用户姓名，可修改" style={{ width: 220 }} />
               </Form.Item>
               <div
                 style={{
@@ -1342,10 +2237,11 @@ export default function PrescriptionWorkspacePage() {
         onCancel={() => setShowConfirm(false)}
         okText="确认保存"
         cancelText="取消"
+        confirmLoading={saveSubmitting}
       >
         <div style={{ padding: '8px 0', fontSize: 14, color: '#0D1B3E', lineHeight: 1.8 }}>
           <div>
-            即将保存对 <strong>{PATIENTS.find((p) => p.value === selectedPatient)?.label.split(' — ')[0]}</strong> 的透析处方修改。
+            即将保存对 <strong>{confirmPatientDisplayName}</strong> 的透析处方修改。
           </div>
           <div
             style={{

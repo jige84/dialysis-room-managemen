@@ -3,13 +3,37 @@
  * 主要作用：展示本周患者与护士排班，并支持护士长调整当班护士。
  * 主要功能：周视图切换；从后端加载周排班；展示护患比；调整护士排班。
  */
-import { useEffect, useState } from 'react';
-import { Card, Button, Select, Modal, Form, Input, DatePicker, message, Tooltip, Spin } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Card,
+  Button,
+  Select,
+  Modal,
+  Form,
+  Input,
+  DatePicker,
+  message,
+  Spin,
+  Table,
+  Space,
+  Popconfirm,
+  Alert,
+  Tag,
+} from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
-import { scheduleApi, type ShiftKey, type WeekScheduleResponse } from '../../api/schedule';
-import { usePermission } from '../..//utils/permission';
+import {
+  scheduleApi,
+  type PatientSlot,
+  type ShiftKey,
+  type WeekScheduleResponse,
+  type TodaySchedulePatientRow,
+} from '../../api/schedule';
+import { patientsApi } from '../../api/patients';
+import { devicesApi, type MachineRow } from '../../api/devices';
+import { usePermission } from '../../utils/permission';
 
 const SHIFT_CONFIG: { key: ShiftKey; label: string }[] = [
   { key: 'am', label: '上午班 (06:00-12:00)' },
@@ -18,15 +42,124 @@ const SHIFT_CONFIG: { key: ShiftKey; label: string }[] = [
 ];
 const DAYS_OF_WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-const CHIP_COLORS = [
-  { bg: '#DBEAFE', color: '#1E40AF' },
-  { bg: '#EDE9FE', color: '#5B21B6' },
-  { bg: '#DCFCE7', color: '#15803D' },
-  { bg: '#FEF9C3', color: '#854D0E' },
-  { bg: '#FCE7F3', color: '#9D174D' },
+const SHIFT_LABEL_CN: Record<string, string> = { am: '早', pm: '中', eve: '晚' };
+
+/** 本条排班透析模式（HD / HDF / HD+HP），与档案「腹透/血透」类别无关 */
+const HEMO_MODALITY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'HD', label: 'HD' },
+  { value: 'HDF', label: 'HDF' },
+  { value: 'HD_HP', label: 'HD+HP' },
 ];
 
-const SHIFT_LABEL_CN: Record<string, string> = { am: '早', pm: '中', eve: '晚' };
+function patientRenalCategoryLabel(cat: PatientSlot['patientRenalCategory']): string {
+  if (cat === 'PD') return '腹透';
+  return '血透';
+}
+
+/** 排班格内展示的透析模式简称 */
+function scheduleDialysisModeLabel(mode: string | null | undefined): string {
+  if (!mode) return '—';
+  const raw = String(mode).trim();
+  const u = raw.toUpperCase().replace(/\+/g, '_');
+  const map: Record<string, string> = {
+    HD: 'HD',
+    HDF: 'HDF',
+    HD_HP: 'HD+HP',
+    'HD+HP': 'HD+HP',
+    HP: 'HD+HP',
+    PD: 'PD',
+    OTHER: '其他',
+  };
+  return map[u] || map[raw] || raw;
+}
+
+/** PATCH 排班后立刻更新周视图中的本条记录，避免仅依赖重新拉取时界面仍显示旧透析模式 */
+/** 后端提示迁移/处方未写入时用警告样式，避免误以为已完全同步 */
+function shouldWarnScheduleSyncMessage(text: string | undefined): boolean {
+  if (!text) return false;
+  return /迁移\s*0?43|0?44|0?45|未更新|未写入|未持久化|缺少|暂无当前有效|未执行|非上机当日|上机当日/.test(text);
+}
+
+function mergeWeekDataAfterSlotPatch(
+  wd: WeekScheduleResponse,
+  scheduleId: string,
+  row: { session_dialysis_mode?: string | null; schedule_remark?: string | null },
+): WeekScheduleResponse {
+  const sessRaw = row.session_dialysis_mode;
+  const sess = sessRaw === undefined ? undefined : sessRaw === null || sessRaw === '' ? null : String(sessRaw);
+  const cells = { ...wd.cells } as WeekScheduleResponse['cells'];
+  for (const shiftKey of wd.shifts) {
+    const dayMap = { ...(cells[shiftKey] ?? {}) };
+    for (const day of wd.days) {
+      const dk = day.date;
+      const cell = dayMap[dk];
+      if (!cell?.patients?.length) continue;
+      dayMap[dk] = {
+        ...cell,
+        patients: cell.patients.map((p) => {
+          if (p.scheduleId !== scheduleId) return p;
+          const nextSess = sess !== undefined ? sess : (p.sessionDialysisMode ?? null);
+          const eff = !nextSess || nextSess === '' ? 'HD' : String(nextSess);
+          const nextRm =
+            row.schedule_remark !== undefined ? row.schedule_remark : p.scheduleRemark;
+          return {
+            ...p,
+            sessionDialysisMode: nextSess,
+            dialysisMode: eff,
+            scheduleRemark: nextRm ?? null,
+          };
+        }),
+      };
+    }
+    cells[shiftKey] = dayMap;
+  }
+  return { ...wd, cells };
+}
+
+function machineZoneForPatient(isolation: string | null | undefined): 'normal' | 'hbv' | 'hcv' {
+  if (isolation === 'hbv') return 'hbv';
+  if (isolation === 'hcv') return 'hcv';
+  return 'normal';
+}
+
+function machineOptionsForSlot(
+  row: PatientSlot,
+  allMachines: MachineRow[],
+  cellPatients: PatientSlot[],
+): { value: string; label: string }[] {
+  const z = machineZoneForPatient(row.isolationZone);
+  const usedOther = new Set(
+    cellPatients
+      .filter((x) => x.scheduleId !== row.scheduleId)
+      .map((x) => x.machineId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  return allMachines
+    .filter(
+      (m) =>
+        m.zone === z
+        && m.status === 'active'
+        && (!usedOther.has(m.id) || m.id === row.machineId),
+    )
+    .sort((a, b) => a.machine_no.localeCompare(b.machine_no, 'zh-CN'))
+    .map((m) => ({ value: m.id, label: `${m.machine_no}（${m.zone}）` }));
+}
+
+function machinesAvailableForNewPatient(
+  allMachines: MachineRow[],
+  zone: 'normal' | 'hbv' | 'hcv',
+  cellPatients: PatientSlot[],
+): { value: string; label: string }[] {
+  const used = new Set(
+    cellPatients
+      .map((x) => x.machineId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  return allMachines
+    .filter((m) => m.zone === zone && m.status === 'active' && !used.has(m.id))
+    .sort((a, b) => a.machine_no.localeCompare(b.machine_no, 'zh-CN'))
+    .map((m) => ({ value: m.id, label: `${m.machine_no}（${m.zone}）` }));
+}
 
 /** 从 weekData 汇总护士排班表 */
 function buildNurseGrid(wd: WeekScheduleResponse | null) {
@@ -59,6 +192,7 @@ function buildNurseGrid(wd: WeekScheduleResponse | null) {
 }
 
 export default function SchedulePage() {
+  const navigate = useNavigate();
   const [currentWeek, setCurrentWeek] = useState(dayjs().startOf('week'));
   const [weekData, setWeekData] = useState<WeekScheduleResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -66,6 +200,27 @@ export default function SchedulePage() {
   const [weeklyPlan, setWeeklyPlan] = useState<string>('');
   const [form] = Form.useForm();
   const { canSchedule } = usePermission();
+
+  const [machines, setMachines] = useState<MachineRow[]>([]);
+  const [cellModalOpen, setCellModalOpen] = useState(false);
+  const [cellCtx, setCellCtx] = useState<{ date: string; shiftKey: ShiftKey } | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [addPatientId, setAddPatientId] = useState<string | undefined>();
+  const [addPatientIsolation, setAddPatientIsolation] = useState<string | undefined>();
+  const [addMachineId, setAddMachineId] = useState<string | undefined>();
+  const [patientSearchOptions, setPatientSearchOptions] = useState<{ value: string; label: string; zone: string }[]>([]);
+  const [weekPatientAdjustOpen, setWeekPatientAdjustOpen] = useState(false);
+  const [addScheduleRemark, setAddScheduleRemark] = useState('');
+  const [addSessionDialysisMode, setAddSessionDialysisMode] = useState<string>('HD');
+  /** 点击姓名：编辑本条透析模式与备注（默认 HD、备注空） */
+  const [slotHemoModalOpen, setSlotHemoModalOpen] = useState(false);
+  const [slotHemoEditing, setSlotHemoEditing] = useState<PatientSlot | null>(null);
+  /** 本条排班所属日期（YYYY-MM-DD），用于判断「仅上机当日同步处方」后是否通知处方页刷新 */
+  const [slotHemoScheduleDate, setSlotHemoScheduleDate] = useState<string | null>(null);
+  const [slotHemoForm] = Form.useForm<{ modality: string; remark: string }>();
+
+  /** 今日上机患者（与 /api/schedule/today 一致，供跳转透析录入） */
+  const [todayDialysisRows, setTodayDialysisRows] = useState<TodaySchedulePatientRow[]>([]);
 
   const weekLabel = `${currentWeek.format('YYYY年M月D日')} — ${currentWeek.add(6, 'day').format('M月D日')}`;
 
@@ -87,6 +242,321 @@ export default function SchedulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentWeek.format('YYYY-MM-DD')]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await scheduleApi.getToday();
+        if (!cancelled) setTodayDialysisRows(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setTodayDialysisRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [weekData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await devicesApi.machines();
+        if (cancelled || res.data.code !== 200 || !Array.isArray(res.data.data)) return;
+        setMachines(res.data.data);
+      } catch {
+        /* 机位列表失败时仍可浏览周视图 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const searchPatientsDebounced = useMemo(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return (q: string) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const t = q.trim();
+        if (!t) {
+          setPatientSearchOptions([]);
+          return;
+        }
+        try {
+          const res = await patientsApi.searchByKeyword(t);
+          if (res.data.code !== 200 || !res.data.data?.list) return;
+          setPatientSearchOptions(
+            res.data.data.list.map((p) => ({
+              value: p.id,
+              label: `${p.name}（${p.isolation_zone}）`,
+              zone: p.isolation_zone,
+            })),
+          );
+        } catch {
+          setPatientSearchOptions([]);
+        }
+      }, 320);
+    };
+  }, []);
+
+  const cellPatientsForModal = useMemo(() => {
+    if (!weekData || !cellCtx) return [];
+    return weekData.cells[cellCtx.shiftKey]?.[cellCtx.date]?.patients ?? [];
+  }, [weekData, cellCtx]);
+
+  const weekPatientOverviewRows = useMemo(() => {
+    if (!weekData) return [];
+    const out: Array<{
+      key: string;
+      date: string;
+      weekdayLabel: string;
+      shiftKey: ShiftKey;
+      shiftShort: string;
+      slot: PatientSlot;
+    }> = [];
+    for (const shiftKey of weekData.shifts) {
+      for (const day of weekData.days) {
+        const cell = weekData.cells[shiftKey]?.[day.date];
+        if (!cell) continue;
+        for (const p of cell.patients) {
+          out.push({
+            key: p.scheduleId,
+            date: day.date,
+            weekdayLabel: day.label,
+            shiftKey,
+            shiftShort: SHIFT_LABEL_CN[shiftKey] ?? shiftKey,
+            slot: p,
+          });
+        }
+      }
+    }
+    const order: ShiftKey[] = ['am', 'pm', 'eve'];
+    out.sort((a, b) => {
+      const d = a.date.localeCompare(b.date);
+      if (d !== 0) return d;
+      const sd = order.indexOf(a.shiftKey) - order.indexOf(b.shiftKey);
+      if (sd !== 0) return sd;
+      return a.slot.name.localeCompare(b.slot.name, 'zh-CN');
+    });
+    return out;
+  }, [weekData]);
+
+  const openCellModal = (date: string, shiftKey: ShiftKey) => {
+    setCellCtx({ date, shiftKey });
+    setAddPatientId(undefined);
+    setAddPatientIsolation(undefined);
+    setAddMachineId(undefined);
+    setAddScheduleRemark('');
+    setAddSessionDialysisMode('HD');
+    setPatientSearchOptions([]);
+    setCellModalOpen(true);
+  };
+
+  const openSlotHemoModal = (slot: PatientSlot, scheduleDate: string) => {
+    setSlotHemoEditing(slot);
+    setSlotHemoScheduleDate(scheduleDate);
+    slotHemoForm.setFieldsValue({
+      modality: slot.sessionDialysisMode || 'HD',
+      remark: slot.scheduleRemark ?? '',
+    });
+    setSlotHemoModalOpen(true);
+  };
+
+  const appendHeparinToSlotHemo = () => {
+    const r = slotHemoForm.getFieldValue('remark') ?? '';
+    const tag = '无肝素';
+    const cur = String(r).trim();
+    const next = cur.includes(tag)
+      ? cur.replace(/无肝素/g, '').replace(/\s+/g, ' ').trim()
+      : (cur ? `${cur} ${tag}` : tag);
+    slotHemoForm.setFieldsValue({ remark: next });
+  };
+
+  const handleSaveSlotHemo = async () => {
+    if (!slotHemoEditing || !canSchedule) return;
+    const v = await slotHemoForm.validateFields();
+    const scheduleId = slotHemoEditing.scheduleId;
+    const patientId = slotHemoEditing.patientId;
+    try {
+      const res = await scheduleApi.updateSlot(scheduleId, {
+        session_dialysis_mode: v.modality || 'HD',
+        schedule_remark: v.remark?.trim() ? v.remark.trim() : null,
+      });
+      const row = res.data?.data as
+        | { session_dialysis_mode?: string | null; schedule_remark?: string | null }
+        | null
+        | undefined;
+      if (row) {
+        setWeekData((prev) => (prev ? mergeWeekDataAfterSlotPatch(prev, scheduleId, row) : prev));
+      }
+      window.dispatchEvent(
+        new CustomEvent('hd-hemodialysis-modality-synced', {
+          detail: { patientId, scheduledDate: slotHemoScheduleDate },
+        }),
+      );
+      const msgText = res.data?.message || '已保存';
+      if (shouldWarnScheduleSyncMessage(msgText)) {
+        message.warning(msgText, 10);
+      } else {
+        message.success(msgText);
+      }
+      setSlotHemoModalOpen(false);
+      setSlotHemoEditing(null);
+      setSlotHemoScheduleDate(null);
+      await loadWeek(currentWeek);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { message?: string } } };
+      message.error(ax.response?.data?.message || '保存失败');
+    }
+  };
+
+  const handleGenerateWeek = () => {
+    if (!canSchedule) return;
+    Modal.confirm({
+      title: '按患者档案生成本周排班？',
+      content:
+        '将根据在透患者档案中的「透析时间」预设与隔日锚点，为本自然周生成机位排班；已存在的排班不会被覆盖。',
+      okText: '生成',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setGenerating(true);
+          const startDate = currentWeek.format('YYYY-MM-DD');
+          const res = await scheduleApi.generateWeek(startDate);
+          if (res.data.code !== 200 || !res.data.data) {
+            message.error(res.data.message || '生成失败');
+            return;
+          }
+          const d = res.data.data;
+          if (d.inserted > 0) {
+            message.success(`新增 ${d.inserted} 条，跳过 ${d.skipped} 条`);
+          } else {
+            message.warning('本周未新增排班条目，请查看弹出说明');
+          }
+
+          const showGenerateDetail = () => (
+            <div>
+              <p style={{ marginBottom: 10, color: '#64748B', fontSize: 13 }}>
+                统计：候选在透患者{' '}
+                <strong>{d.candidatePatients ?? '—'}</strong> 人；展开时段{' '}
+                <strong>{d.expandedSlots ?? 0}</strong> 个；重复跳过{' '}
+                <strong>{d.skipped}</strong> 次；无机位未落位{' '}
+                <strong>{d.blockedNoMachine ?? 0}</strong> 次。
+              </p>
+              {d.hints && d.hints.length > 0 ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="可能原因"
+                  description={
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                      {d.hints.map((h) => (
+                        <li key={h} style={{ marginBottom: 6 }}>
+                          {h}
+                        </li>
+                      ))}
+                    </ul>
+                  }
+                  style={{ marginBottom: 12 }}
+                />
+              ) : null}
+              {d.note ? (
+                <Alert type="info" showIcon message={d.note} style={{ marginBottom: 12 }} />
+              ) : null}
+              {d.warnings && d.warnings.length > 0 ? (
+                <>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>明细警告</div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {d.warnings.map((w) => (
+                      <li key={w} style={{ marginBottom: 4 }}>
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </div>
+          );
+
+          if (d.inserted === 0) {
+            Modal.warning({
+              title: '按档案生成：本周未新增排班',
+              width: 600,
+              content: showGenerateDetail(),
+            });
+          } else if (d.warnings?.length) {
+            Modal.warning({
+              title: '排班已生成，但有提示',
+              width: 560,
+              content: showGenerateDetail(),
+            });
+          }
+
+          loadWeek(currentWeek);
+        } catch {
+          message.error('生成排班失败，请稍后重试');
+        } finally {
+          setGenerating(false);
+        }
+      },
+    });
+  };
+
+  const handleDeleteSlot = async (scheduleId: string) => {
+    try {
+      await scheduleApi.deleteSlot(scheduleId);
+      message.success('已删除排班');
+      loadWeek(currentWeek);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { message?: string } } };
+      message.error(ax.response?.data?.message || '删除失败');
+    }
+  };
+
+  const handleChangeMachine = async (scheduleId: string, machineId: string) => {
+    try {
+      await scheduleApi.updateSlot(scheduleId, { machine_id: machineId });
+      message.success('机位已更新');
+      loadWeek(currentWeek);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { message?: string } } };
+      message.error(ax.response?.data?.message || '更新失败');
+    }
+  };
+
+  const handleAddSlot = async () => {
+    if (!cellCtx || !addPatientId || !addMachineId) return;
+    try {
+      const remarkTrim = addScheduleRemark.trim();
+      await scheduleApi.createSlot({
+        patient_id: addPatientId,
+        scheduled_date: cellCtx.date,
+        shift: cellCtx.shiftKey,
+        machine_id: addMachineId,
+        session_dialysis_mode: addSessionDialysisMode || 'HD',
+        ...(remarkTrim ? { schedule_remark: remarkTrim } : {}),
+      });
+      message.success('已添加排班');
+      setAddPatientId(undefined);
+      setAddPatientIsolation(undefined);
+      setAddMachineId(undefined);
+      setAddScheduleRemark('');
+      setAddSessionDialysisMode('HD');
+      setPatientSearchOptions([]);
+      loadWeek(currentWeek);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { message?: string } } };
+      message.error(ax.response?.data?.message || '添加失败');
+    }
+  };
+
+  const addMachineOptions = useMemo(() => {
+    if (!addPatientIsolation) return [];
+    const z = machineZoneForPatient(addPatientIsolation);
+    return machinesAvailableForNewPatient(machines, z, cellPatientsForModal);
+  }, [machines, addPatientIsolation, cellPatientsForModal]);
+
   const nonCompliantCount = weekData
     ? weekData.shifts.reduce((sum, shift) => {
         const cellsByDate = weekData.cells[shift];
@@ -97,6 +567,18 @@ export default function SchedulePage() {
       }, 0)
     : 0;
 
+  /** 当前自然周全部「患者机位排班」条数（来自 schedules，非患者总数） */
+  const weekSchedulePatientCount = useMemo(() => {
+    if (!weekData) return 0;
+    let n = 0;
+    for (const sh of weekData.shifts) {
+      for (const d of weekData.days) {
+        n += weekData.cells[sh]?.[d.date]?.patients.length ?? 0;
+      }
+    }
+    return n;
+  }, [weekData]);
+
   const today = dayjs();
   const todayDateStr = today.format('YYYY-MM-DD');
 
@@ -105,9 +587,11 @@ export default function SchedulePage() {
         (acc, shift) => {
           const cell = weekData.cells[shift]?.[todayDateStr];
           if (!cell) return acc;
-          acc.shifts += 1;
           acc.patients += cell.patients.length;
           acc.nurses += cell.nurses.length;
+          if (cell.patients.length > 0 || cell.nurses.length > 0) {
+            acc.shifts += 1;
+          }
           return acc;
         },
         { shifts: 0, patients: 0, nurses: 0 },
@@ -122,6 +606,10 @@ export default function SchedulePage() {
     if (!canSchedule) return;
     setShowModal(true);
   };
+
+  const cellShiftLabel = cellCtx
+    ? SHIFT_CONFIG.find((s) => s.key === cellCtx.shiftKey)?.label ?? cellCtx.shiftKey
+    : '';
 
   const handleSaveNurseSchedule = async () => {
     try {
@@ -151,7 +639,7 @@ export default function SchedulePage() {
           <div className="hd-stat-icon">📅</div>
           <div className="hd-stat-label">今日排班班次</div>
           <div className="hd-stat-value num">{todayStats.shifts}</div>
-          <div className="hd-stat-meta">本日有排班的班次</div>
+          <div className="hd-stat-meta">本日已有患者或护士安排的班次数</div>
         </div>
         <div className="hd-stat-card blue">
           <div className="hd-stat-icon">👩‍⚕️</div>
@@ -182,6 +670,40 @@ export default function SchedulePage() {
         )}
       </div>
 
+      {todayDialysisRows.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="今日上机患者 · 透析录入快捷入口"
+          description={
+            <Space wrap size="small">
+              {todayDialysisRows.map((row) => (
+                <Button
+                  key={row.id}
+                  type="primary"
+                  ghost
+                  size="small"
+                  onClick={() =>
+                    navigate(
+                      `/dialysis/entry?patient_id=${encodeURIComponent(row.patient_id)}&date=${encodeURIComponent(row.scheduled_date)}`,
+                    )
+                  }
+                >
+                  {row.patient_name || '患者'}
+                  {row.machine_no ? ` · ${row.machine_no}` : ''}
+                  {' · '}
+                  {SHIFT_LABEL_CN[String(row.shift)] ?? row.shift}
+                  {row.session_dialysis_mode
+                    ? ` · ${scheduleDialysisModeLabel(row.session_dialysis_mode)}`
+                    : ''}
+                </Button>
+              ))}
+            </Space>
+          }
+        />
+      )}
+
       {/* 周视图导航 */}
       <Card style={{ border: '1px solid #DBEAFE', marginBottom: 20 }}
         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
@@ -195,14 +717,33 @@ export default function SchedulePage() {
         }
         extra={
           canSchedule && (
-            <Button type="primary" onClick={handleOpenModal}>
-              ＋ 调整排班（护士）
-            </Button>
+            <Space wrap>
+              <Button onClick={() => setWeekPatientAdjustOpen(true)}>
+                本周患者调班
+              </Button>
+              <Button loading={generating} onClick={handleGenerateWeek}>
+                按档案生成本周
+              </Button>
+              <Button type="primary" onClick={handleOpenModal}>
+                ＋ 调整排班（护士）
+              </Button>
+            </Space>
           )
         }
       >
         <Spin spinning={loading}>
-          <div style={{ overflowX: 'auto' }}>
+          {weekData && !loading && weekSchedulePatientCount === 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message="本周周历中尚无患者机位排班"
+              description={
+                '不是因为读不到患者档案：本页名单来自排班表（schedules）里的具体上机安排。若该周尚未生成或添加记录，格子里就会为空。请在有权限时使用「按档案生成本周」（需档案中已维护透析频次/时间且为在透患者），或在各单元格点击「患者排班」手工添加。'
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          <div id="hd-schedule-week-grid" style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr>
@@ -235,47 +776,118 @@ export default function SchedulePage() {
                       const isToday = currentWeek.add(idx, 'day').isSame(dayjs(), 'day');
                       return (
                         <td key={day} style={{ padding: 8, borderBottom: '1px solid #DBEAFE', borderRight: '1px solid #DBEAFE', background: isToday ? '#F0F9FF' : 'transparent', verticalAlign: 'top' }}>
-                          {cell && cell.patients.length > 0 ? (
-                            <div>
-                              <div className="flex items-center gap-4" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
-                                {cell.ratio !== '—' && (
-                                  <span style={{ background: cell.compliant ? '#ECFDF5' : '#FFF1F2', color: cell.compliant ? '#059669' : '#BE123C', padding: '1px 6px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>
-                                    {cell.ratio}
-                                  </span>
-                                )}
-                                {cell.nurses.length > 0 && (
-                                  <span style={{ fontSize: 11, color: '#7B92BC' }}>
-                                    {cell.nurses.map((n) => n.name).join('·')}
-                                  </span>
-                                )}
+                          <div>
+                            {canSchedule && (
+                              <div style={{ marginBottom: 4 }}>
+                                <Button
+                                  type="link"
+                                  size="small"
+                                  style={{ padding: 0, height: 'auto', fontSize: 12 }}
+                                  onClick={() => openCellModal(date, shiftKey)}
+                                >
+                                  患者排班
+                                </Button>
                               </div>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                                {cell.patients.slice(0, 4).map((p, i) => {
-                                  const c = CHIP_COLORS[i % CHIP_COLORS.length];
-                                  return (
-                                    <Tooltip
-                                      key={p.patientId}
-                                      title={`${p.name} · ${p.machineNo || '未分配机器'}`}
-                                    >
-                                      <span style={{ background: c.bg, color: c.color, padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
-                                        {p.name.charAt(0)}
-                                      </span>
-                                    </Tooltip>
-                                  );
-                                })}
-                                {cell.patients.length > 4 && (
-                                  <Tooltip title={cell.patients.slice(4).map(p => p.name).join('、')}>
-                                    <span style={{ background: '#F1F5F9', color: '#64748B', padding: '2px 6px', borderRadius: 4, fontSize: 11, cursor: 'pointer' }}>
-                                      +{cell.patients.length - 4}
+                            )}
+                            {cell && cell.patients.length > 0 ? (
+                              <div>
+                                <div className="flex items-center gap-4" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                  {cell.ratio !== '—' && (
+                                    <span style={{ background: cell.compliant ? '#ECFDF5' : '#FFF1F2', color: cell.compliant ? '#059669' : '#BE123C', padding: '1px 6px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>
+                                      {cell.ratio}
                                     </span>
-                                  </Tooltip>
-                                )}
+                                  )}
+                                  {cell.nurses.length > 0 && (
+                                    <span style={{ fontSize: 11, color: '#7B92BC' }}>
+                                      {cell.nurses.map((n) => n.name).join('·')}
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                  {cell.patients.map((p) => (
+                                    <div
+                                      key={p.scheduleId}
+                                      style={{
+                                        borderRadius: 6,
+                                        border: '1px solid #E2E8F0',
+                                        padding: '6px 8px',
+                                        background: '#FAFAFA',
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'flex-start',
+                                          gap: 6,
+                                        }}
+                                      >
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                                          <span
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => openSlotHemoModal(p, date)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter' || e.key === ' ') openSlotHemoModal(p, date);
+                                            }}
+                                            style={{
+                                              cursor: 'pointer',
+                                              fontWeight: 600,
+                                              fontSize: 12,
+                                              color: '#0369A1',
+                                              lineHeight: 1.35,
+                                              wordBreak: 'break-all',
+                                              textDecoration: 'underline',
+                                              textDecorationColor: '#BAE6FD',
+                                            }}
+                                          >
+                                            {p.name}
+                                          </span>
+                                          {p.isTemp ? (
+                                            <Tag color="orange" style={{ margin: 0, fontSize: 10, lineHeight: '18px', padding: '0 4px' }}>临</Tag>
+                                          ) : null}
+                                          {p.scheduleRemark ? (
+                                            <Tag color="gold" style={{ margin: 0, fontSize: 10, lineHeight: '18px', padding: '0 4px' }}>备</Tag>
+                                          ) : null}
+                                        </div>
+                                        <span
+                                          style={{
+                                            fontSize: 10,
+                                            fontWeight: 600,
+                                            color: '#475569',
+                                            flexShrink: 0,
+                                            lineHeight: 1.35,
+                                          }}
+                                        >
+                                          {scheduleDialysisModeLabel(p.dialysisMode)}
+                                        </span>
+                                      </div>
+                                      {p.scheduleRemark ? (
+                                        <div
+                                          style={{
+                                            fontSize: 10,
+                                            color: '#78716C',
+                                            textAlign: 'right',
+                                            marginTop: 4,
+                                            lineHeight: 1.35,
+                                            wordBreak: 'break-all',
+                                          }}
+                                        >
+                                          {p.scheduleRemark}
+                                        </div>
+                                      ) : null}
+                                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
+                                        {p.machineNo ? `机位 ${p.machineNo}` : '未分配机位'}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{ fontSize: 11, color: '#7B92BC', marginTop: 4 }}>共{cell.patients.length}人</div>
                               </div>
-                              <div style={{ fontSize: 11, color: '#7B92BC', marginTop: 4 }}>共{cell.patients.length}人</div>
-                            </div>
-                          ) : (
-                            <div style={{ color: '#BFDBFE', fontSize: 12, padding: '4px 0' }}>—</div>
-                          )}
+                            ) : (
+                              <div style={{ color: '#BFDBFE', fontSize: 12, padding: '4px 0' }}>—</div>
+                            )}
+                          </div>
                         </td>
                       );
                     })}
@@ -303,6 +915,268 @@ export default function SchedulePage() {
           )}
         </div>
       )}
+
+      <Modal
+        title={
+          cellCtx
+            ? `患者排班 · ${cellCtx.date} · ${cellShiftLabel}`
+            : '患者排班'
+        }
+        open={cellModalOpen}
+        onCancel={() => {
+          setCellModalOpen(false);
+          setCellCtx(null);
+        }}
+        footer={null}
+        width={900}
+        destroyOnClose
+      >
+        <p style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>
+          点击患者姓名设置本条透析模式（HD/HDF/HD+HP）与备注。排班可提前一周维护；<strong>仅当本条排班日期为「上机当日」</strong>时才会写入透析处方；其他日期仅保存在排班中。可调整机位或删除排班。
+        </p>
+        <Table<PatientSlot>
+          size="small"
+          rowKey={(r) => r.scheduleId}
+          pagination={false}
+          scroll={{ x: 820 }}
+          dataSource={cellPatientsForModal}
+          columns={[
+            {
+              title: '患者（点击姓名编辑）',
+              dataIndex: 'name',
+              key: 'name',
+              width: 140,
+              render: (name: string, row) => (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: 'auto' }}
+                  onClick={() => cellCtx && openSlotHemoModal(row, cellCtx.date)}
+                >
+                  {name}
+                </Button>
+              ),
+            },
+            {
+              title: '档案类别',
+              key: 'renalCat',
+              width: 72,
+              render: (_, row) => patientRenalCategoryLabel(row.patientRenalCategory),
+            },
+            {
+              title: '透析模式 / 备注',
+              key: 'sum',
+              width: 200,
+              ellipsis: true,
+              render: (_, row) => {
+                const mode = scheduleDialysisModeLabel(row.dialysisMode);
+                const rm = row.scheduleRemark?.trim();
+                return rm ? `${mode} · ${rm}` : mode;
+              },
+            },
+            {
+              title: '机位',
+              key: 'machine',
+              width: 220,
+              render: (_, row) => (
+                <Select
+                  style={{ width: '100%' }}
+                  value={row.machineId ?? undefined}
+                  options={machineOptionsForSlot(row, machines, cellPatientsForModal)}
+                  onChange={(v) => handleChangeMachine(row.scheduleId, v)}
+                  disabled={!canSchedule}
+                />
+              ),
+            },
+            {
+              title: '操作',
+              key: 'x',
+              width: 72,
+              render: (_, row) => (
+                <Popconfirm title="确定删除该排班？" onConfirm={() => handleDeleteSlot(row.scheduleId)}>
+                  <Button type="link" size="small" danger disabled={!canSchedule}>
+                    删除
+                  </Button>
+                </Popconfirm>
+              ),
+            },
+          ]}
+        />
+        <Card size="small" title="新增本班次患者" style={{ marginTop: 16 }} styles={{ body: { paddingBottom: 12 } }}>
+          <Space wrap align="start">
+            <Select
+              showSearch
+              filterOption={false}
+              placeholder="搜索患者姓名"
+              style={{ minWidth: 240 }}
+              options={patientSearchOptions}
+              onSearch={searchPatientsDebounced}
+              value={addPatientId}
+              onChange={(v) => {
+                setAddPatientId(v);
+                const o = patientSearchOptions.find((x) => x.value === v);
+                setAddPatientIsolation(o?.zone);
+                setAddMachineId(undefined);
+              }}
+              allowClear
+            />
+            <Select
+              placeholder="选择机位"
+              style={{ minWidth: 220 }}
+              options={addMachineOptions}
+              value={addMachineId}
+              onChange={setAddMachineId}
+              disabled={!addPatientId}
+              allowClear
+            />
+            <Select
+              placeholder="透析模式"
+              style={{ minWidth: 120 }}
+              value={addSessionDialysisMode}
+              options={HEMO_MODALITY_OPTIONS}
+              onChange={setAddSessionDialysisMode}
+              disabled={!addPatientId}
+            />
+            <Input.TextArea
+              rows={1}
+              placeholder="本条备注（可选）"
+              style={{ minWidth: 200, maxWidth: 280 }}
+              value={addScheduleRemark}
+              onChange={(e) => setAddScheduleRemark(e.target.value)}
+            />
+            <Button
+              type="primary"
+              onClick={handleAddSlot}
+              disabled={!addPatientId || !addMachineId}
+            >
+              添加到本班次
+            </Button>
+          </Space>
+        </Card>
+      </Modal>
+
+      <Modal
+        title={slotHemoEditing ? `${slotHemoEditing.name} · 透析模式与备注` : '透析模式与备注'}
+        open={slotHemoModalOpen}
+        onCancel={() => {
+          setSlotHemoModalOpen(false);
+          setSlotHemoEditing(null);
+          setSlotHemoScheduleDate(null);
+        }}
+        width={440}
+        destroyOnClose
+        footer={
+          canSchedule ? (
+            <Space>
+              <Button onClick={appendHeparinToSlotHemo}>无肝素</Button>
+              <Button type="primary" onClick={handleSaveSlotHemo}>
+                保存
+              </Button>
+            </Space>
+          ) : (
+            <Button onClick={() => setSlotHemoModalOpen(false)}>关闭</Button>
+          )
+        }
+      >
+        <p style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>
+          透析模式（HD / HDF / HD+HP）与档案中的「腹透／血透」类别是不同概念；默认 HD、备注空。保存后写入本条排班；<strong>仅在上机当日</strong>同步至患者当前透析处方（提前排班请在上机日在透析处方中确认）。
+        </p>
+        <Form form={slotHemoForm} layout="vertical" disabled={!canSchedule}>
+          <Form.Item name="modality" label="透析模式" rules={[{ required: true, message: '请选择透析模式' }]}>
+            <Select options={HEMO_MODALITY_OPTIONS} placeholder="默认 HD" />
+          </Form.Item>
+          <Form.Item name="remark" label="备注">
+            <Input.TextArea rows={3} placeholder="如无肝素、临时说明等（可空）" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="本周患者调班"
+        open={weekPatientAdjustOpen}
+        onCancel={() => setWeekPatientAdjustOpen(false)}
+        footer={null}
+        width={920}
+        destroyOnClose
+      >
+        <p style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>
+          用于临时换班、改机位或增删单次排班。在下方周历对应「日期 × 班次」中点击「患者排班」进行详细操作；亦可从本表直接跳转。
+        </p>
+        <Table
+          size="small"
+          rowKey={(r) => r.key}
+          pagination={false}
+          scroll={{ y: 420 }}
+          dataSource={weekPatientOverviewRows}
+          locale={{ emptyText: '本周暂无患者排班，可先「按档案生成本周」或直接在格子里添加。' }}
+          columns={[
+            {
+              title: '日期',
+              key: 'd',
+              width: 120,
+              render: (_, r) => (
+                <span>
+                  {r.weekdayLabel} {r.date.slice(5)}
+                </span>
+              ),
+            },
+            { title: '班次', dataIndex: 'shiftShort', key: 'shiftShort', width: 56 },
+            {
+              title: '患者',
+              key: 'name',
+              width: 120,
+              render: (_, r) => (
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openSlotHemoModal(r.slot, r.date)}>
+                  {r.slot.name}
+                </Button>
+              ),
+            },
+            {
+              title: '档案',
+              key: 'rc',
+              width: 56,
+              render: (_, r) => patientRenalCategoryLabel(r.slot.patientRenalCategory),
+            },
+            {
+              title: '透析模式',
+              key: 'mode',
+              width: 80,
+              render: (_, r) => scheduleDialysisModeLabel(r.slot.dialysisMode),
+            },
+            {
+              title: '机位',
+              key: 'm',
+              width: 72,
+              render: (_, r) => r.slot.machineNo ?? '—',
+            },
+            {
+              title: '备注',
+              key: 'rm',
+              ellipsis: true,
+              render: (_, r) => r.slot.scheduleRemark ?? '—',
+            },
+            {
+              title: '操作',
+              key: 'go',
+              width: 88,
+              fixed: 'right' as const,
+              render: (_, r) => (
+                <Button
+                  type="link"
+                  size="small"
+                  disabled={!canSchedule}
+                  onClick={() => {
+                    setWeekPatientAdjustOpen(false);
+                    openCellModal(r.date, r.shiftKey);
+                  }}
+                >
+                  去调整
+                </Button>
+              ),
+            },
+          ]}
+        />
+      </Modal>
 
       {/* 调整排班弹窗 */}
       <Modal

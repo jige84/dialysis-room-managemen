@@ -3,7 +3,7 @@
  * 主要作用：提供血液透析室管理系统的统一壳子与菜单路由切换。
  * 主要功能：折叠侧栏；用户信息与退出；按路由显示页面标题；消息/预警入口（依实现）。
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Badge, Dropdown, Space, Tooltip } from 'antd';
 import { LogoutOutlined, SettingOutlined, BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
@@ -13,59 +13,10 @@ import alertsApi from '../../api/alerts';
 import { message } from 'antd';
 import dayjs from 'dayjs';
 import { getPageTitle } from '../../utils/pageTitle';
-
-const ROLE_LABELS: Record<string, string> = {
-  admin: '超级管理员',
-  head_nurse: '护士长',
-  nurse: '责任护士',
-  doctor: '主治医生',
-  quality: '质控人员',
-};
-
-type NavItem = { key: string; icon: string; label: string; badge?: number };
-type NavSection = { title: string; items: NavItem[] };
-
-const NAV_SECTIONS: NavSection[] = [
-  {
-    title: '工作台',
-    items: [
-      { key: '/dashboard', icon: '📊', label: '今日概览' },
-      { key: '/alerts',    icon: '🔔', label: '预警中心' },
-    ],
-  },
-  {
-    title: '患者管理',
-    items: [
-      { key: '/patients',       icon: '👥', label: '患者档案' },
-      { key: '/dialysis/entry', icon: '💉', label: '透析记录录入' },
-      { key: '/prescription',   icon: '💊', label: '透析处方管理' },
-      { key: '/orders',         icon: '📋', label: '长期医嘱单' },
-      { key: '/labs',           icon: '🧪', label: '检验结果管理' },
-      { key: '/vascular',       icon: '🫀', label: '血管通路管理' },
-      { key: '/infection',      icon: '🦠', label: '传染病管理' },
-    ],
-  },
-  {
-    title: '专项管理',
-    items: [
-      { key: '/schedule', icon: '📅', label: '排班管理' },
-    ],
-  },
-  {
-    title: '质量管理',
-    items: [
-      { key: '/reports', icon: '📈', label: '质控上报报表' },
-      { key: '/cqi',     icon: '🔄', label: 'CQI持续改进' },
-    ],
-  },
-  {
-    title: '系统',
-    items: [
-      { key: '/devices',      icon: '⚙️', label: '设备耗材' },
-      { key: '/admin/users',  icon: '👤', label: '用户管理' },
-    ],
-  },
-];
+import { ROLE_LABELS } from '../../constants/roleLabels';
+import { usePermission } from '../../utils/permission';
+import { SIDEBAR_NAV_SECTIONS } from '../../constants/sidebarModules';
+import type { SidebarMenuKey } from '../../constants/sidebarModules';
 
 const SIDER_WIDTH = 240;
 const SIDER_COLLAPSED_WIDTH = 64;
@@ -76,6 +27,49 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuthStore();
+  const menuPermissions = useAuthStore(s => s.user?.menu_permissions);
+  const { canManageUsers, canManageMedicalSites } = usePermission();
+
+  /** 用于检测「从非 AI 路由进入 /ai/*」，便于管理员改权限后刷新页面即可拉取最新 menu_permissions */
+  const prevPathForAiRef = useRef<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authApi.me();
+        if (res.data.code !== 200 || !res.data.data) return;
+        const u = res.data.data;
+        if (!cancelled) useAuthStore.getState().updateUser(u);
+      } catch {
+        /* 静默失败，沿用本地缓存 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const prev = prevPathForAiRef.current;
+    prevPathForAiRef.current = location.pathname;
+    if (!location.pathname.startsWith('/ai')) return;
+    if (prev.startsWith('/ai')) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authApi.me();
+        if (res.data.code !== 200 || !res.data.data) return;
+        if (!cancelled) useAuthStore.getState().updateUser(res.data.data);
+      } catch {
+        /* 静默失败 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
     const fetchAlertCount = async () => {
@@ -109,6 +103,8 @@ export default function AppLayout() {
 
   const isActive = (key: string) => {
     if (key === '/dashboard') return location.pathname === '/dashboard' || location.pathname === '/';
+    if (key === '/dialysis/today') return location.pathname.startsWith('/dialysis/today');
+    if (key === '/dialysis/entry') return location.pathname.startsWith('/dialysis/entry');
     return location.pathname.startsWith(key);
   };
 
@@ -116,12 +112,36 @@ export default function AppLayout() {
 
   const userInitial = user?.real_name?.charAt(0) ?? '?';
 
-  const navSectionsWithBadge = NAV_SECTIONS.map(section => ({
-    ...section,
-    items: section.items.map(item =>
-      item.key === '/alerts' ? { ...item, badge: pendingAlerts } : item
-    ),
-  }));
+  const navSectionsWithBadge = useMemo(() => {
+    const restrictMenu = menuPermissions !== null && menuPermissions !== undefined;
+    return SIDEBAR_NAV_SECTIONS.map(section => ({
+      ...section,
+      items: section.items
+        .filter(item => {
+          if (item.key === '/admin/users' && !canManageUsers) return false;
+          if ('adminOnly' in item && item.adminOnly && !canManageMedicalSites) return false;
+          if (restrictMenu) {
+            const k = item.key as SidebarMenuKey;
+            if (k === '/dialysis/today') {
+              const ok =
+                menuPermissions.includes('/dialysis/today') || menuPermissions.includes('/dialysis/entry');
+              if (!ok) return false;
+            } else if (!menuPermissions.includes(k)) {
+              return false;
+            }
+          }
+          return true;
+        })
+        .map(item =>
+          item.key === '/alerts' ? { ...item, badge: pendingAlerts } : item
+        ),
+    }));
+  }, [canManageUsers, canManageMedicalSites, pendingAlerts, menuPermissions]);
+
+  const canSeeAlertsNav = useMemo(() => {
+    if (menuPermissions === null || menuPermissions === undefined) return true;
+    return menuPermissions.includes('/alerts');
+  }, [menuPermissions]);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -302,29 +322,31 @@ export default function AppLayout() {
               {dayjs().format('YYYY年MM月DD日 dddd')}
             </div>
 
-            <Badge
-              count={pendingAlerts}
-              overflowCount={99}
-              offset={[-2, 2]}
-              classNames={{ indicator: pendingAlerts > 0 ? 'hd-bell-badge' : '' }}
-            >
-              <button
-                type="button"
-                className="hd-focus-ring"
-                aria-label={pendingAlerts > 0 ? `预警中心，${pendingAlerts} 条待处理` : '预警中心'}
-                style={{
-                  width: 36, height: 36, borderRadius: '50%',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', fontSize: 18,
-                  background: '#F0F9FF',
-                  border: '1.5px solid #BAE6FD',
-                  transition: 'background 0.15s',
-                }}
-                onClick={() => navigate('/alerts')}
+            {canSeeAlertsNav ? (
+              <Badge
+                count={pendingAlerts}
+                overflowCount={99}
+                offset={[-2, 2]}
+                classNames={{ indicator: pendingAlerts > 0 ? 'hd-bell-badge' : '' }}
               >
-                <BellOutlined style={{ color: pendingAlerts > 0 ? '#F43F5E' : '#0369A1' }} />
-              </button>
-            </Badge>
+                <button
+                  type="button"
+                  className="hd-focus-ring"
+                  aria-label={pendingAlerts > 0 ? `预警中心，${pendingAlerts} 条待处理` : '预警中心'}
+                  style={{
+                    width: 36, height: 36, borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', fontSize: 18,
+                    background: '#F0F9FF',
+                    border: '1.5px solid #BAE6FD',
+                    transition: 'background 0.15s',
+                  }}
+                  onClick={() => navigate('/alerts')}
+                >
+                  <BellOutlined style={{ color: pendingAlerts > 0 ? '#F43F5E' : '#0369A1' }} />
+                </button>
+              </Badge>
+            ) : null}
 
             <div style={{ width: 1, height: 20, background: '#DBEAFE' }} />
 

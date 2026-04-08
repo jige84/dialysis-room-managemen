@@ -15,6 +15,8 @@ export interface UserInfo {
   username: string;
   real_name: string;
   role: 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'quality' | 'qc';
+  /** 侧栏可访问模块路径 key；null/undefined 表示不限制 */
+  menu_permissions?: string[] | null;
 }
 
 export interface LoginResult {

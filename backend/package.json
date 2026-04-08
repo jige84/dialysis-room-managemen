@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/utils/runMigrations.js",
-    "seed": "node src/utils/runSeeds.js"
+    "seed": "node src/utils/runSeeds.js",
+    "test:schedule": "node scripts/test-dialysis-schedule-expansion.js && node scripts/test-schedule-db-check.js",
+    "test:profile-sync": "node scripts/test-patient-prescription-profile-sync.js"
   },
   "keywords": [
     "hemodialysis",
@@ -26,7 +28,9 @@
     "joi": "^17.9.2",
     "jsonwebtoken": "^9.0.0",
     "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.2",
+    "pdfkit": "^0.15.0",
     "pg": "^8.11.0",
     "redis": "^4.6.7",
     "uuid": "^9.0.0"

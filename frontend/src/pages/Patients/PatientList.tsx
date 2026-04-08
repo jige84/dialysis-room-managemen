@@ -29,6 +29,7 @@ type PatientRow = {
   dialysisAge: string;
   dryWeight?: number | null;
   status: string;
+  responsibleNurseName: string;
 };
 
 function toPatientRow(p: Patient): PatientRow {
@@ -48,6 +49,7 @@ function toPatientRow(p: Patient): PatientRow {
     dialysisAge: p.dialysis_age || '—',
     dryWeight: null,
     status: p.status,
+    responsibleNurseName: p.responsible_nurse_name?.trim() || '—',
   };
 }
 
@@ -153,6 +155,16 @@ export default function PatientListPage() {
       title: '透析龄',
       dataIndex: 'dialysisAge',
       render: (v: string) => <span className="num">{v}</span>,
+    },
+    {
+      title: '责任护士',
+      key: 'responsibleNurse',
+      width: 120,
+      render: (_, r) => (
+        <span style={{ color: r.responsibleNurseName === '—' ? '#94A3B8' : '#0D1B3E' }}>
+          {r.responsibleNurseName}
+        </span>
+      ),
     },
     {
       title: '干体重',

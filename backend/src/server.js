@@ -32,6 +32,9 @@ const scheduleRouter      = require('./routes/schedule');
 const devicesRouter       = require('./routes/devices');
 const cqiRouter           = require('./routes/cqi');
 const aiRouter            = require('./routes/ai');
+const knowledgeRouter     = require('./routes/knowledge');
+const medicalSitesRouter  = require('./routes/medicalSites');
+const guidelinesRouter    = require('./routes/guidelines');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,7 +46,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc:  ["'self'"],
       styleSrc:   ["'self'", "'unsafe-inline'"], // Ant Design 需要内联样式
-      imgSrc:     ["'self'", 'data:'],
+      imgSrc:     ["'self'", 'data:', 'blob:'],
       connectSrc: ["'self'"],
       fontSrc:    ["'self'", 'data:'],
     },
@@ -122,6 +125,9 @@ app.use('/api/schedule',     scheduleRouter);
 app.use('/api/devices',      devicesRouter);
 app.use('/api/cqi',          cqiRouter);
 app.use('/api/ai',           aiRouter);
+app.use('/api/knowledge',    knowledgeRouter);
+app.use('/api/medical-sites', medicalSitesRouter);
+app.use('/api/guidelines',   guidelinesRouter);
 
 // ── SPA回退（生产模式）───────────────────────────────────────
 if (process.env.NODE_ENV === 'production') {

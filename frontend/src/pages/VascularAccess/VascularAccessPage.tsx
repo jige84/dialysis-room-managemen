@@ -54,7 +54,7 @@ export default function VascularAccessPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const patientIdFromQuery = searchParams.get('patient_id');
-  const { canUseAI, canWrite } = usePermission();
+  const { canUseAiAssistantFeature, canWrite } = usePermission();
 
   // ---------- 患者列表 ----------
   const [patientOptions, setPatientOptions] = useState<{ value: string; label: string; access_type?: string }[]>([]);
@@ -321,7 +321,7 @@ export default function VascularAccessPage() {
   // ---------------------------------------------------------------------------
 
   const handleCvcAiExplain = () => {
-    if (!canUseAI || !latestRisk) return;
+    if (!canUseAiAssistantFeature('ai_feat:nlp') || !latestRisk) return;
     setAiModalOpen(true);
     setAiLoading(true);
     void aiApi
@@ -604,7 +604,7 @@ export default function VascularAccessPage() {
                         style={{ border: '1px solid #DBEAFE' }}
                         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
                         extra={
-                          canUseAI
+                          canUseAiAssistantFeature('ai_feat:nlp')
                             ? <Button size="small" onClick={handleCvcAiExplain}>AI 解读</Button>
                             : null
                         }

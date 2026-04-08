@@ -16,27 +16,26 @@ class ReportGenerator {
     const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
     const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
 
-    // ── 指标一：护患比 ─────────────────────────────────────
-    const { rows: nurseData } = await pool.query(
-      `SELECT
-         COUNT(*) as total_patient_sessions,
-         COUNT(DISTINCT DATE(session_date)) as work_days,
-         COUNT(DISTINCT nurse_id) as total_nurses
-       FROM dialysis_records
-       WHERE session_date BETWEEN $1 AND $2`,
+    // ── 指标一：护患比（按日汇总：月透析总次数 ÷ 月护士人次累加，与质控上报口径一致）──
+    const { rows: nurseAgg } = await pool.query(
+      `WITH daily_stats AS (
+         SELECT
+           session_date::date AS sd,
+           COUNT(*)::bigint AS daily_sessions,
+           COUNT(DISTINCT nurse_id)::bigint AS daily_nurse_count
+         FROM dialysis_records
+         WHERE session_date BETWEEN $1 AND $2
+         GROUP BY session_date
+       )
+       SELECT
+         COALESCE(SUM(daily_sessions), 0)::bigint AS total_patient_sessions,
+         COALESCE(SUM(daily_nurse_count), 0)::bigint AS total_nurse_sessions
+       FROM daily_stats`,
       [startDate, endDate]
     );
 
-    // 护士总工作次数（每人每日算一次，不重复计）
-    const { rows: nurseSessionData } = await pool.query(
-      `SELECT COUNT(DISTINCT (session_date, nurse_id)) as total_nurse_sessions
-       FROM dialysis_records
-       WHERE session_date BETWEEN $1 AND $2`,
-      [startDate, endDate]
-    );
-
-    const totalPatientSessions = parseInt(nurseData[0].total_patient_sessions);
-    const totalNurseSessions = parseInt(nurseSessionData[0].total_nurse_sessions);
+    const totalPatientSessions = parseInt(nurseAgg[0].total_patient_sessions, 10);
+    const totalNurseSessions = parseInt(nurseAgg[0].total_nurse_sessions, 10);
     const nursePatientRatio = totalNurseSessions > 0
       ? Math.round((totalPatientSessions / totalNurseSessions) * 100) / 100
       : 0;
@@ -77,11 +76,13 @@ class ReportGenerator {
     );
 
     const { rows: injuryData } = await pool.query(
-      `SELECT COUNT(*) as puncture_injury_count
-       FROM complications
-       WHERE occurred_at BETWEEN $1 AND $2
-         AND comp_type = 'avf_injury' AND is_avf_injury_bleed = true`,
-      [startDate + ' 00:00:00', endDate + ' 23:59:59']
+      `SELECT COUNT(*)::int AS puncture_injury_count
+       FROM complications c
+       INNER JOIN dialysis_records d ON d.id = c.dialysis_record_id
+       WHERE d.session_date BETWEEN $1 AND $2
+         AND d.is_avf_session = true
+         AND c.comp_type = 'avf_injury'`,
+      [startDate, endDate]
     );
     const avfSessions = parseInt(avfData[0].avf_sessions);
     const punctureInjuryCount = parseInt(injuryData[0].puncture_injury_count || 0);

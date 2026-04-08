@@ -23,12 +23,32 @@ export interface Patient {
   access_location?: string;
   ckd_stage?: number | null;
   dialysis_mode?: string;
+  /** 档案维护的抗凝默认值（保存档案时同步至当前有效处方） */
+  profile_anticoagulant?: 'heparin' | 'lmwh' | 'citrate' | 'none';
+  profile_heparin_prime_dose?: number | null;
+  profile_heparin_maintain?: number | null;
+  /** 档案干体重，与当前处方双向同步 */
+  profile_dry_weight?: number | null;
+  profile_dry_weight_date?: string | null;
+  profile_dry_weight_reason?: string | null;
   family_contact?: { name?: string; phone?: string } | null;
   address?: string | null;
   consent_dialysis?: boolean;
   consent_dialysis_date?: string | null;
   present_illness?: string | null;
   past_history?: string | null;
+  /** 透析排班预设代码，如 tiw_mwf_morning、biw5_alt、qod、other */
+  dialysis_schedule_code?: string | null;
+  /** 透析时间补充/调整说明 */
+  dialysis_schedule_notes?: string | null;
+  /** 隔日透析(qod)排班锚点日期 */
+  dialysis_schedule_anchor_date?: string | null;
+  /** 知情同意书图片相对路径列表（详情返回；列表不返回） */
+  consent_dialysis_image_paths?: string[] | null;
+  /** 责任护士用户 ID */
+  responsible_nurse_id?: string | null;
+  /** 责任护士姓名（列表/详情展示） */
+  responsible_nurse_name?: string | null;
 }
 
 /** 传染病筛查摘要条目 */
@@ -66,6 +86,7 @@ export interface PatientCurrentPrescription {
   dialyzer_model: string | null;
   dry_weight: number | null;
   dry_weight_date: string | null;
+  dry_weight_reason?: string | null;
   anticoagulant: string | null;
   heparin_prime_dose: number | null;
   heparin_maintain: number | null;
@@ -87,6 +108,11 @@ export interface PatientDetailRecord extends Patient, PatientCurrentPrescription
   consent_dialysis_date?: string | null;
   consent_cvc?: boolean;
   consent_cvc_date?: string | null;
+  dialysis_schedule_code?: string | null;
+  dialysis_schedule_notes?: string | null;
+  consent_dialysis_image_paths?: string[] | null;
+  responsible_nurse_id?: string | null;
+  responsible_nurse_name?: string | null;
   /** 血管通路列表（当前有效） */
   vascular_accesses?: VascularAccessSummary[];
   /** 最近3条透析记录摘要 */
@@ -151,11 +177,22 @@ export interface CreatePatientPayload {
   ckd_stage?: number;
   comorbidities?: string[];
   dialysis_mode?: string;
+  profile_anticoagulant?: 'heparin' | 'lmwh' | 'citrate' | 'none';
+  profile_heparin_prime_dose?: number | null;
+  profile_heparin_maintain?: number | null;
+  profile_dry_weight?: number;
+  profile_dry_weight_date?: string;
+  profile_dry_weight_reason?: string | null;
   isolation_zone?: 'normal' | 'hbv' | 'hcv' | 'observation' | 'last_shift';
   consent_dialysis?: boolean;
   consent_dialysis_date?: string | null;
   consent_cvc?: boolean;
   consent_cvc_date?: string | null;
+  dialysis_schedule_code?: string | null;
+  dialysis_schedule_notes?: string | null;
+  dialysis_schedule_anchor_date?: string | null;
+  /** 责任护士（须为本科室已启用的护士/护士长账号，新建必填） */
+  responsible_nurse_id: string;
 }
 
 export type UpdatePatientPayload = Partial<CreatePatientPayload>;
@@ -181,6 +218,19 @@ export const patientsApi = {
 
   updateIsolation: (id: string, isolation_zone: string) =>
     request.patch<ApiResponse<Patient>>(`/patients/${id}/isolation`, { isolation_zone }),
+
+  /** POST multipart：上传透析知情同意书图片 1～15 张（管理员/医生），覆盖原有存档 */
+  uploadConsentDialysisImage: (patientId: string, files: Blob[]) => {
+    const fd = new FormData();
+    files.forEach(f => {
+      fd.append('files', f);
+    });
+    return request.post<ApiResponse<{ consent_dialysis_image_paths: string[] }>>(
+      `/patients/${patientId}/consent-dialysis-image`,
+      fd,
+      { timeout: 120000 },
+    );
+  },
 
   searchByKeyword: (keyword: string) =>
     request.get<ApiResponse<PagedData<Patient>>>('/patients', {

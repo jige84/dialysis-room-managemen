@@ -2,13 +2,31 @@
  * 长期医嘱单列表与管理页
  * 以患者为维度展示有效/已停止医嘱，支持开立/停止操作，对接 ordersApi。
  */
-import { useState, useEffect, useCallback } from 'react';
-import { Card, Select, Button, Table, Tag, Modal, Form, Input, Space, message, Divider, List, Typography, Spin } from 'antd';
-import { PlusOutlined, StopOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Card, Select, Button, Table, Tag, Modal, Form, Input, Space, message, Divider, List, Typography, Spin, Alert,
+} from 'antd';
+import { PlusOutlined, StopOutlined, ReloadOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import PageShell from '../../components/PageShell/PageShell';
 import { patientsApi, type Patient } from '../../api/patients';
-import ordersApi, { type LongTermOrder, FREQ_LABELS, ORDER_TYPE_LABELS } from '../../api/orders';
+import ordersApi, {
+  type LongTermOrder,
+  type OrderGuidanceSuggestion,
+  FREQ_LABELS,
+  ORDER_TYPE_LABELS,
+  EXEC_TIMING_LABELS,
+} from '../../api/orders';
 import { usePermission } from '../../utils/permission';
+import {
+  describeFrequencyDetailForOrder,
+  frequencyDetailPlaceholder,
+} from '../../utils/longTermOrderScheduleText';
+
+interface ComboChildDraft {
+  drug_name: string;
+  doseNumber?: string | number;
+  doseUnit?: string;
+}
 
 interface NewOrderDraft {
   key: string;
@@ -16,7 +34,66 @@ interface NewOrderDraft {
   dose: string;
   route: string;
   freq: string;
+  order_type: LongTermOrder['order_type'];
+  frequency_detail?: string;
+  /** 透析用药：与透析录入「今日医嘱执行确认」展示一致 */
+  execute_timing?: LongTermOrder['execute_timing'];
   notes?: string;
+  /** 组合子药品（与主药同用法/频次） */
+  combo_children?: ComboChildDraft[];
+}
+
+const EXEC_TIMING_OPTIONS = [
+  { value: 'pre_dialysis', label: EXEC_TIMING_LABELS.pre_dialysis },
+  { value: 'during_dialysis', label: EXEC_TIMING_LABELS.during_dialysis },
+  { value: 'post_dialysis', label: EXEC_TIMING_LABELS.post_dialysis },
+  { value: 'anytime', label: EXEC_TIMING_LABELS.anytime },
+];
+
+function sortComboOrders<T extends { id: string; parent_order_id?: string | null; created_at?: string }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort((a, b) => {
+    const ga = String(a.parent_order_id || a.id);
+    const gb = String(b.parent_order_id || b.id);
+    const c = ga.localeCompare(gb);
+    if (c !== 0) return c;
+    const ap = !!a.parent_order_id;
+    const bp = !!b.parent_order_id;
+    if (ap !== bp) return ap ? 1 : -1;
+    return String(a.created_at ?? '').localeCompare(String(b.created_at ?? ''));
+  });
+}
+
+function normalizeComboChildren(raw: unknown): ComboChildDraft[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ComboChildDraft[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as { drug_name?: string; doseNumber?: string | number; doseUnit?: string };
+    const drug_name = String(rec.drug_name ?? '').trim();
+    if (!drug_name) continue;
+    out.push({
+      drug_name,
+      doseNumber: rec.doseNumber,
+      doseUnit: rec.doseUnit,
+    });
+  }
+  return out;
+}
+
+function validateComboChildrenComplete(children: ComboChildDraft[]): boolean {
+  for (const c of children) {
+    if (c.doseNumber === undefined || c.doseNumber === '' || c.doseNumber === null) {
+      message.warning(`子药品「${c.drug_name}」请填写剂量数值`);
+      return false;
+    }
+    if (!String(c.doseUnit ?? '').trim()) {
+      message.warning(`子药品「${c.drug_name}」请选择单位`);
+      return false;
+    }
+  }
+  return true;
 }
 
 const FREQ_OPTIONS = [
@@ -40,6 +117,31 @@ const ORDER_TYPE_OPTIONS = [
   { value: 'observation', label: '观察' },
 ];
 
+/** 与下拉「其他」选项对应的 value，提交时替换为 route_other 文本 */
+const ROUTE_OTHER_SENTINEL = '__route_other__';
+
+const LONG_TERM_ROUTE_OPTIONS = [
+  { value: '口服', label: '口服' },
+  { value: '口服 随餐', label: '口服 随餐' },
+  { value: '口服 睡前', label: '口服 睡前' },
+  { value: '皮下注射', label: '皮下注射' },
+  { value: '肌内注射', label: '肌内注射' },
+  { value: '静脉注射', label: '静脉注射' },
+  { value: '静脉滴注', label: '静脉滴注' },
+  { value: '透析中静脉泵入', label: '透析中静脉泵入' },
+  { value: '透析前静脉推注', label: '透析前静脉推注' },
+  { value: '下机前注射', label: '下机前注射' },
+  { value: ROUTE_OTHER_SENTINEL, label: '其他（手动输入）' },
+];
+
+function normalizeLongTermRoute(route: unknown, routeOther: unknown): string {
+  if (route === ROUTE_OTHER_SENTINEL) {
+    const t = typeof routeOther === 'string' ? routeOther.trim() : '';
+    return t;
+  }
+  return typeof route === 'string' ? route.trim() : '';
+}
+
 export default function LongTermOrderListPage() {
   const { canPrescribe } = usePermission();
 
@@ -60,6 +162,17 @@ export default function LongTermOrderListPage() {
   const [stopForm] = Form.useForm();
   const [draftOrders, setDraftOrders] = useState<NewOrderDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  const newRouteWatch = Form.useWatch('route', newForm);
+  const orderTypeWatch = Form.useWatch('order_type', newForm) ?? 'dialysis_drug';
+  const frequencyWatch = Form.useWatch('frequency', newForm) as string | undefined;
+
+  const freqSelectOptions = useMemo(() => {
+    if (orderTypeWatch === 'interval_drug') {
+      return FREQ_OPTIONS.filter((o) => o.value !== 'every_session');
+    }
+    return FREQ_OPTIONS;
+  }, [orderTypeWatch]);
 
   // 加载患者列表
   useEffect(() => {
@@ -101,17 +214,60 @@ export default function LongTermOrderListPage() {
 
   const patientInfo = patientOptions.find(p => p.value === selectedPatient);
 
+  const parentIdsWithChildren = useMemo(() => {
+    const s = new Set<string>();
+    activeOrders.forEach((o) => {
+      if (o.parent_order_id) s.add(o.parent_order_id);
+    });
+    return s;
+  }, [activeOrders]);
+
   // 表格列定义
   const activeColumns = [
     { title: '类型', dataIndex: 'order_type', width: 80,
       render: (v: string) => <Tag>{ORDER_TYPE_LABELS[v] || v}</Tag> },
-    { title: '药品/项目', dataIndex: 'drug_name',
-      render: (v: string) => <span style={{ fontWeight: 600, color: '#0D1B3E' }}>{v}</span> },
+    {
+      title: '药品/项目',
+      dataIndex: 'drug_name',
+      render: (_: string, r: LongTermOrder) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+          {r.parent_order_id ? (
+            <span style={{ color: '#94A3B8', fontFamily: 'monospace' }}>↳</span>
+          ) : null}
+          <span style={{ fontWeight: 600, color: '#0D1B3E' }}>{r.drug_name}</span>
+          {!r.parent_order_id && parentIdsWithChildren.has(r.id) ? (
+            <Tag color="cyan" style={{ fontSize: 11, margin: 0 }}>组合</Tag>
+          ) : null}
+        </span>
+      ),
+    },
     { title: '剂量', key: 'dose',
       render: (_: unknown, r: LongTermOrder) => <span className="num">{r.dose ?? ''} {r.dose_unit ?? ''}</span> },
     { title: '用法', dataIndex: 'route' },
     { title: '频次', dataIndex: 'frequency',
       render: (v: string) => <Tag color="blue" style={{ fontSize: 11 }}>{FREQ_LABELS[v] || v}</Tag> },
+    {
+      title: '具体执行',
+      key: 'schedule',
+      width: 220,
+      render: (_: unknown, r: LongTermOrder) => {
+        const schedule = describeFrequencyDetailForOrder(r.frequency, r.frequency_detail);
+        if (r.order_type === 'dialysis_drug' && r.execute_timing) {
+          return (
+            <span style={{ fontSize: 12, color: '#475569', lineHeight: 1.45 }}>
+              <span style={{ color: '#0D1B3E', fontWeight: 600 }}>
+                {EXEC_TIMING_LABELS[r.execute_timing] ?? r.execute_timing}
+              </span>
+              <span style={{ margin: '0 4px', color: '#94A3B8' }}>·</span>
+              {schedule}
+            </span>
+          );
+        }
+        return (
+          <span style={{ fontSize: 12, color: '#475569', lineHeight: 1.45 }}>{schedule}</span>
+        );
+      },
+    },
     { title: '开具医生', dataIndex: 'ordered_by_name' },
     { title: '开具日期', dataIndex: 'valid_from',
       render: (v: string) => <span className="num text-sm">{v}</span> },
@@ -132,13 +288,42 @@ export default function LongTermOrderListPage() {
   ];
 
   const stoppedColumns = [
-    { title: '药品/项目', dataIndex: 'drug_name',
-      render: (v: string) => <span style={{ fontWeight: 600, color: '#9CA3AF', textDecoration: 'line-through' }}>{v}</span> },
+    {
+      title: '药品/项目',
+      dataIndex: 'drug_name',
+      render: (_: string, r: LongTermOrder) => (
+        <span style={{ fontWeight: 600, color: '#9CA3AF', textDecoration: 'line-through' }}>
+          {r.parent_order_id ? '↳ ' : ''}{r.drug_name}
+        </span>
+      ),
+    },
     { title: '剂量', key: 'dose',
       render: (_: unknown, r: LongTermOrder) => <span className="num text-muted">{r.dose ?? ''} {r.dose_unit ?? ''}</span> },
     { title: '用法', dataIndex: 'route', render: (v: string) => <span className="text-muted">{v}</span> },
     { title: '频次', dataIndex: 'frequency',
       render: (v: string) => <Tag color="default" style={{ fontSize: 11 }}>{FREQ_LABELS[v] || v}</Tag> },
+    {
+      title: '具体执行',
+      key: 'schedule',
+      width: 200,
+      render: (_: unknown, r: LongTermOrder) => {
+        const schedule = describeFrequencyDetailForOrder(r.frequency, r.frequency_detail);
+        if (r.order_type === 'dialysis_drug' && r.execute_timing) {
+          return (
+            <span style={{ fontSize: 12, color: '#64748B', lineHeight: 1.45 }}>
+              <span style={{ color: '#475569', fontWeight: 600 }}>
+                {EXEC_TIMING_LABELS[r.execute_timing] ?? r.execute_timing}
+              </span>
+              <span style={{ margin: '0 4px', color: '#CBD5E1' }}>·</span>
+              {schedule}
+            </span>
+          );
+        }
+        return (
+          <span style={{ fontSize: 12, color: '#64748B', lineHeight: 1.45 }}>{schedule}</span>
+        );
+      },
+    },
     { title: '停止日期', dataIndex: 'stopped_at',
       render: (v: string) => <span className="num text-sm text-muted">{v ? v.slice(0, 10) : ''}</span> },
     { title: '停止原因', dataIndex: 'stop_reason',
@@ -147,16 +332,22 @@ export default function LongTermOrderListPage() {
 
   // 添加到草稿
   const handleNewOrder = () => {
-    newForm.validateFields().then(values => {
+    newForm.validateFields().then((values) => {
+      const combo_children = normalizeComboChildren(values.combo_children);
+      if (!validateComboChildrenComplete(combo_children)) return;
       const draft: NewOrderDraft = {
         key: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         drug: values.drug_name,
         dose: values.doseNumber && values.doseUnit ? `${values.doseNumber} ${values.doseUnit}` : (values.dose || ''),
-        route: values.route,
+        route: normalizeLongTermRoute(values.route, values.route_other),
         freq: values.frequency,
+        order_type: values.order_type,
+        frequency_detail: typeof values.frequency_detail === 'string' ? values.frequency_detail.trim() : undefined,
+        execute_timing: values.order_type === 'dialysis_drug' ? (values.execute_timing as LongTermOrder['execute_timing']) : undefined,
         notes: values.notes,
+        combo_children: combo_children.length > 0 ? combo_children : undefined,
       };
-      setDraftOrders(prev => [...prev, draft]);
+      setDraftOrders((prev) => [...prev, draft]);
       newForm.resetFields();
       message.success('已添加到待开具列表，可继续录入');
     });
@@ -171,13 +362,19 @@ export default function LongTermOrderListPage() {
     if (hasForm) {
       try {
         const values = await newForm.validateFields();
+        const combo_children = normalizeComboChildren(values.combo_children);
+        if (!validateComboChildrenComplete(combo_children)) return;
         finalOrders.push({
           key: `${Date.now()}`,
           drug: values.drug_name,
           dose: values.doseNumber && values.doseUnit ? `${values.doseNumber} ${values.doseUnit}` : '',
-          route: values.route,
+          route: normalizeLongTermRoute(values.route, values.route_other),
           freq: values.frequency,
+          order_type: values.order_type,
+          frequency_detail: typeof values.frequency_detail === 'string' ? values.frequency_detail.trim() : undefined,
+          execute_timing: values.order_type === 'dialysis_drug' ? (values.execute_timing as LongTermOrder['execute_timing']) : undefined,
           notes: values.notes,
+          combo_children: combo_children.length > 0 ? combo_children : undefined,
         });
       } catch { return; }
     }
@@ -189,23 +386,66 @@ export default function LongTermOrderListPage() {
 
     setSubmitting(true);
     try {
+      let lastGuidance: OrderGuidanceSuggestion[] = [];
       for (const draft of finalOrders) {
         const [doseVal, ...unitParts] = draft.dose.split(' ');
-        await ordersApi.create(selectedPatient, {
-          order_type: 'dialysis_drug',
+        const res = await ordersApi.create(selectedPatient, {
+          order_type: draft.order_type ?? 'dialysis_drug',
           drug_name: draft.drug,
           dose: doseVal,
           dose_unit: unitParts.join(' ') || undefined,
           route: draft.route,
           frequency: draft.freq as LongTermOrder['frequency'],
+          frequency_detail: draft.frequency_detail || undefined,
+          execute_timing:
+            draft.order_type === 'dialysis_drug'
+              ? (draft.execute_timing ?? 'during_dialysis')
+              : undefined,
           notes: draft.notes,
+          child_orders: (draft.combo_children ?? []).map((c) => ({
+            drug_name: c.drug_name,
+            dose: c.doseNumber != null && c.doseNumber !== '' ? String(c.doseNumber) : undefined,
+            dose_unit: c.doseUnit?.trim() || undefined,
+          })),
         });
+        const payload = res.data.data;
+        if (payload?.guidance_suggestions?.length) lastGuidance = payload.guidance_suggestions;
       }
       setShowNewModal(false);
       newForm.resetFields();
       setDraftOrders([]);
       message.success(`长期医嘱已批量开具，共 ${finalOrders.length} 条`);
       loadOrders(selectedPatient);
+      if (lastGuidance.length > 0) {
+        Modal.info({
+          title: '可选指导建议',
+          width: 600,
+          content: (
+            <div>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                以下为规则与指南生成的参考建议，可选用；不会自动写入医嘱备注。
+              </Typography.Paragraph>
+              <List
+                size="small"
+                dataSource={lastGuidance}
+                renderItem={(item) => (
+                  <List.Item>
+                    <div>
+                      <div style={{ fontWeight: 500 }}>{item.text}</div>
+                      {item.citation_excerpt ? (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          引用摘要：{item.citation_excerpt.slice(0, 200)}
+                          {item.citation_excerpt.length > 200 ? '…' : ''}
+                        </Typography.Text>
+                      ) : null}
+                    </div>
+                  </List.Item>
+                )}
+              />
+            </div>
+          ),
+        });
+      }
     } catch {
       message.error('医嘱开具失败，请重试');
     } finally {
@@ -280,7 +520,7 @@ export default function LongTermOrderListPage() {
         <Card style={{ marginBottom: 16, border: '1px solid #DBEAFE' }}
           styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
           title={<span style={{ fontWeight: 600 }}>✅ 有效医嘱 <span style={{ color: '#7B92BC', fontSize: 12, marginLeft: 8 }}>({activeOrders.length}条)</span></span>}>
-          <Table rowKey="id" dataSource={activeOrders} columns={activeColumns} size="small"
+          <Table rowKey="id" dataSource={sortComboOrders(activeOrders)} columns={activeColumns} size="small"
             pagination={false} locale={{ emptyText: '暂无有效医嘱' }} />
         </Card>
 
@@ -300,7 +540,7 @@ export default function LongTermOrderListPage() {
               </div>
             }>
             {showStopped && (
-              <Table rowKey="id" dataSource={stoppedOrders} columns={stoppedColumns} size="small"
+              <Table rowKey="id" dataSource={sortComboOrders(stoppedOrders)} columns={stoppedColumns} size="small"
                 pagination={false} />
             )}
           </Card>
@@ -320,10 +560,30 @@ export default function LongTermOrderListPage() {
         width={720}
       >
         <Divider style={{ margin: '12px 0', borderColor: '#DBEAFE' }} />
-        <Form form={newForm} layout="vertical" size="middle">
+        <Form
+          form={newForm}
+          layout="vertical"
+          size="middle"
+          initialValues={{
+            order_type: 'dialysis_drug',
+            frequency: 'every_session',
+            combo_children: [],
+            execute_timing: 'during_dialysis',
+          }}
+        >
           <div className="grid-2" style={{ gap: 16 }}>
-            <Form.Item label="医嘱类型" name="order_type" initialValue="dialysis_drug" rules={[{ required: true }]}>
-              <Select options={ORDER_TYPE_OPTIONS} />
+            <Form.Item label="医嘱类型" name="order_type" rules={[{ required: true }]}>
+              <Select
+                options={ORDER_TYPE_OPTIONS}
+                onChange={(v: string) => {
+                  if (v === 'interval_drug' && newForm.getFieldValue('frequency') === 'every_session') {
+                    newForm.setFieldsValue({ frequency: 'qd' });
+                  }
+                  if (v !== 'interval_drug') {
+                    newForm.setFieldValue('frequency_detail', undefined);
+                  }
+                }}
+              />
             </Form.Item>
             <Form.Item label="药品/项目名称" name="drug_name" rules={[{ required: true, message: '请输入药品名称' }]}>
               <Input placeholder="如：重组人促红素注射液" />
@@ -347,29 +607,174 @@ export default function LongTermOrderListPage() {
                 </Form.Item>
               </Input.Group>
             </Form.Item>
-            <Form.Item label="用法" name="route" rules={[{ required: true }]}>
-              <Select showSearch optionFilterProp="label" options={[
-                { value: '口服', label: '口服' },
-                { value: '口服 随餐', label: '口服 随餐' },
-                { value: '口服 睡前', label: '口服 睡前' },
-                { value: '皮下注射', label: '皮下注射' },
-                { value: '肌内注射', label: '肌内注射' },
-                { value: '静脉注射', label: '静脉注射' },
-                { value: '静脉滴注', label: '静脉滴注' },
-                { value: '透析中静脉泵入', label: '透析中静脉泵入' },
-                { value: '透析前静脉推注', label: '透析前静脉推注' },
-              ]} />
+            <Form.Item label="用法" name="route" rules={[{ required: true, message: '请选择用法' }]}>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                options={LONG_TERM_ROUTE_OPTIONS}
+                onChange={(v: string) => {
+                  if (v !== ROUTE_OTHER_SENTINEL) {
+                    newForm.setFieldValue('route_other', undefined);
+                  }
+                }}
+              />
             </Form.Item>
+            {newRouteWatch === ROUTE_OTHER_SENTINEL ? (
+              <Form.Item
+                label="具体用法（手动输入）"
+                name="route_other"
+                rules={[{ required: true, whitespace: true, message: '请输入具体用法' }]}
+              >
+                <Input placeholder="请输入具体给药途径或说明" allowClear />
+              </Form.Item>
+            ) : null}
           </div>
+          <Divider plain style={{ margin: '12px 0' }}>组合用药（可选）</Divider>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 10, fontSize: 12 }}>
+            子药品与主药共用<strong>用法</strong>及下方<strong>执行频次、开具说明</strong>（间期用药亦共用「具体执行」）。例：氯化钠注射液（主）+ 蔗糖铁注射液（子）。
+          </Typography.Paragraph>
+          <Form.List name="combo_children">
+            {(fields, { add, remove }) => (
+              <div style={{ marginBottom: 12 }}>
+                {fields.map((field, index) => (
+                  <div
+                    key={field.key}
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'flex-end',
+                      flexWrap: 'wrap',
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Form.Item
+                      label={index === 0 ? '子药品名称' : undefined}
+                      name={[field.name, 'drug_name']}
+                      style={{ flex: '1 1 200px', marginBottom: 0 }}
+                    >
+                      <Input placeholder="如：蔗糖铁注射液" allowClear />
+                    </Form.Item>
+                    <Form.Item
+                      label={index === 0 ? '子药品剂量' : undefined}
+                      style={{ flex: '0 0 220px', marginBottom: 0 }}
+                    >
+                      <Input.Group compact style={{ width: '100%' }}>
+                        <Form.Item name={[field.name, 'doseNumber']} noStyle>
+                          <Input style={{ width: '50%' }} placeholder="数值" />
+                        </Form.Item>
+                        <Form.Item name={[field.name, 'doseUnit']} noStyle>
+                          <Select
+                            style={{ width: '50%' }}
+                            placeholder="单位"
+                            allowClear
+                            options={[
+                              { value: 'mg', label: 'mg' },
+                              { value: 'g', label: 'g' },
+                              { value: 'μg', label: 'μg' },
+                              { value: 'IU', label: 'IU' },
+                              { value: 'mL', label: 'mL' },
+                              { value: '片', label: '片' },
+                              { value: '支', label: '支' },
+                            ]}
+                          />
+                        </Form.Item>
+                      </Input.Group>
+                    </Form.Item>
+                    <Button
+                      type="text"
+                      danger
+                      icon={<MinusCircleOutlined />}
+                      onClick={() => remove(field.name)}
+                      style={{ marginBottom: 4 }}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                ))}
+                <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                  添加子药品
+                </Button>
+              </div>
+            )}
+          </Form.List>
           <Form.Item label="执行频次" name="frequency" rules={[{ required: true }]}>
-            <Select options={FREQ_OPTIONS} />
+            <Select options={freqSelectOptions} />
           </Form.Item>
+          {orderTypeWatch === 'dialysis_drug' && (
+            <Form.Item
+              label="床旁执行时段"
+              name="execute_timing"
+              rules={[{ required: true, message: '请选择床旁核对时段（与透析录入页展示一致）' }]}
+            >
+              <Select options={EXEC_TIMING_OPTIONS} />
+            </Form.Item>
+          )}
+          {orderTypeWatch === 'dialysis_drug' &&
+            ['qw', 'q2w', 'qm', 'biw', 'tiw'].includes(String(frequencyWatch || '')) && (
+            <Form.Item
+              label="具体执行（周几或日期）"
+              name="frequency_detail"
+              extra={(
+                <span style={{ fontSize: 12, color: '#64748B' }}>
+                  提示：{frequencyDetailPlaceholder(frequencyWatch || 'qw')}
+                </span>
+              )}
+            >
+              <Input placeholder={frequencyDetailPlaceholder(frequencyWatch || 'qw')} allowClear />
+            </Form.Item>
+          )}
+          {orderTypeWatch === 'interval_drug' && (
+            <>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="间期用药（非透析日）须约定具体执行时间"
+                description={
+                  <div style={{ fontSize: 12.5, lineHeight: 1.65 }}>
+                    <div>请在下一栏填写与频次对应的<strong>固定执行时间</strong>：</div>
+                    <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                      <li>按<strong>周几</strong>：填 0–6（0 周日 … 6 周六）；tiw 填 135 或 246；biw 填如 1,4</li>
+                      <li>按<strong>每月日期</strong>：qm 填 1–31（表示每月几号）</li>
+                      <li>口服时间等可在「开具说明」中补充（如餐后）</li>
+                    </ul>
+                  </div>
+                }
+              />
+              <Form.Item
+                label="具体执行（周几或日期）"
+                name="frequency_detail"
+                rules={[
+                  {
+                    required: true,
+                    message: '请填写具体用药对应的周几或每月几日',
+                  },
+                  {
+                    validator: (_, v) => {
+                      if (typeof v === 'string' && v.trim().length > 0) return Promise.resolve();
+                      if (v == null || v === '') {
+                        return Promise.reject(new Error('间期用药须明确周几或日期'));
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+                extra={(
+                  <span style={{ fontSize: 12, color: '#64748B' }}>
+                    提示：{frequencyDetailPlaceholder(frequencyWatch || 'qd')}
+                  </span>
+                )}
+              >
+                <Input placeholder={frequencyDetailPlaceholder(frequencyWatch || 'qd')} allowClear />
+              </Form.Item>
+            </>
+          )}
           <Form.Item label="开具说明" name="notes">
             <Input.TextArea rows={2} placeholder="特殊说明或注意事项…" />
           </Form.Item>
         </Form>
         <div style={{ padding: '8px 0', fontSize: 12.5, color: '#7B92BC' }}>
-          ⓘ 医嘱将在下次护士录入透析记录时自动显示。
+          ⓘ 透析用药可在护士录入透析记录时进入「今日医嘱执行确认」；间期用药不在此确认，请务必在上方填写「具体执行（周几或日期）」以便床旁核对。
         </div>
         {draftOrders.length > 0 && (
           <>
@@ -381,8 +786,38 @@ export default function LongTermOrderListPage() {
               renderItem={item => (
                 <List.Item>
                   <div>
-                    <div style={{ fontWeight: 600, color: '#0D1B3E' }}>{item.drug}</div>
-                    <div style={{ fontSize: 12.5, color: '#4B5563' }}>{item.dose} · {item.route} · {FREQ_LABELS[item.freq] || item.freq}</div>
+                    <div style={{ fontWeight: 600, color: '#0D1B3E' }}>
+                      <Tag style={{ marginRight: 8 }}>{ORDER_TYPE_LABELS[item.order_type]}</Tag>
+                      {item.drug}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: '#4B5563', marginTop: 4 }}>
+                      {item.dose} · {item.route} · {FREQ_LABELS[item.freq] || item.freq}
+                      {item.order_type === 'dialysis_drug' && item.execute_timing ? (
+                        <span style={{ color: '#0D1B3E' }}>
+                          {' · '}
+                          {EXEC_TIMING_LABELS[item.execute_timing] ?? item.execute_timing}
+                          {' · '}
+                          {describeFrequencyDetailForOrder(item.freq, item.frequency_detail)}
+                        </span>
+                      ) : null}
+                      {item.order_type === 'interval_drug' && (
+                        <span style={{ color: '#0369A1' }}>
+                          {' · 具体执行：'}
+                          {describeFrequencyDetailForOrder(item.freq, item.frequency_detail)}
+                        </span>
+                      )}
+                    </div>
+                    {item.combo_children && item.combo_children.length > 0 && (
+                      <div style={{ marginTop: 8, paddingLeft: 10, borderLeft: '3px solid #BAE6FD' }}>
+                        {item.combo_children.map((c, i) => (
+                          <div key={i} style={{ fontSize: 12.5, color: '#64748B' }}>
+                            ↳ {c.drug_name}
+                            {' '}
+                            {c.doseNumber != null && c.doseNumber !== '' ? `${c.doseNumber} ${c.doseUnit ?? ''}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </List.Item>
               )} />
@@ -401,6 +836,9 @@ export default function LongTermOrderListPage() {
               <div style={{ fontWeight: 600, color: '#0D1B3E' }}>{stopTarget.drug_name}</div>
               <div style={{ fontSize: 12.5, color: '#7B92BC', marginTop: 4 }}>
                 {stopTarget.dose} {stopTarget.dose_unit} · {stopTarget.route} · {FREQ_LABELS[stopTarget.frequency] || stopTarget.frequency}
+              </div>
+              <div style={{ fontSize: 12, color: '#475569', marginTop: 8 }}>
+                具体执行：{describeFrequencyDetailForOrder(stopTarget.frequency, stopTarget.frequency_detail)}
               </div>
             </div>
             <Form form={stopForm} layout="vertical">

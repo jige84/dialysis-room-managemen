@@ -6,9 +6,22 @@ import type { DialysisDemoPatient } from '../constants/dialysisDemoPatients';
 /** 与 PrescriptionWorkspace 保存的「基本参数」共用同一存储键，供透析录入页合并展示 */
 export const PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY = 'hd_prescription_basic_params_defaults_v1';
 
-export function loadPrescriptionBasicParamsFromStorage(): Record<string, unknown> {
+/** 真实患者按 UUID 分键存储，避免多患者共用一份本地草稿互相覆盖 */
+export function prescriptionBasicParamsStorageKey(patientId?: string): string {
+  if (patientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(patientId)) {
+    return `${PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY}::${patientId}`;
+  }
+  return PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY;
+}
+
+export function loadPrescriptionBasicParamsFromStorage(patientId?: string): Record<string, unknown> {
+  const key = prescriptionBasicParamsStorageKey(patientId);
   try {
-    const raw = localStorage.getItem(PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
+    if (!raw && patientId) {
+      const legacy = localStorage.getItem(PRESCRIPTION_BASIC_PARAMS_STORAGE_KEY);
+      if (legacy) return JSON.parse(legacy) as Record<string, unknown>;
+    }
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (parsed === null || typeof parsed !== 'object') return {};
@@ -16,6 +29,29 @@ export function loadPrescriptionBasicParamsFromStorage(): Record<string, unknown
   } catch {
     return {};
   }
+}
+
+export function savePrescriptionBasicParamsToStorage(patientId: string | undefined, data: Record<string, unknown>): void {
+  try {
+    localStorage.setItem(prescriptionBasicParamsStorageKey(patientId), JSON.stringify(data));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/** 与 PrescriptionWorkspace 写入 prescriptions.notes 的分隔符一致 */
+export const PRESCRIPTION_NOTES_COMBINED_SEPARATOR = '\n\n---\n\n';
+
+/** 库中 notes 合并字段拆成「透前补充」与「处方备注」（与 PrescriptionWorkspace 同源） */
+export function splitPrescriptionNotesFromDb(raw: string | null | undefined): { preAssessOther: string; notes: string } {
+  if (raw == null || String(raw).trim() === '') return { preAssessOther: '', notes: '' };
+  const s = String(raw);
+  const idx = s.indexOf(PRESCRIPTION_NOTES_COMBINED_SEPARATOR);
+  if (idx === -1) return { preAssessOther: s.trim(), notes: '' };
+  return {
+    preAssessOther: s.slice(0, idx).trim(),
+    notes: s.slice(idx + PRESCRIPTION_NOTES_COMBINED_SEPARATOR.length).trim(),
+  };
 }
 
 const UF_MODE_EXTRA_ML: Record<string, number> = {
@@ -121,7 +157,7 @@ export function buildPrescriptionDefaultsFromDemo(demo: DialysisDemoPatient): Re
 /** 演示默认值 + localStorage 中医生保存的参数（与处方工作台「保存处方」同源） */
 export function mergePrescriptionDefaultsForPatient(demo: DialysisDemoPatient): Record<string, unknown> {
   const base = buildPrescriptionDefaultsFromDemo(demo);
-  const stored = loadPrescriptionBasicParamsFromStorage();
+  const stored = loadPrescriptionBasicParamsFromStorage(demo.value);
   return { ...base, ...stored };
 }
 

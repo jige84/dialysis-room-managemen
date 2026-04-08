@@ -8,6 +8,8 @@ import { SearchOutlined, CheckOutlined, ReloadOutlined } from '@ant-design/icons
 import PageShell from '../../components/PageShell/PageShell';
 import { useLocation } from 'react-router-dom';
 import alertsApi, { type AlertItem, type AlertSummary } from '../../api/alerts';
+import AnomalyAnalysisModal from '../../components/AnomalyAnalysisModal/AnomalyAnalysisModal';
+import { alertTypeToAnomaly, type AnomalyType } from '../../utils/anomalyAnalysis';
 
 const LEVEL_CONFIG: Record<string, { label: string; icon: string; color: string; bg: string; border: string }> = {
   emergency: { label: '急危重症', icon: '⚡', color: '#BE123C', bg: '#FFF1F2', border: '#F43F5E' },
@@ -44,6 +46,25 @@ export default function AlertCenterPage() {
   const [handleModal, setHandleModal] = useState<AlertItem | null>(null);
   const [handleForm] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+
+  const [anomalyOpen, setAnomalyOpen] = useState(false);
+  const [anomalyCtx, setAnomalyCtx] = useState<{
+    patientId: string;
+    anomalyType: AnomalyType;
+    contextId?: string;
+    patientName?: string;
+  } | null>(null);
+
+  const openAnomalyForAlert = (a: AlertItem) => {
+    if (!a.patient_id) return;
+    setAnomalyCtx({
+      patientId: a.patient_id,
+      anomalyType: alertTypeToAnomaly(a.alert_type),
+      contextId: a.id,
+      patientName: a.patient_name ?? undefined,
+    });
+    setAnomalyOpen(true);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -186,7 +207,7 @@ export default function AlertCenterPage() {
                 style={{ border: '1px solid #FECDD3' }}
                 styles={{ header: { background: '#FFF1F2', borderBottom: '1px solid #FECDD3' } }}>
                 {[...emergencies, ...criticals].map(a => (
-                  <AlertCard key={a.id} alert={a} onHandle={handleAck} />
+                  <AlertCard key={a.id} alert={a} onHandle={handleAck} onAnalyze={openAnomalyForAlert} />
                 ))}
               </Card>
             )}
@@ -202,7 +223,7 @@ export default function AlertCenterPage() {
                 style={{ border: '1px solid #C7D2FE' }}
                 styles={{ header: { background: '#EEF2FF', borderBottom: '1px solid #C7D2FE' } }}>
                 {[...warnings, ...infos].map(a => (
-                  <AlertCard key={a.id} alert={a} onHandle={handleAck} />
+                  <AlertCard key={a.id} alert={a} onHandle={handleAck} onAnalyze={openAnomalyForAlert} />
                 ))}
               </Card>
             )}
@@ -240,11 +261,30 @@ export default function AlertCenterPage() {
           </div>
         )}
       </Modal>
+
+      {anomalyCtx ? (
+        <AnomalyAnalysisModal
+          open={anomalyOpen}
+          onClose={() => setAnomalyOpen(false)}
+          patientId={anomalyCtx.patientId}
+          anomalyType={anomalyCtx.anomalyType}
+          contextId={anomalyCtx.contextId}
+          patientLabel={anomalyCtx.patientName}
+        />
+      ) : null}
     </PageShell>
   );
 }
 
-function AlertCard({ alert, onHandle }: { alert: AlertItem; onHandle: (a: AlertItem) => void }) {
+function AlertCard({
+  alert,
+  onHandle,
+  onAnalyze,
+}: {
+  alert: AlertItem;
+  onHandle: (a: AlertItem) => void;
+  onAnalyze?: (a: AlertItem) => void;
+}) {
   const cfg = LEVEL_CONFIG[alert.severity] ?? LEVEL_CONFIG.info;
   const sCfg = STATUS_LABEL[alert.status] ?? STATUS_LABEL.active;
 
@@ -270,9 +310,16 @@ function AlertCard({ alert, onHandle }: { alert: AlertItem; onHandle: (a: AlertI
         </div>
       </div>
       {alert.status === 'active' && (
-        <Button size="small" icon={<CheckOutlined />} onClick={() => onHandle(alert)} style={{ flexShrink: 0 }}>
-          处理
-        </Button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+          {alert.patient_id && onAnalyze ? (
+            <Button size="small" onClick={() => onAnalyze(alert)}>
+              分析
+            </Button>
+          ) : null}
+          <Button size="small" icon={<CheckOutlined />} onClick={() => onHandle(alert)}>
+            处理
+          </Button>
+        </div>
       )}
     </div>
   );

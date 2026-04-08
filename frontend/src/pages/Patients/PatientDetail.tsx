@@ -3,16 +3,24 @@
  * 主要作用：集中展示患者基本信息、通路、处方、化验等，并支持部分字段编辑。
  * 主要功能：路由参数 id 拉取详情；Tabs 组织子模块；打印与返回列表。
  */
-import { useEffect, useState } from 'react';
-import { Card, Tabs, Button, Table, Tag, Space, message, Modal, Form, Input, Select, DatePicker, InputNumber, Checkbox } from 'antd';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { Card, Tabs, Button, Table, Tag, Space, message, Modal, Form, Input, Select, DatePicker, InputNumber, Checkbox, Switch } from 'antd';
+import type { UploadFile } from 'antd/es/upload/interface';
 import { ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import {
+  ANTICOAGULANT_OPTIONS,
+  formatProfileAnticoagulantSummary,
+  mapDbAnticoagulantToForm,
+  mapFormAnticoagulantToDb,
+} from '../../constants/prescriptionAnticoagulant';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import IsolationZoneTag from '../../components/IsolationZoneTag/IsolationZoneTag';
 import { PageLoading, PageErrorResult } from '../../components/PageStates/PageStates';
 import { patientsApi, type PatientDetailRecord } from '../../api/patients';
+import { usersApi, type NursingStaffRow } from '../../api/users';
 import { infectionApi, type InfectionScreeningLatestRow } from '../../api/infection';
 import labsApi, { LAB_TYPE_LABELS, type LabResult } from '../../api/labs';
 import { dialysisApi, type DialysisRecordListRow } from '../../api/dialysis';
@@ -25,15 +33,15 @@ function toAccessTypeKey(raw: string): AccessType | null {
   return null;
 }
 import { useAuthStore } from '../../stores/authStore';
+import AnomalyAnalysisModal from '../../components/AnomalyAnalysisModal/AnomalyAnalysisModal';
+import PatientConsentDialysisImage from '../../components/PatientConsentDialysisImage/PatientConsentDialysisImage';
+import ConsentDialysisImageUpload from '../../components/ConsentDialysisImageUpload/ConsentDialysisImageUpload';
+import { DIALYSIS_SCHEDULE_OPTIONS, getDialysisScheduleLabel } from '../../constants/dialysisSchedule';
+import type { AnomalyType } from '../../utils/anomalyAnalysis';
 
-function formatDialysisMode(mode?: string | null): string {
-  if (!mode) return 'HD';
-  const m = mode.toUpperCase();
-  // 兼容旧数据：HD/HDF/HP 一律视作血液透析
-  if (m === 'HD' || m === 'HDF' || m === 'HP') return '血液透析';
-  if (m === 'PD') return '腹膜透析';
-  if (m === 'OTHER') return '其他透析方式';
-  return mode;
+function consentStoredImageCount(patient: PatientDetailRecord | null | undefined): number {
+  const paths = patient?.consent_dialysis_image_paths;
+  return Array.isArray(paths) ? paths.length : 0;
 }
 
 function formatGender(g: string): string {
@@ -54,7 +62,7 @@ function buildPresentIllness(p: PatientDetailRecord): string {
   const comorb = p.comorbidities?.filter(Boolean).length
     ? `合并症包括：${p.comorbidities.join('、')}。`
     : '';
-  return `患者诊断「${dx}」${stage ? `，${stage}` : ''}。自 ${p.dialysis_start_date ?? '—'} 起在本科行维持性${formatDialysisMode(p.dialysis_mode)}。${comorb}`;
+  return `患者诊断「${dx}」${stage ? `，${stage}` : ''}。自 ${p.dialysis_start_date ?? '—'} 起在本科行维持性血液透析。${comorb}`;
 }
 
 function buildPastHistory(p: PatientDetailRecord): string {
@@ -162,7 +170,12 @@ type EditFormValues = {
   past_history?: string;
   ckd_stage?: number | null;
   comorbidities?: string[];
-  dialysis_mode?: string;
+  profile_anticoagulant?: string;
+  profile_heparin_first?: number | null;
+  profile_heparin_maintain?: number | null;
+  profile_dry_weight?: number | null;
+  profile_dry_weight_date?: Dayjs | null;
+  profile_dry_weight_reason?: string;
   id_card?: string;
   phone?: string;
   family_contact_name?: string;
@@ -173,6 +186,11 @@ type EditFormValues = {
   consent_cvc?: boolean;
   consent_cvc_date?: Dayjs | null;
   current_access_type?: 'none' | 'AVF' | 'AVG' | 'TCC' | 'NCC';
+  dialysis_schedule_code?: string;
+  dialysis_schedule_notes?: string;
+  dialysis_schedule_anchor_date?: Dayjs | null;
+  dialysis_schedule_adjust?: boolean;
+  responsible_nurse_id?: string;
 };
 
 type PatientVascularAccessBrief = {
@@ -198,7 +216,25 @@ function getCurrentAccessType(patient: PatientDetailRecord): 'AVF' | 'AVG' | 'TC
   return 'none';
 }
 
+function formatDryWeightDisplay(p: PatientDetailRecord): string {
+  const dw =
+    p.profile_dry_weight != null
+      ? Number(p.profile_dry_weight)
+      : p.dry_weight != null
+        ? Number(p.dry_weight)
+        : null;
+  const dwd = p.profile_dry_weight_date ?? p.dry_weight_date;
+  const dwr = (p.profile_dry_weight_reason ?? p.dry_weight_reason)?.trim();
+  if (dw == null || !Number.isFinite(dw)) return '—';
+  const bits = [`${dw} kg`];
+  if (dwd) bits.push(`评估日 ${dwd}`);
+  if (dwr) bits.push(`原因：${dwr}`);
+  return bits.join(' · ');
+}
+
 function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
+  const navigate = useNavigate();
+  const ac = formatProfileAnticoagulantSummary(patient);
   const dobStr = patient.dob ? dayjs(patient.dob).format('YYYY-MM-DD') : '—';
   const currentAccess = getCurrentAccessRecord(patient);
   const rawAccessType =
@@ -221,13 +257,56 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
     ['主要诊断', patient.primary_diagnosis],
     ['CKD 分期', patient.ckd_stage ? `${patient.ckd_stage} 期` : '—'],
     ['合并症', patient.comorbidities?.length ? patient.comorbidities.join('、') : '—'],
+    ['干体重', formatDryWeightDisplay(patient)],
     ['联系电话', patient.phone || '—'],
     ['家属联系人', formatFamilyContact(patient.family_contact)],
     ['家庭住址', patient.address?.trim() || '—'],
-    ['透析方式', formatDialysisMode(patient.dialysis_mode)],
+    [
+      '抗凝方式及剂量',
+      (
+        <span>
+          <span>
+            {ac.scheme} · 首剂 {ac.firstDose} · 追加 {ac.maintainDose}
+          </span>
+          <Button
+            type="link"
+            size="small"
+            style={{ paddingLeft: 8 }}
+            onClick={() => navigate(`/prescription?patient_id=${encodeURIComponent(patient.id)}`)}
+          >
+            透析处方管理
+          </Button>
+          <span style={{ fontSize: 12, color: '#94A3B8', marginLeft: 6 }}>
+            （档案默认；处方页可临时改药，保存档案将再次同步抗凝项）
+          </span>
+        </span>
+      ),
+    ],
+    [
+      '透析时间',
+      (
+        <span>
+          {getDialysisScheduleLabel(patient.dialysis_schedule_code)}
+          {patient.dialysis_schedule_code === 'qod' && patient.dialysis_schedule_anchor_date ? (
+            <>
+              <br />
+              <span style={{ fontSize: 12, color: '#64748B' }}>
+                隔日锚点：{patient.dialysis_schedule_anchor_date}
+              </span>
+            </>
+          ) : null}
+          {patient.dialysis_schedule_notes?.trim() ? (
+            <>
+              <br />
+              <span style={{ fontSize: 12, color: '#64748B' }}>{patient.dialysis_schedule_notes}</span>
+            </>
+          ) : null}
+        </span>
+      ),
+    ],
     ['血管通路', accessDisplay],
     ['透析开始日期', `${patient.dialysis_start_date ?? '—'}（透析龄 ${patient.dialysis_age ?? '—'}）`],
-    ['责任护士', '—'],
+    ['责任护士', patient.responsible_nurse_name?.trim() || '—'],
   ] as const;
 
   const infectionTable = infectionRows.map((r, i) => {
@@ -401,6 +480,21 @@ function TabCareCoordination({
   onNavigate,
   onOpenEditPatient,
 }: TabCareCoordinationProps) {
+  const canAnomaly = useAuthStore((s) => s.hasRole(['admin', 'doctor', 'head_nurse']));
+  const [anomalyOpen, setAnomalyOpen] = useState(false);
+  const [anomalyCtx, setAnomalyCtx] = useState<{
+    anomalyType: AnomalyType;
+    contextId?: string;
+  } | null>(null);
+
+  const openAnomaly = useCallback(
+    (ctx: { anomalyType: AnomalyType; contextId?: string }) => {
+      setAnomalyCtx(ctx);
+      setAnomalyOpen(true);
+    },
+    [],
+  );
+
   const INFECTION_WARNING_DAYS = 175;
   const INFECTION_OVERDUE_DAYS = 185;
   const alertLevelPriority: Record<'high' | 'medium' | 'info', number> = {
@@ -445,6 +539,7 @@ function TabCareCoordination({
     desc: string;
     actionLabel: string;
     actionPath: string;
+    analyze?: { anomalyType: AnomalyType; contextId?: string };
   };
 
   const infectionAlerts: CareReminderItem[] = infectionRows
@@ -459,6 +554,7 @@ function TabCareCoordination({
           desc: `距离上次检测 ${daysSince} 天（阈值 ${INFECTION_OVERDUE_DAYS} 天），建议立即复查。`,
           actionLabel: '去传染病管理',
           actionPath: `/infection?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: { anomalyType: 'infection_overdue' as const, contextId: r.id },
         }];
       }
       if (daysSince >= INFECTION_WARNING_DAYS) {
@@ -469,10 +565,14 @@ function TabCareCoordination({
           desc: `距离上次检测 ${daysSince} 天（预警阈值 ${INFECTION_WARNING_DAYS} 天），请提前安排复查。`,
           actionLabel: '去传染病管理',
           actionPath: `/infection?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: { anomalyType: 'infection_warning' as const, contextId: r.id },
         }];
       }
       return [];
     });
+
+  const firstCriticalLab = labRows.find(l => l.is_critical);
+  const firstAbnormalLab = labRows.find(l => l.is_abnormal && !l.is_critical);
 
   const reminderItems: CareReminderItem[] = [
     ...(criticalLabCount > 0
@@ -483,6 +583,9 @@ function TabCareCoordination({
           desc: `当前批次共 ${criticalLabCount} 项危急值，需立即确认与处置。`,
           actionLabel: '去检验结果管理',
           actionPath: `/labs?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: firstCriticalLab
+            ? { anomalyType: 'lab_critical' as const, contextId: firstCriticalLab.id }
+            : undefined,
         }]
       : []),
     ...(abnormalLabCount > 0
@@ -493,6 +596,9 @@ function TabCareCoordination({
           desc: `当前批次共 ${abnormalLabCount} 项异常，请结合透析处方与医嘱评估。`,
           actionLabel: '去检验结果管理',
           actionPath: `/labs?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: firstAbnormalLab
+            ? { anomalyType: 'lab_abnormal' as const, contextId: firstAbnormalLab.id }
+            : undefined,
         }]
       : []),
     ...(latestDialysis?.ktv != null && Number(latestDialysis.ktv) < 1.2
@@ -503,6 +609,7 @@ function TabCareCoordination({
           desc: `最近一次 Kt/V=${latestDialysis.ktv}（标准 ≥1.2），建议复核处方与实际执行。`,
           actionLabel: '去透析处方管理',
           actionPath: `/prescription?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: { anomalyType: 'ktv_inadequate' as const, contextId: latestDialysis.id },
         }]
       : []),
     ...(latestDialysis?.is_circuit_clotted
@@ -513,6 +620,7 @@ function TabCareCoordination({
           desc: '已记录体外循环完全凝血事件，建议评估抗凝策略与通路状态。',
           actionLabel: '去血管通路管理',
           actionPath: `/vascular?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: { anomalyType: 'coagulation_severe' as const, contextId: latestDialysis.id },
         }]
       : []),
     ...(latestDialysis?.is_membrane_ruptured
@@ -523,6 +631,7 @@ function TabCareCoordination({
           desc: '存在透析器破膜/漏血记录，建议复盘并加强过程监测。',
           actionLabel: '去透析记录录入',
           actionPath: `/dialysis/entry?patient_id=${encodeURIComponent(patient.id)}`,
+          analyze: { anomalyType: 'dialysis_leak' as const, contextId: latestDialysis.id },
         }]
       : []),
     ...(unSignedConsents.length > 0
@@ -579,25 +688,46 @@ function TabCareCoordination({
                     </div>
                     <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.7 }}>{item.desc}</div>
                   </div>
-                  <Button
-                    size="small"
-                    type="primary"
-                    onClick={() => {
-                      if (item.key === 'consent-missing') {
-                        onOpenEditPatient();
-                        return;
-                      }
-                      onNavigate(item.actionPath);
-                    }}
-                  >
-                    {item.actionLabel}
-                  </Button>
+                  <Space size={8} wrap>
+                    {canAnomaly && item.analyze ? (
+                      <Button
+                        size="small"
+                        onClick={() => openAnomaly(item.analyze!)}
+                      >
+                        分析
+                      </Button>
+                    ) : null}
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={() => {
+                        if (item.key === 'consent-missing') {
+                          onOpenEditPatient();
+                          return;
+                        }
+                        onNavigate(item.actionPath);
+                      }}
+                    >
+                      {item.actionLabel}
+                    </Button>
+                  </Space>
                 </div>
               );
             })}
           </div>
         )}
       </Card>
+
+      {anomalyCtx ? (
+        <AnomalyAnalysisModal
+          open={anomalyOpen}
+          onClose={() => setAnomalyOpen(false)}
+          patientId={patient.id}
+          anomalyType={anomalyCtx.anomalyType}
+          contextId={anomalyCtx.contextId}
+          patientLabel={patient.name}
+        />
+      ) : null}
 
       <div className="grid-4" style={{ gap: 12 }}>
         <div className="hd-stat-card teal">
@@ -673,8 +803,36 @@ export default function PatientDetailPage() {
   const [labRows, setLabRows] = useState<LabResult[]>([]);
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
+  const [editConsentFileList, setEditConsentFileList] = useState<UploadFile[]>([]);
+  const [nursingStaff, setNursingStaff] = useState<NursingStaffRow[]>([]);
   const [editForm] = Form.useForm<EditFormValues>();
+  const watchEditDialysisCode = Form.useWatch('dialysis_schedule_code', editForm);
   const canEditPatient = hasRole(['admin', 'doctor']);
+
+  const nurseSelectOptions = useMemo(
+    () => nursingStaff.map(n => ({
+      value: n.id,
+      label: `${n.real_name}（${n.role === 'head_nurse' ? '护士长' : '护士'}）`,
+    })),
+    [nursingStaff],
+  );
+
+  useEffect(() => {
+    if (!canEditPatient) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await usersApi.nursingStaff();
+        if (cancelled || res.data.code !== 200 || !Array.isArray(res.data.data)) return;
+        setNursingStaff(res.data.data);
+      } catch {
+        /* 下拉失败时仍可保存其他字段 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canEditPatient]);
 
   const loadPatientData = async (patientId: string) => {
     const [pr, ir, lr, dr] = await Promise.all([
@@ -750,7 +908,19 @@ export default function PatientDetailPage() {
       past_history: p.past_history || undefined,
       ckd_stage: p.ckd_stage ?? null,
       comorbidities: p.comorbidities || [],
-      dialysis_mode: p.dialysis_mode || 'HD',
+      profile_anticoagulant: mapDbAnticoagulantToForm(p.profile_anticoagulant ?? 'heparin'),
+      profile_heparin_first: p.profile_heparin_prime_dose ?? undefined,
+      profile_heparin_maintain: p.profile_heparin_maintain != null ? Number(p.profile_heparin_maintain) : undefined,
+      profile_dry_weight:
+        p.profile_dry_weight != null
+          ? Number(p.profile_dry_weight)
+          : p.dry_weight != null
+            ? Number(p.dry_weight)
+            : undefined,
+      profile_dry_weight_date: (p.profile_dry_weight_date ?? p.dry_weight_date)
+        ? dayjs(p.profile_dry_weight_date ?? p.dry_weight_date)
+        : dayjs(),
+      profile_dry_weight_reason: p.profile_dry_weight_reason ?? p.dry_weight_reason ?? undefined,
       id_card: p.id_card || undefined,
       phone: p.phone || undefined,
       family_contact_name: p.family_contact?.name || undefined,
@@ -761,7 +931,17 @@ export default function PatientDetailPage() {
       consent_cvc: p.consent_cvc ?? false,
       consent_cvc_date: p.consent_cvc_date ? dayjs(p.consent_cvc_date) : null,
       current_access_type: getCurrentAccessType(p),
+      dialysis_schedule_code: p.dialysis_schedule_code || undefined,
+      dialysis_schedule_notes: p.dialysis_schedule_notes || undefined,
+      dialysis_schedule_adjust: Boolean(
+        p.dialysis_schedule_notes?.trim() || p.dialysis_schedule_code === 'other',
+      ),
+      dialysis_schedule_anchor_date: p.dialysis_schedule_anchor_date
+        ? dayjs(p.dialysis_schedule_anchor_date)
+        : undefined,
+      responsible_nurse_id: p.responsible_nurse_id || undefined,
     });
+    setEditConsentFileList([]);
     setEditOpen(true);
   };
 
@@ -769,12 +949,21 @@ export default function PatientDetailPage() {
     if (!id) return;
     try {
       const values = await editForm.validateFields();
+      const hasConsentImage =
+        consentStoredImageCount(p) > 0
+        || editConsentFileList.some(f => f.originFileObj);
+      if (!hasConsentImage) {
+        message.error('请上传透析知情同意书影像（档案中尚无影像时必须上传）');
+        return;
+      }
       setEditLoading(true);
       const currentAccessRecord = p ? getCurrentAccessRecord(p) : null;
       const currentAccessType = p ? getCurrentAccessType(p) : 'none';
       const selectedAccessType = values.current_access_type || currentAccessType;
       const familyName = values.family_contact_name?.trim();
       const familyPhone = values.family_contact_phone?.trim();
+      const showScheduleNotes =
+        Boolean(values.dialysis_schedule_adjust) || values.dialysis_schedule_code === 'other';
       const updatePayload = {
         name: values.name.trim(),
         gender: values.gender,
@@ -784,7 +973,14 @@ export default function PatientDetailPage() {
         past_history: values.past_history?.trim() || undefined,
         ckd_stage: values.ckd_stage ?? undefined,
         comorbidities: values.comorbidities?.map(s => s.trim()).filter(Boolean) || [],
-        dialysis_mode: values.dialysis_mode || 'HD',
+        profile_anticoagulant: mapFormAnticoagulantToDb(values.profile_anticoagulant),
+        profile_heparin_prime_dose: values.profile_heparin_first != null ? Number(values.profile_heparin_first) : null,
+        profile_heparin_maintain: values.profile_heparin_maintain != null ? Number(values.profile_heparin_maintain) : null,
+        profile_dry_weight: values.profile_dry_weight != null ? Number(values.profile_dry_weight) : undefined,
+        profile_dry_weight_date: values.profile_dry_weight_date
+          ? values.profile_dry_weight_date.format('YYYY-MM-DD')
+          : undefined,
+        profile_dry_weight_reason: values.profile_dry_weight_reason?.trim() || null,
         id_card: values.id_card?.trim() || undefined,
         phone: values.phone?.trim() || undefined,
         address: values.address?.trim() || undefined,
@@ -802,8 +998,31 @@ export default function PatientDetailPage() {
               ...(familyPhone ? { phone: familyPhone } : {}),
             }
           : undefined,
+        dialysis_schedule_code: values.dialysis_schedule_code ?? null,
+        ...(showScheduleNotes
+          ? { dialysis_schedule_notes: values.dialysis_schedule_notes?.trim() || null }
+          : {}),
+        dialysis_schedule_anchor_date:
+          values.dialysis_schedule_code === 'qod' && values.dialysis_schedule_anchor_date
+            ? values.dialysis_schedule_anchor_date.format('YYYY-MM-DD')
+            : null,
+        responsible_nurse_id: values.responsible_nurse_id ?? undefined,
       };
       await patientsApi.update(id, updatePayload);
+
+      const newConsentFiles = editConsentFileList
+        .map(f => f.originFileObj)
+        .filter((f): f is NonNullable<UploadFile['originFileObj']> => f != null);
+      if (newConsentFiles.length > 0) {
+        try {
+          const up = await patientsApi.uploadConsentDialysisImage(id, newConsentFiles);
+          if (up.data.code !== 200) {
+            message.warning(up.data.message || '知情同意书图片上传失败');
+          }
+        } catch {
+          message.warning('知情同意书图片上传失败');
+        }
+      }
 
       // 先保证“患者档案”更新成功；通路同步失败时给出明确提示（避免静默中断）
       let vascularSyncError: unknown = null;
@@ -934,7 +1153,7 @@ export default function PatientDetailPage() {
       </Card>
 
       {/* 知情同意书状态（与患者档案 consent 字段同步） */}
-      <div className="flex gap-8" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
+      <div className="flex gap-8" style={{ marginBottom: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <span style={{
           background: p.consent_dialysis ? '#ECFDF5' : '#F1F5F9',
           color: p.consent_dialysis ? '#059669' : '#64748B',
@@ -945,6 +1164,18 @@ export default function PatientDetailPage() {
             ? `✅ 透析知情同意书已签${p.consent_dialysis_date ? ` (${p.consent_dialysis_date})` : ''}`
             : '— 透析知情同意书未登记'}
         </span>
+        {consentStoredImageCount(p) > 0 ? (
+          <div style={{ flex: '1 1 320px', minWidth: 200 }}>
+            <div style={{ fontSize: 12, color: '#64748B', marginBottom: 6 }}>
+              知情同意书影像（共 {consentStoredImageCount(p)} 张）
+            </div>
+            <Space wrap size={[8, 8]}>
+              {(p.consent_dialysis_image_paths ?? []).map((_, i) => (
+                <PatientConsentDialysisImage key={i} patientId={p.id} index={i} />
+              ))}
+            </Space>
+          </div>
+        ) : null}
         <span style={{
           background: p.consent_cvc ? '#ECFDF5' : '#F1F5F9',
           color: p.consent_cvc ? '#059669' : '#64748B',
@@ -1005,7 +1236,7 @@ export default function PatientDetailPage() {
         <Form<EditFormValues>
           form={editForm}
           layout="vertical"
-          initialValues={{ gender: 'M', dialysis_mode: 'HD' }}
+          initialValues={{ gender: 'M' }}
         >
           <div className="grid-2" style={{ gap: '0 16px' }}>
             <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
@@ -1037,18 +1268,96 @@ export default function PatientDetailPage() {
             <Form.Item name="ckd_stage" label="CKD 分期（可选）">
               <InputNumber min={1} max={5} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="dialysis_mode" label="透析方式">
-              <Select
-                options={[
-                  { value: 'HD', label: '血液透析' },
-                  { value: 'PD', label: '腹膜透析' },
-                  { value: 'OTHER', label: '其他' },
-                ]}
-              />
-            </Form.Item>
             <Form.Item name="comorbidities" label="合并症（可选）" style={{ gridColumn: 'span 2' }}>
               <Select mode="tags" tokenSeparators={[',']} placeholder="输入后回车添加" />
             </Form.Item>
+            <div style={{ gridColumn: 'span 2', fontSize: 12, color: '#64748B', marginBottom: 4 }}>
+              干体重（保存档案时同步至当前透析处方；在处方页保存处方或仅更新干体重时也会回写此处）
+            </div>
+            <Form.Item
+              name="profile_dry_weight"
+              label="干体重目标 (kg)"
+              rules={[
+                { required: true, message: '请填写干体重' },
+                { type: 'number', min: 20, max: 200, message: '范围为 20–200 kg' },
+              ]}
+            >
+              <InputNumber min={20} max={200} step={0.1} style={{ width: '100%' }} placeholder="如 58.5" />
+            </Form.Item>
+            <Form.Item
+              name="profile_dry_weight_date"
+              label="评估日期"
+              rules={[{ required: true, message: '请选择评估日期' }]}
+            >
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item
+              name="profile_dry_weight_reason"
+              label="变更原因（可选）"
+              style={{ gridColumn: 'span 2' }}
+            >
+              <Input.TextArea rows={2} maxLength={2000} showCount placeholder="如：容量负荷评估后调整" />
+            </Form.Item>
+            <div style={{ gridColumn: 'span 2', fontSize: 12, color: '#64748B', marginBottom: 4 }}>
+              抗凝默认方案（保存档案时写入并覆盖当前透析处方的抗凝项；仅在处方页调整处方时不会回写此处）
+            </div>
+            <Form.Item
+              name="profile_anticoagulant"
+              label="抗凝方案"
+              rules={[{ required: true, message: '请选择抗凝方案' }]}
+            >
+              <Select options={[...ANTICOAGULANT_OPTIONS]} placeholder="请选择" />
+            </Form.Item>
+            <Form.Item name="profile_heparin_first" label="首剂（IU）">
+              <InputNumber min={0} style={{ width: '100%' }} placeholder="如 5000" />
+            </Form.Item>
+            <Form.Item name="profile_heparin_maintain" label="追加（IU/h）">
+              <InputNumber min={0} step={0.1} style={{ width: '100%' }} placeholder="如 500" />
+            </Form.Item>
+            <Form.Item name="dialysis_schedule_code" label="透析时间">
+              <Select allowClear placeholder="请选择透析频次与时段" options={[...DIALYSIS_SCHEDULE_OPTIONS]} />
+            </Form.Item>
+            <Form.Item
+              name="dialysis_schedule_adjust"
+              label="补充/调整规则"
+              valuePropName="checked"
+            >
+              <Switch checkedChildren="已开启" unCheckedChildren="关闭" />
+            </Form.Item>
+            <Form.Item
+              noStyle
+              shouldUpdate={(prev, cur) =>
+                prev.dialysis_schedule_adjust !== cur.dialysis_schedule_adjust
+                || prev.dialysis_schedule_code !== cur.dialysis_schedule_code
+              }
+            >
+              {({ getFieldValue }) => {
+                const adj = getFieldValue('dialysis_schedule_adjust');
+                const code = getFieldValue('dialysis_schedule_code');
+                if (!adj && code !== 'other') return null;
+                return (
+                  <Form.Item
+                    name="dialysis_schedule_notes"
+                    label="透析时间说明（可手动输入）"
+                    style={{ gridColumn: 'span 2' }}
+                    rules={code === 'other' ? [{ required: true, message: '选择「其他」时请填写说明' }] : undefined}
+                  >
+                    <Input.TextArea rows={3} maxLength={800} showCount />
+                  </Form.Item>
+                );
+              }}
+            </Form.Item>
+            {watchEditDialysisCode === 'qod' ? (
+              <Form.Item
+                name="dialysis_schedule_anchor_date"
+                label="隔日锚点日期"
+                style={{ gridColumn: 'span 2' }}
+                tooltip="用于排班系统自动推算隔日透析日。"
+                rules={[{ required: true, message: '请选择隔日锚点日期' }]}
+              >
+                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+              </Form.Item>
+            ) : null}
             <Form.Item name="id_card" label="身份证号（可选）">
               <Input maxLength={18} />
             </Form.Item>
@@ -1063,6 +1372,21 @@ export default function PatientDetailPage() {
             </Form.Item>
             <Form.Item name="address" label="家庭住址（可选）" style={{ gridColumn: 'span 2', marginBottom: 0 }}>
               <Input.TextArea rows={2} />
+            </Form.Item>
+
+            <Form.Item
+              name="responsible_nurse_id"
+              label="责任护士"
+              style={{ gridColumn: 'span 2' }}
+              rules={[{ required: true, message: '请选择责任护士' }]}
+              tooltip="用于日常宣教、随访协调等管理对接；选项为本科室已启用的护士/护士长账号，与透析排班机位无绑定。"
+            >
+              <Select
+                showSearch
+                placeholder="请选择本科室护理人员"
+                optionFilterProp="label"
+                options={nurseSelectOptions}
+              />
             </Form.Item>
 
             <Form.Item
@@ -1165,6 +1489,37 @@ export default function PatientDetailPage() {
                     }}
                   </Form.Item>
                 </div>
+
+                {canEditPatient ? (
+                  <div
+                    style={{
+                      border: '1px solid #DBEAFE',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      background: '#FAFCFF',
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                      透析知情同意书影像
+                      {consentStoredImageCount(p) === 0 ? (
+                        <span style={{ color: '#BE123C', fontWeight: 600 }}>（必填）</span>
+                      ) : (
+                        <span style={{ color: '#64748B', fontWeight: 400 }}>（已存档时可不上传新图）</span>
+                      )}
+                    </div>
+                    <ConsentDialysisImageUpload
+                      fileList={editConsentFileList}
+                      onChange={({ fileList }) => setEditConsentFileList(fileList)}
+                      maxCount={15}
+                      triggerLabel="上传图片"
+                    />
+                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
+                      {consentStoredImageCount(p) > 0
+                        ? '点击上传可选择本地相册/文件或拍照；可一次多张替换已有存档，保存后覆盖原图。单张不超过 5MB，最多 15 张。'
+                        : '档案中尚未存档影像，须上传后方可保存。点击上传可选择本地相册/文件或拍照，单张不超过 5MB，最多 15 张。'}
+                    </div>
+                  </div>
+                ) : null}
               </Space>
             </Form.Item>
           </div>

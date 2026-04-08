@@ -34,7 +34,9 @@ router.get('/prepare', auth, async (req, res, next) => {
     const { patientId, date } = req.query;
     if (!patientId) return error(res, '请提供 patientId 参数');
 
-    const data = await OrderAutoFill.prepareForDialysis(patientId, date);
+    const data = await OrderAutoFill.prepareForDialysis(patientId, date, {
+      orderTypes: ['dialysis_drug'],
+    });
     return success(res, data, '透析准备数据加载成功');
   } catch (err) { next(err); }
 });

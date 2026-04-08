@@ -42,6 +42,8 @@ import labsApi, {
   type LabResultListRow,
   type LabReviewDueSoonRow,
 } from '../../api/labs';
+import AnomalyAnalysisModal from '../../components/AnomalyAnalysisModal/AnomalyAnalysisModal';
+import type { AnomalyType } from '../../utils/anomalyAnalysis';
 import { patientsApi, type Patient } from '../../api/patients';
 import { useAuthStore } from '../../stores/authStore';
 import {
@@ -193,6 +195,7 @@ function makeLabColumns(opts: {
   showCategory: boolean;
   canSetRecheck: boolean;
   onOpenRecheck: (r: LabResultListRow) => void;
+  onAnomalyAnalyze?: (r: LabResultListRow, anomalyType: AnomalyType) => void;
 }): ColumnsType<LabResultListRow> {
   const patientCol: ColumnsType<LabResultListRow>[0] = {
     title: '患者',
@@ -323,6 +326,23 @@ function makeLabColumns(opts: {
       },
     },
   ];
+  if (opts.onAnomalyAnalyze) {
+    rest.push({
+      title: '分析',
+      width: 72,
+      render: (_: unknown, r: LabResultListRow) => {
+        const ui = rowToUiStatus(r);
+        const abnormal = r.is_critical || r.is_abnormal || ui === 'critical' || ui === 'high' || ui === 'low';
+        if (!abnormal) return <span className="text-muted">—</span>;
+        const at: AnomalyType = r.is_critical || ui === 'critical' ? 'lab_critical' : 'lab_abnormal';
+        return (
+          <Button type="link" size="small" onClick={() => opts.onAnomalyAnalyze?.(r, at)}>
+            分析
+          </Button>
+        );
+      },
+    });
+  }
   if (opts.showPatient) {
     return [patientCol, ...rest];
   }
@@ -367,6 +387,24 @@ export default function LabResultListPage() {
   const [form] = Form.useForm();
   const [patientOptions, setPatientOptions] = useState<Patient[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const [anomalyOpen, setAnomalyOpen] = useState(false);
+  const [anomalyCtx, setAnomalyCtx] = useState<{
+    patientId: string;
+    anomalyType: AnomalyType;
+    contextId?: string;
+    patientName?: string;
+  } | null>(null);
+
+  const openAnomaly = useCallback((r: LabResultListRow, anomalyType: AnomalyType) => {
+    setAnomalyCtx({
+      patientId: r.patient_id,
+      anomalyType,
+      contextId: r.id,
+      patientName: r.patient_name,
+    });
+    setAnomalyOpen(true);
+  }, []);
 
   const loadPatients = useCallback(async () => {
     try {
@@ -533,8 +571,9 @@ export default function LabResultListPage() {
         showCategory: true,
         canSetRecheck,
         onOpenRecheck: openRecheckModal,
+        onAnomalyAnalyze: hasLabWrite ? openAnomaly : undefined,
       }),
-    [canSetRecheck, openRecheckModal],
+    [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly],
   );
   const columnsGrouped = useMemo(
     () =>
@@ -543,8 +582,9 @@ export default function LabResultListPage() {
         showCategory: false,
         canSetRecheck,
         onOpenRecheck: openRecheckModal,
+        onAnomalyAnalyze: hasLabWrite ? openAnomaly : undefined,
       }),
-    [canSetRecheck, openRecheckModal],
+    [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly],
   );
   const groupedPatients = useMemo(() => groupByPatientAndCategory(rowsFiltered), [rowsFiltered]);
 
@@ -1189,6 +1229,17 @@ export default function LabResultListPage() {
           </Form.List>
         </Form>
       </Modal>
+
+      {anomalyCtx ? (
+        <AnomalyAnalysisModal
+          open={anomalyOpen}
+          onClose={() => setAnomalyOpen(false)}
+          patientId={anomalyCtx.patientId}
+          anomalyType={anomalyCtx.anomalyType}
+          contextId={anomalyCtx.contextId}
+          patientLabel={anomalyCtx.patientName}
+        />
+      ) : null}
 
       <LabOcrModal
         open={showOcr}

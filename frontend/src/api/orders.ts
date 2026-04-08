@@ -5,13 +5,25 @@
 import request, { type ApiResponse } from './request';
 
 export type OrderType = 'dialysis_drug' | 'interval_drug' | 'treatment' | 'diet' | 'care' | 'observation';
-export type OrderFrequency = 'every_session' | 'qd' | 'bid' | 'tiw' | 'biw' | 'qw' | 'q2w' | 'qm' | 'custom';
+export type OrderFrequency =
+  | 'every_session'
+  | 'qd'
+  | 'bid'
+  | 'tid'
+  | 'tiw'
+  | 'biw'
+  | 'qw'
+  | 'q2w'
+  | 'qm'
+  | 'custom';
 export type OrderStatus = 'active' | 'stopped' | 'expired';
 
 export interface LongTermOrder {
   id: string;
   patient_id: string;
   prescription_id?: string;
+  /** 组合用药时指向主医嘱 */
+  parent_order_id?: string | null;
   order_type: OrderType;
   drug_name: string;
   drug_spec?: string;
@@ -34,6 +46,29 @@ export interface LongTermOrder {
   notes?: string;
   created_at: string;
   updated_at: string;
+}
+
+/** 组合用药：与主医嘱同时开立的子药品（共用用法、频次、开具说明等） */
+export interface LongTermOrderChildInput {
+  drug_name: string;
+  dose?: string;
+  dose_unit?: string;
+  drug_spec?: string;
+}
+
+export type CreateLongTermOrderBody = Partial<LongTermOrder> & {
+  child_orders?: LongTermOrderChildInput[];
+};
+
+/** 开立医嘱后可选展示的指导（不自动写入数据库） */
+export interface OrderGuidanceSuggestion {
+  id: string;
+  text: string;
+  citation_code?: string;
+  citation_title?: string;
+  citation_excerpt?: string;
+  severity?: string;
+  optional?: boolean;
 }
 
 export interface OrderExecution {
@@ -59,7 +94,7 @@ export const FREQ_LABELS: Record<string, string> = {
   qd: 'qd（每日1次）',
   bid: 'bid（每日2次）',
   tid: 'tid（每日3次）',
-  tiw: 'tiw（每透析日）',
+  tiw: 'tiw（每周3次）',
   biw: 'biw（每周2次）',
   qw: 'qw（每周1次）',
   q2w: 'q2w（每2周1次）',
@@ -76,6 +111,14 @@ export const ORDER_TYPE_LABELS: Record<string, string> = {
   observation: '观察',
 };
 
+/** 床旁核对与透析录入展示用（与 long_term_orders.execute_timing 一致） */
+export const EXEC_TIMING_LABELS: Record<string, string> = {
+  pre_dialysis: '透析前',
+  during_dialysis: '透析中',
+  post_dialysis: '透析后',
+  anytime: '任意时间',
+};
+
 const ordersApi = {
   /** 患者当前有效医嘱 */
   getActive: (patientId: string) =>
@@ -85,17 +128,31 @@ const ordersApi = {
   getHistory: (patientId: string) =>
     request.get<ApiResponse<LongTermOrder[]>>(`/orders/${patientId}/history`),
 
-  /** 今日应执行医嘱 */
-  getTodayTasks: (patientId: string, date?: string) =>
-    request.get<ApiResponse<LongTermOrder[]>>(`/orders/${patientId}/today-tasks`, { params: { date } }),
+  /**
+   * 今日应执行医嘱（与 OrderAutoFill.shouldExecuteToday 一致）
+   * @param params.orderTypes 例如仅透析用药：`['dialysis_drug']`，与 GET /dialysis/prepare 中 ordersToday 同源
+   */
+  getTodayTasks: (patientId: string, params?: { date?: string; orderTypes?: string[] }) =>
+    request.get<ApiResponse<LongTermOrder[]>>(`/orders/${patientId}/today-tasks`, {
+      params: {
+        date: params?.date,
+        order_types: params?.orderTypes?.length ? params.orderTypes.join(',') : undefined,
+      },
+    }),
 
-  /** 开具新医嘱 */
-  create: (patientId: string, data: Partial<LongTermOrder>) =>
-    request.post<ApiResponse<LongTermOrder>>(`/orders/${patientId}`, data),
+  /** 开具新医嘱（可选 child_orders 组合子药品） */
+  create: (patientId: string, data: CreateLongTermOrderBody) =>
+    request.post<ApiResponse<LongTermOrder & { guidance_suggestions?: OrderGuidanceSuggestion[] }>>(
+      `/orders/${patientId}`,
+      data,
+    ),
 
   /** 修改医嘱（停旧开新） */
   update: (orderId: string, data: Partial<LongTermOrder>) =>
-    request.put<ApiResponse<LongTermOrder>>(`/orders/${orderId}`, data),
+    request.put<ApiResponse<LongTermOrder & { guidance_suggestions?: OrderGuidanceSuggestion[] }>>(
+      `/orders/${orderId}`,
+      data,
+    ),
 
   /** 停止医嘱 */
   stop: (orderId: string, stop_reason: string) =>

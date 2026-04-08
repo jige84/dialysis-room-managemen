@@ -167,13 +167,15 @@ export interface CreateDialysisPayload {
 
 // ─── 准备数据（处方 + 今日医嘱） ────────────────────────────────────────
 
-/** GET /api/dialysis/prepare 返回的处方摘要 */
+/** GET /api/dialysis/prepare 返回的处方摘要（与 prescriptions 表及处方工作台保存字段对齐） */
 export interface PreparedPrescription {
   id: string;
   patient_id: string;
   frequency_per_week: number | null;
   duration_hours: number | null;
   dialyzer_model: string | null;
+  dialyzer_area?: number | null;
+  dialyzer_flux?: string | null;
   dry_weight: number | null;
   dry_weight_date: string | null;
   anticoagulant: string | null;
@@ -185,18 +187,30 @@ export interface PreparedPrescription {
   dialysate_temp: number | null;
   blood_flow_rate: number | null;
   dialysate_flow_rate: number | null;
+  /** HD / HDF / HD_HP，与透析处方管理一致 */
+  hemodialysis_modality?: string | null;
+  hemodialysis_remark?: string | null;
+  hdf_replacement_mode?: string | null;
+  hdf_replacement_volume_l?: number | null;
+  notes?: string | null;
+  /** 与处方工作台保存的扩展 JSON 一致 */
+  form_extra?: Record<string, unknown> | null;
 }
 
 /** 今日应执行的长期医嘱（含是否已执行标记） */
 export interface OrderForSession {
   id: string;
+  parent_order_id?: string | null;
   order_type: string;
   drug_name: string | null;
-  dose: number | null;
+  /** 数据库可能为字符串 */
+  dose?: string | number | null;
   dose_unit: string | null;
   route: string | null;
   frequency: string;
-  execute_timing: string;
+  /** 与 long_term_orders.frequency_detail 一致，用于「周几/每月几日」等展示 */
+  frequency_detail?: string | null;
+  execute_timing?: string | null;
   notes: string | null;
   ordered_by_name: string | null;
   alreadyExecuted: boolean;
@@ -206,6 +220,35 @@ export interface OrderForSession {
 export interface PrepareDialysisData {
   prescription: PreparedPrescription | null;
   ordersToday: OrderForSession[];
+}
+
+/**
+ * 解析 GET /dialysis/prepare 的 axios 响应体，兼容：
+ * - 标准 { code, data: { prescription, ordersToday } }
+ * - data 内医嘱列表蛇形键名 orders_today
+ */
+export function parsePrepareDialysisResponse(resp: {
+  data: ApiResponse<Record<string, unknown> | null | undefined>;
+}): PrepareDialysisData {
+  const outer = resp?.data;
+  if (!outer || typeof outer !== 'object') {
+    return { prescription: null, ordersToday: [] };
+  }
+  const inner = outer.data;
+  const payload =
+    inner != null && typeof inner === 'object' && !Array.isArray(inner)
+      ? inner
+      : null;
+  if (!payload) {
+    return { prescription: null, ordersToday: [] };
+  }
+  const ordersRaw = payload.ordersToday ?? payload.orders_today;
+  const prescription =
+    (payload.prescription as PreparedPrescription | null | undefined) ?? null;
+  return {
+    prescription,
+    ordersToday: Array.isArray(ordersRaw) ? (ordersRaw as OrderForSession[]) : [],
+  };
 }
 
 // ─── 统计类型 ────────────────────────────────────────────────────────────

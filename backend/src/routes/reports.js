@@ -9,7 +9,31 @@ const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const ReportGenerator = require('../services/ReportGenerator');
+const QcRoutineMetricsService = require('../services/QcRoutineMetricsService');
+const MonthlyWorkloadService = require('../services/MonthlyWorkloadService');
 const { success, error, notFound } = require('../utils/response');
+
+// GET /api/reports/qc-routine/:year/:month - 科室内部质控指标（实时聚合，不落库）
+router.get('/qc-routine/:year/:month', auth, async (req, res, next) => {
+  try {
+    const yy = parseInt(req.params.year, 10);
+    const mm = parseInt(req.params.month, 10);
+    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+    const data = await QcRoutineMetricsService.getRoutineMetrics(yy, mm);
+    return success(res, data);
+  } catch (err) { next(err); }
+});
+
+// GET /api/reports/monthly-workload/:year/:month - 月度工作量（需求 3.8.1，实时聚合）
+router.get('/monthly-workload/:year/:month', auth, async (req, res, next) => {
+  try {
+    const yy = parseInt(req.params.year, 10);
+    const mm = parseInt(req.params.month, 10);
+    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+    const data = await MonthlyWorkloadService.getMonthlyWorkload(yy, mm);
+    return success(res, data);
+  } catch (err) { next(err); }
+});
 
 // GET /api/reports/qc-upload/:year/:month - 获取月度质控上报数据
 router.get('/qc-upload/:year/:month', auth, async (req, res, next) => {
@@ -69,6 +93,59 @@ router.post('/qc-upload/:year/:month/submit', auth, rbac(['admin','head_nurse'])
   } catch (err) { next(err); }
 });
 
+// PATCH /api/reports/qc-upload/:year/:month — 补充时点/周日护患比、备注（草稿或待审批可改）
+router.patch('/qc-upload/:year/:month', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+  try {
+    const yy = parseInt(req.params.year, 10);
+    const mm = parseInt(req.params.month, 10);
+    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+
+    const { rows: cur } = await pool.query(
+      'SELECT id, status FROM qc_reports WHERE report_year = $1 AND report_month = $2',
+      [yy, mm],
+    );
+    if (cur.length === 0) return notFound(res, '报表不存在');
+    if (cur[0].status === 'confirmed') return error(res, '已确认上报，不可再修改补充项');
+
+    const { notes, spot_check_ratio, sunday_ratio } = req.body;
+    const updates = [];
+    const vals = [];
+    let i = 1;
+    if (notes !== undefined) {
+      updates.push(`notes = $${i++}`);
+      vals.push(notes === null || notes === '' ? null : String(notes));
+    }
+    if (spot_check_ratio !== undefined) {
+      updates.push(`spot_check_ratio = $${i++}`);
+      if (spot_check_ratio === null || spot_check_ratio === '') vals.push(null);
+      else {
+        const n = Number(spot_check_ratio);
+        if (Number.isNaN(n) || n < 0 || n > 999.99) return error(res, '时点护患比数值无效');
+        vals.push(n);
+      }
+    }
+    if (sunday_ratio !== undefined) {
+      updates.push(`sunday_ratio = $${i++}`);
+      if (sunday_ratio === null || sunday_ratio === '') vals.push(null);
+      else {
+        const n = Number(sunday_ratio);
+        if (Number.isNaN(n) || n < 0 || n > 999.99) return error(res, '周日时点护患比数值无效');
+        vals.push(n);
+      }
+    }
+    if (updates.length === 0) return error(res, '无可更新字段');
+
+    vals.push(yy, mm);
+    const { rows } = await pool.query(
+      `UPDATE qc_reports SET ${updates.join(', ')}, updated_at = NOW()
+       WHERE report_year = $${i++} AND report_month = $${i}
+       RETURNING *`,
+      vals,
+    );
+    return success(res, rows[0], '已保存');
+  } catch (err) { next(err); }
+});
+
 // POST /api/reports/qc-upload/:year/:month/confirm - 科主任确认
 router.post('/qc-upload/:year/:month/confirm', auth, rbac(['admin']), async (req, res, next) => {
   try {
@@ -111,7 +188,8 @@ router.get('/qc-upload/:year/:month/export', auth, async (req, res, next) => {
 
     sheet.addRow(['质控指标', '数值', '计算说明']);
     sheet.addRow(['平均护患比', `1:${report.nurse_patient_ratio}`, `患者${report.total_patient_sessions}次 / 护士${report.total_nurse_sessions}次`]);
-    sheet.addRow(['时点护患比', report.spot_check_ratio ? `1:${report.spot_check_ratio}` : '待填', '时点调查']);
+    sheet.addRow(['时点护患比', report.spot_check_ratio != null && report.spot_check_ratio !== '' ? `1:${report.spot_check_ratio}` : '待填', '时点调查']);
+    sheet.addRow(['某周日时点护患比', report.sunday_ratio != null && report.sunday_ratio !== '' ? `1:${report.sunday_ratio}` : '待填', '周日抽查']);
     sheet.addRow(['体外循环凝血发生率', report.circuit_clotting_rate, `${report.circuit_clotting_count}次/${report.total_sessions}次`]);
     sheet.addRow(['体外循环漏血发生率', report.membrane_rupture_rate, `${report.membrane_rupture_count}次/${report.total_sessions}次`]);
     sheet.addRow(['内瘘穿刺损伤发生率', report.puncture_injury_rate, `${report.puncture_injury_count}次/${report.avf_sessions}次`]);
@@ -124,6 +202,58 @@ router.get('/qc-upload/:year/:month/export', auth, async (req, res, next) => {
 
     await workbook.xlsx.write(res);
     res.end();
+  } catch (err) { next(err); }
+});
+
+// GET /api/reports/qc-upload/:year/:month/export-pdf — 简明 PDF（ASCII 标签，含全部数值；正式中文表请用 Excel）
+router.get('/qc-upload/:year/:month/export-pdf', auth, async (req, res, next) => {
+  try {
+    const { year, month } = req.params;
+    const yy = parseInt(year, 10);
+    const mm = parseInt(month, 10);
+    const { rows } = await pool.query(
+      'SELECT * FROM qc_reports WHERE report_year = $1 AND report_month = $2',
+      [yy, mm],
+    );
+    if (rows.length === 0) return notFound(res, '报表不存在');
+
+    const PDFDocument = require('pdfkit');
+    const report = rows[0];
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="qc_report_${year}_${month}.pdf"`,
+    );
+    doc.pipe(res);
+
+    doc.fontSize(14).text('Dialysis Unit — Monthly QC Indicators (summary)', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).text(`Period: ${year}-${String(month).padStart(2, '0')}   Status: ${report.status}`, {
+      align: 'center',
+    });
+    doc.moveDown();
+
+    const line = (label, val) => {
+      doc.fontSize(10).text(`${label}: ${val}`, { continued: false });
+    };
+
+    line('Nurse:patient ratio (avg)', `1:${report.nurse_patient_ratio}`);
+    line('Patient sessions / Nurse sessions', `${report.total_patient_sessions} / ${report.total_nurse_sessions}`);
+    if (report.spot_check_ratio != null) line('Spot-check ratio', `1:${report.spot_check_ratio}`);
+    if (report.sunday_ratio != null) line('Sunday spot ratio', `1:${report.sunday_ratio}`);
+    doc.moveDown(0.3);
+    line('Total dialysis sessions', String(report.total_sessions));
+    line('Circuit clotting count / rate', `${report.circuit_clotting_count} / ${report.circuit_clotting_rate}`);
+    line('Membrane rupture count / rate', `${report.membrane_rupture_count} / ${report.membrane_rupture_rate}`);
+    line('AVF sessions', String(report.avf_sessions));
+    line('Puncture injury count / rate', `${report.puncture_injury_count} / ${report.puncture_injury_rate}`);
+    line('CVC catheter-days / CRBSI / rate', `${report.cvc_catheter_days} / ${report.crbsi_count} / ${report.crbsi_rate}`);
+    if (report.notes) {
+      doc.moveDown();
+      doc.fontSize(9).text(`Notes: ${report.notes}`, { width: 500 });
+    }
+    doc.end();
   } catch (err) { next(err); }
 });
 
