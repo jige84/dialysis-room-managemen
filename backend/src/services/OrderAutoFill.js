@@ -17,7 +17,43 @@ function normalizeOrderType(raw) {
   return String(raw).trim().toLowerCase();
 }
 
+/**
+ * 「每透析日」医嘱：护士正在透析录入即视为本次透析，不应因排班表某日未录入而隐藏（仍保留其他频次的排班日对齐）。
+ */
+function isEverySessionDialysisOrder(order) {
+  return (
+    normalizeOrderType(order.order_type) === 'dialysis_drug' &&
+    normalizeOrderFrequency(order.frequency) === 'every_session'
+  );
+}
+
 class OrderAutoFill {
+  /**
+   * 患者是否已有任意排班记录（用于判断是否启用「仅排班透析日」规则）
+   */
+  async patientHasAnySchedule(patientId) {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM schedules WHERE patient_id = $1 LIMIT 1`,
+      [patientId],
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * 指定日期是否有有效上机排班（非取消）
+   */
+  async hasDialysisScheduleOnDate(patientId, sessionDate) {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM schedules
+       WHERE patient_id = $1
+         AND scheduled_date = $2::date
+         AND COALESCE(status, 'planned') <> 'cancelled'
+       LIMIT 1`,
+      [patientId, sessionDate],
+    );
+    return rows.length > 0;
+  }
+
   /**
    * 为某次透析准备数据（自动带入处方+医嘱）
    * @param {string} patientId 患者ID
@@ -38,6 +74,11 @@ class OrderAutoFill {
       [patientId]
     );
     const prescription = rxRows[0] || null;
+
+    const usesSchedules = await this.patientHasAnySchedule(patientId);
+    const onDialysisScheduleDate = usesSchedules
+      ? await this.hasDialysisScheduleOnDate(patientId, date)
+      : true;
 
     // 获取当前有效医嘱（含今日应执行的）
     const { rows: orders } = await pool.query(
@@ -60,20 +101,23 @@ class OrderAutoFill {
         const allowed = orderTypes.some((t) => normalizeOrderType(t) === ot);
         if (!allowed) continue;
       }
-      const shouldExecute = await this.shouldExecuteToday(order, date, patientId);
-      if (shouldExecute) {
-        // 检查是否已执行过（同一天）
-        const { rows: execRows } = await pool.query(
-          `SELECT id FROM order_executions
-           WHERE long_term_order_id = $1 AND execution_date = $2`,
-          [order.id, date]
-        );
-        ordersToday.push({
-          ...order,
-          alreadyExecuted: execRows.length > 0,
-          executionId: execRows[0]?.id || null,
-        });
+      const shouldExecute = await this.shouldExecuteToday(order, date, patientId, prescription);
+      if (!shouldExecute) continue;
+      const otNorm = normalizeOrderType(order.order_type);
+      if (otNorm === 'dialysis_drug' && usesSchedules && !onDialysisScheduleDate) {
+        if (!isEverySessionDialysisOrder(order)) continue;
       }
+      // 检查是否已执行过（同一天）
+      const { rows: execRows } = await pool.query(
+        `SELECT id FROM order_executions
+         WHERE long_term_order_id = $1 AND execution_date = $2`,
+        [order.id, date],
+      );
+      ordersToday.push({
+        ...order,
+        alreadyExecuted: execRows.length > 0,
+        executionId: execRows[0]?.id || null,
+      });
     }
 
     /**
@@ -89,6 +133,7 @@ class OrderAutoFill {
           if (!allowed) continue;
         }
         if (normalizeOrderType(order.order_type) !== 'dialysis_drug') continue;
+        if (usesSchedules && !onDialysisScheduleDate && !isEverySessionDialysisOrder(order)) continue;
         const { rows: execRows } = await pool.query(
           `SELECT id FROM order_executions
            WHERE long_term_order_id = $1 AND execution_date = $2::date`,
@@ -126,25 +171,35 @@ class OrderAutoFill {
    * 判断某医嘱在 sessionDate 是否应出现在透析确认列表
    * @param {object} order 医嘱对象
    * @param {string} date YYYY-MM-DD
+   * @param {object|null} [prescription] 当前有效处方（用于 tiw 未填 detail 时按每周透析次数对齐）
    */
-  async shouldExecuteToday(order, date, patientId) {
+  async shouldExecuteToday(order, date, patientId, prescription = null) {
     const { frequency_detail } = order;
     const frequency = normalizeOrderFrequency(order.frequency);
     const dayOfWeek = new Date(`${date}T12:00:00`).getDay(); // 本地中午，避免 UTC 边界导致周几错位
+    const perWeekRaw = prescription?.frequency_per_week;
+    const perWeek = perWeekRaw != null && perWeekRaw !== '' ? Number(perWeekRaw) : NaN;
 
     switch (frequency) {
       case 'every_session':
-        return true;  // 每次透析都执行
+        return true;  // 每次透析都执行（是否与「排班日」一致由 prepareForDialysis 外层筛选）
 
       case 'qd':
         return true;  // 每日执行
 
       case 'tiw': {
-        // 每周3次（通常周一/三/五 或 周二/四/六）
+        // 每周3次（通常周一/三/五 或 周二/四/六）；未填 detail 时可按处方每周透析次数近似对齐
         const tiw135 = [1, 3, 5];
         const tiw246 = [2, 4, 6];
         const tiwMode = frequency_detail != null ? String(frequency_detail).trim() : '';
         if (tiwMode === '246') return tiw246.includes(dayOfWeek);
+        if (tiwMode !== '') return tiw135.includes(dayOfWeek);
+        if (Number.isFinite(perWeek) && perWeek === 2) {
+          return [1, 4].includes(dayOfWeek);
+        }
+        if (Number.isFinite(perWeek) && perWeek === 1) {
+          return dayOfWeek === 1;
+        }
         return tiw135.includes(dayOfWeek);
       }
 

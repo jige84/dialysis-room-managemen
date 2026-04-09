@@ -810,7 +810,7 @@ class AiAnalysisService {
    * @param {object} [meta]
    */
   async generateGuidelineReadingNote(rawText, meta = {}) {
-    const text = String(rawText || '').trim().slice(0, 120000);
+    const text = String(rawText || '').trim().slice(0, 65000);
     if (!text) {
       const err = new Error('正文为空，无法生成读书笔记');
       err.statusCode = 400;
@@ -1140,6 +1140,40 @@ class AiAnalysisService {
       kbSnippets,
       kbQuery,
     });
+  }
+
+  /**
+   * 将外站网页纯文本摘录整理为简体中文摘要（抓取入库用，非临床诊断）
+   * @param {string} excerpt
+   * @param {string} [linkTitleHint]
+   */
+  async summarizeWebExcerptToChinese(excerpt, linkTitleHint = '') {
+    const text = String(excerpt || '').trim().slice(0, 25000);
+    if (!text) {
+      const err = new Error('摘录为空');
+      err.statusCode = 400;
+      throw err;
+    }
+    const systemPrompt =
+      '你是医学文献编辑。只根据用户给出的网页文字整理摘要，不得编造具体患者数据或虚构文献。';
+    const userPrompt =
+      (linkTitleHint ? `链接标题提示：${String(linkTitleHint).slice(0, 200)}\n` : '') +
+      '请将下列网页文字整理为「简体中文」医学摘要，结构上分为：内容概述、关键要点（分条）、临床相关提示（若原文无则写「原文未详述」）。' +
+      '篇幅约800–2000字；专有名词可保留英文缩写。\n\n网页摘录：\n' +
+      text;
+    const result = await callQwen({
+      systemPrompt,
+      userPrompt,
+      context: null,
+      useBaseClinicalPrompt: false,
+    });
+    const out = String(result.content || '').trim();
+    if (!out) {
+      const err = new Error('模型未返回有效简体中文摘要');
+      err.statusCode = 502;
+      throw err;
+    }
+    return out;
   }
 }
 

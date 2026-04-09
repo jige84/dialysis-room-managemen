@@ -7,8 +7,9 @@
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': '今日概览',
   '/patients': '患者档案',
-  '/dialysis/today': '今日上机名单',
-  '/dialysis/entry': '透析记录录入',
+  '/dialysis': '透析工作台',
+  '/dialysis/today': '透析工作台',
+  '/dialysis/entry': '透析工作台',
   '/prescription': '透析处方管理',
   '/orders': '长期医嘱单',
   '/labs': '检验结果管理',
@@ -31,6 +32,7 @@ export function getPageTitle(pathname: string): string {
   if (pathname === '/patients') return PAGE_TITLES['/patients'];
   if (pathname === '/patients/new') return '新建患者档案';
   if (/^\/patients\/[^/]+$/.test(pathname)) return '患者详情';
+  if (pathname === '/dialysis' || pathname === '/dialysis/') return PAGE_TITLES['/dialysis'];
 
   const exact = PAGE_TITLES[pathname];
   if (exact) return exact;

@@ -686,7 +686,7 @@ export default function SchedulePage() {
                   size="small"
                   onClick={() =>
                     navigate(
-                      `/dialysis/entry?patient_id=${encodeURIComponent(row.patient_id)}&date=${encodeURIComponent(row.scheduled_date)}`,
+                      `/dialysis/entry?patient_id=${encodeURIComponent(row.patient_id)}&date=${encodeURIComponent(dayjs().format('YYYY-MM-DD'))}`,
                     )
                   }
                 >

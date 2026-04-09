@@ -39,4 +39,22 @@ export const medicalSitesApi = {
       `/medical-sites/${siteKey}/test`,
     );
   },
+
+  /** 从已启用站点抓取指南/共识摘要并入库（仅管理员；耗时较长，单独延长超时） */
+  importGuidance(body?: { siteKeys?: string[]; maxItems?: number }) {
+    return request.post<
+      ApiResponse<{
+        imported: number;
+        notified_users: number;
+        results: Array<{
+          site_key: string;
+          url: string;
+          status: string;
+          guideline_id?: string;
+          title?: string;
+        }>;
+        errors: Array<{ site_key?: string; step?: string; url?: string; message?: string }>;
+      }>
+    >('/medical-sites/import-guidance', body ?? {}, { timeout: 300000 });
+  },
 };

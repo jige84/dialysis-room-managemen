@@ -37,8 +37,10 @@ export function pathToMenuKey(pathname: string): SidebarMenuKey | null {
   const p = pathname.replace(/\/$/, '') || '/';
   if (p === '/' || p.startsWith('/dashboard')) return '/dashboard';
   if (p.startsWith('/patients')) return '/patients';
-  if (p.startsWith('/dialysis/today')) return '/dialysis/entry';
-  if (p.startsWith('/dialysis/entry')) return '/dialysis/entry';
+  if (p.startsWith('/dialysis')) {
+    if (p.startsWith('/dialysis/entry')) return '/dialysis/entry';
+    return '/dialysis/today';
+  }
   if (p.startsWith('/ai/assistant')) return '/ai/assistant';
   if (p.startsWith('/ai/guidelines')) return '/ai/guidelines';
   if (p.startsWith('/ai/knowledge')) return '/ai/knowledge';
@@ -66,6 +68,12 @@ export function isPathAllowedByMenuPermissions(
   pathname: string,
   menuPermissions: string[] | null | undefined
 ): boolean {
+  const mp = normalizeMenuPermissions(menuPermissions);
+  if (mp === null || mp === undefined) return true;
+  if (mp.length === 0) return false;
+  if (pathname.startsWith('/dialysis')) {
+    return mp.includes('/dialysis/today') || mp.includes('/dialysis/entry');
+  }
   const key = pathToMenuKey(pathname);
   return isMenuKeyAllowed(key, menuPermissions);
 }

@@ -7,6 +7,7 @@ const { rbac } = require('../middleware/rbac');
 const { requireMenuPermissionAny } = require('../middleware/menuPermission');
 const { success, error } = require('../utils/response');
 const MedicalSiteService = require('../services/MedicalSiteService');
+const MedicalSiteImportService = require('../services/MedicalSiteImportService');
 
 const router = express.Router();
 
@@ -44,6 +45,22 @@ router.post('/:siteKey/test', auth, rbac(['admin']), async (req, res) => {
   } catch (err) {
     const code = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
     return error(res, err.message || '测试失败', code);
+  }
+});
+
+/** 从已启用站点抓取指南/共识摘要并写入指南阅读中心与知识库（仅管理员；可能耗时数分钟） */
+router.post('/import-guidance', auth, rbac(['admin']), async (req, res) => {
+  try {
+    const { siteKeys, maxItems } = req.body || {};
+    const data = await MedicalSiteImportService.importFromEnabledSites({
+      userId: req.user?.id || null,
+      siteKeys: Array.isArray(siteKeys) ? siteKeys : undefined,
+      maxItems,
+    });
+    return success(res, data);
+  } catch (err) {
+    const code = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
+    return error(res, err.message || '获取资料失败', code);
   }
 });
 

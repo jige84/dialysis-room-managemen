@@ -37,6 +37,8 @@ export const AI_CLINICAL_MENU_KEYS: readonly SidebarMenuKey[] = [
 
 export type SidebarNavItem = {
   key: SidebarMenuKey;
+  /** 与 key 不一致时的实际路由（如透析工作台挂载在 /dialysis） */
+  routePath?: string;
   icon: string;
   label: string;
   adminOnly?: boolean;
@@ -59,8 +61,7 @@ export const SIDEBAR_NAV_SECTIONS: SidebarNavSection[] = [
     title: '患者管理',
     items: [
       { key: '/patients', icon: '👥', label: '患者档案' },
-      { key: '/dialysis/today', icon: '📋', label: '今日上机名单' },
-      { key: '/dialysis/entry', icon: '💉', label: '透析记录录入' },
+      { key: '/dialysis/today', routePath: '/dialysis', icon: '💉', label: '透析工作台' },
       { key: '/prescription', icon: '💊', label: '透析处方管理' },
       { key: '/orders', icon: '📋', label: '长期医嘱单' },
       { key: '/labs', icon: '🧪', label: '检验结果管理' },

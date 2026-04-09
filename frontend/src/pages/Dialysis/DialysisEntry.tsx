@@ -9,7 +9,7 @@ import {
   DatePicker, message, Alert, Radio, Tag, Tooltip, Modal,
 } from 'antd';
 import {
-  SaveOutlined, ArrowLeftOutlined, PlusOutlined,
+  SaveOutlined, PlusOutlined,
   DeleteOutlined, ClockCircleOutlined, CheckCircleFilled,
   WarningFilled, InfoCircleFilled, EditOutlined, CloseOutlined,
   FileTextOutlined, PrinterOutlined,
@@ -52,10 +52,15 @@ import AnomalyAnalysisModal from '../../components/AnomalyAnalysisModal/AnomalyA
 import type { AnomalyType } from '../../utils/anomalyAnalysis';
 import {
   HD_PRESCRIPTION_SAVED_EVENT,
+  HD_LONG_TERM_ORDER_SAVED_EVENT,
   type PrescriptionSavedDetail,
+  type LongTermOrderSavedDetail,
 } from '../../constants/prescriptionSyncEvents';
 import ordersApi, { FREQ_LABELS, EXEC_TIMING_LABELS, type LongTermOrder } from '../../api/orders';
-import { describeFrequencyDetailForOrder } from '../../utils/longTermOrderScheduleText';
+import {
+  describeDialysisOrderFrequencyForSession,
+  describeFrequencyDetailForOrder,
+} from '../../utils/longTermOrderScheduleText';
 import {
   DIALYSIS_ENTRY_DRAFT_VERSION,
   type DialysisEntryDraftSnapshot,
@@ -362,12 +367,19 @@ const PENDING_ORDERS = [
 ];
 
 /** 与长期医嘱页「具体执行」同源，并按床旁核对习惯将「透析前/中/后」排在频次说明附近 */
-function formatOrderSessionDetail(o: OrderForSession): string {
+function formatOrderSessionDetail(
+  o: OrderForSession,
+  prescriptionSessionsPerWeek?: number | null,
+): string {
   const parts: string[] = [];
   if (o.route?.trim()) parts.push(o.route.trim());
   const freqKey = String(o.frequency ?? '');
   const fl = FREQ_LABELS[freqKey] || freqKey;
-  const scheduleText = describeFrequencyDetailForOrder(freqKey, o.frequency_detail ?? null);
+  const scheduleText = describeDialysisOrderFrequencyForSession(
+    freqKey,
+    o.frequency_detail ?? null,
+    prescriptionSessionsPerWeek,
+  );
   parts.push(`${fl}（${scheduleText}）`);
   const timing = typeof o.execute_timing === 'string' ? o.execute_timing.trim() : '';
   if (timing) {
@@ -438,7 +450,10 @@ type DialysisOrderExecGroup = {
   rows: DialysisOrderExecRow[];
 };
 
-function buildDialysisOrderExecutionGroups(sessions: OrderForSession[]): DialysisOrderExecGroup[] {
+function buildDialysisOrderExecutionGroups(
+  sessions: OrderForSession[],
+  prescriptionSessionsPerWeek?: number | null,
+): DialysisOrderExecGroup[] {
   /** 先按床旁执行时段排主药，再挂子药；避免仅按 id 排序打乱「透析前→中→后」 */
   const sorted = sortSessionsForBedsideDisplay(sessions);
   const byParent = new Map<string, OrderForSession[]>();
@@ -460,14 +475,14 @@ function buildDialysisOrderExecutionGroups(sessions: OrderForSession[]): Dialysi
       {
         key: root.id,
         drug: (root.drug_name || '（未命名药品）').trim(),
-        detail: formatOrderSessionDetail(root),
+        detail: formatOrderSessionDetail(root, prescriptionSessionsPerWeek),
         alreadyExecuted: root.alreadyExecuted,
         isComboChild: false,
       },
       ...children.map((ch) => ({
         key: ch.id,
         drug: (ch.drug_name || '（未命名药品）').trim(),
-        detail: formatOrderSessionDetail(ch),
+        detail: formatOrderSessionDetail(ch, prescriptionSessionsPerWeek),
         alreadyExecuted: ch.alreadyExecuted,
         isComboChild: true,
       })),
@@ -489,7 +504,7 @@ function buildDialysisOrderExecutionGroups(sessions: OrderForSession[]): Dialysi
         {
           key: o.id,
           drug: (o.drug_name || '（未命名药品）').trim(),
-          detail: formatOrderSessionDetail(o),
+          detail: formatOrderSessionDetail(o, prescriptionSessionsPerWeek),
           alreadyExecuted: o.alreadyExecuted,
           isComboChild: !!o.parent_order_id,
         },
@@ -502,9 +517,12 @@ function buildDialysisOrderExecutionGroups(sessions: OrderForSession[]): Dialysi
 }
 
 /** 组合医嘱：主药与子药共用同一勾选状态（与床旁一次确认一致） */
-function buildInitialOrdersMapFromSessions(list: OrderForSession[]): Record<string, boolean> {
+function buildInitialOrdersMapFromSessions(
+  list: OrderForSession[],
+  prescriptionSessionsPerWeek?: number | null,
+): Record<string, boolean> {
   const byId = new Map(list.map((o) => [o.id, o]));
-  const groups = buildDialysisOrderExecutionGroups(list);
+  const groups = buildDialysisOrderExecutionGroups(list, prescriptionSessionsPerWeek);
   const out: Record<string, boolean> = {};
   for (const g of groups) {
     if (g.isCombo) {
@@ -522,9 +540,10 @@ function buildInitialOrdersMapFromSessions(list: OrderForSession[]): Record<stri
 function mergeDraftOrdersWithSessions(
   list: OrderForSession[] | undefined,
   draft: Record<string, boolean>,
+  prescriptionSessionsPerWeek?: number | null,
 ): Record<string, boolean> {
   if (!list?.length) return { ...draft };
-  const base = buildInitialOrdersMapFromSessions(list);
+  const base = buildInitialOrdersMapFromSessions(list, prescriptionSessionsPerWeek);
   const valid = new Set(list.map((o) => o.id));
   const out = { ...base };
   for (const k of Object.keys(draft)) {
@@ -1139,6 +1158,7 @@ function modalityCodeFromScheduleOrRx(
 export default function DialysisEntryPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   /** 本人签名展示名：优先真实姓名，空则回退登录名（避免库内 real_name 未维护时整段为空） */
@@ -1160,8 +1180,8 @@ export default function DialysisEntryPage() {
   } | null>(null);
 
   const [selectedPatient, setSelectedPatient] = useState<string>('');
-  /** 选中的日期（DatePicker），默认今日 */
-  const [sessionDate, setSessionDate] = useState<Dayjs>(dayjs());
+  /** 选中的日期（DatePicker），默认今日（与本地日历日对齐） */
+  const [sessionDate, setSessionDate] = useState<Dayjs>(() => dayjs().startOf('day'));
   /** 与处方工作台 mergePrescriptionDefaultsForPatient 同源（演示默认值 + 医生保存的参数），仅展示只读 */
   const [rxDefaults, setRxDefaults] = useState<Record<string, unknown> | null>(null);
   /** 真实患者：从 /api/dialysis/prepare 获取的处方与医嘱数据 */
@@ -1250,7 +1270,13 @@ export default function DialysisEntryPage() {
       setComplications(d.complications);
       setComplicationRecords(d.complicationRecords);
       if (isRealPatientId(selectedPatient) && realPrepareData?.ordersToday?.length) {
-        setOrders(mergeDraftOrdersWithSessions(realPrepareData.ordersToday, d.orders));
+        setOrders(
+          mergeDraftOrdersWithSessions(
+            realPrepareData.ordersToday,
+            d.orders,
+            realPrepareData.prescription?.frequency_per_week ?? null,
+          ),
+        );
       } else {
         setOrders(d.orders);
       }
@@ -1362,12 +1388,14 @@ export default function DialysisEntryPage() {
     };
   }, [selectedPatient]);
 
-  /** URL：?patient_id=&date= 与排班页跳转一致 */
+  /** URL：?patient_id=&date= 与排班页跳转一致；无 date 时用当前本地日，避免残留状态与「今日」不一致 */
   useEffect(() => {
     const pid = searchParams.get('patient_id');
     const ds = searchParams.get('date');
     if (ds && /^\d{4}-\d{2}-\d{2}$/.test(ds) && dayjs(ds, 'YYYY-MM-DD', true).isValid()) {
-      setSessionDate(dayjs(ds));
+      setSessionDate(dayjs(ds).startOf('day'));
+    } else {
+      setSessionDate(dayjs().startOf('day'));
     }
     if (pid && isRealPatientId(pid) && !urlPatientInitRef.current) {
       urlPatientInitRef.current = true;
@@ -1398,6 +1426,20 @@ export default function DialysisEntryPage() {
     };
     window.addEventListener(HD_PRESCRIPTION_SAVED_EVENT, handler as EventListener);
     return () => window.removeEventListener(HD_PRESCRIPTION_SAVED_EVENT, handler as EventListener);
+  }, [selectedPatient]);
+
+  /** 长期医嘱页开立/停止成功：当前选中患者一致时刷新 prepare（今日医嘱执行确认） */
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const ce = ev as CustomEvent<LongTermOrderSavedDetail>;
+      const d = ce.detail;
+      if (!d?.patientId) return;
+      if (d.patientId === selectedPatient && isRealPatientId(selectedPatient)) {
+        setPrepareRefreshNonce((n) => n + 1);
+      }
+    };
+    window.addEventListener(HD_LONG_TERM_ORDER_SAVED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(HD_LONG_TERM_ORDER_SAVED_EVENT, handler as EventListener);
   }, [selectedPatient]);
 
   /** 真实患者：随患者或透析日期变化重新加载当前处方与当日医嘱（与透析处方管理保存结果一致） */
@@ -1563,11 +1605,12 @@ export default function DialysisEntryPage() {
     if (!realPrepareData?.ordersToday?.length) {
       return [];
     }
+    const rxPerWeek = realPrepareData.prescription?.frequency_per_week ?? null;
     const sorted = sortSessionsForBedsideDisplay(realPrepareData.ordersToday);
     return sorted.map((o: OrderForSession) => ({
       key: o.id,
       drug: `${o.parent_order_id ? '↳ ' : ''}${(o.drug_name || '（未命名药品）').trim()}`,
-      detail: formatOrderSessionDetail(o),
+      detail: formatOrderSessionDetail(o, rxPerWeek),
       alreadyExecuted: o.alreadyExecuted,
     }));
   }, [selectedPatient, realPrepareData]);
@@ -1590,7 +1633,10 @@ export default function DialysisEntryPage() {
       }));
     }
     if (!realPrepareData?.ordersToday?.length) return [];
-    return buildDialysisOrderExecutionGroups(realPrepareData.ordersToday);
+    return buildDialysisOrderExecutionGroups(
+      realPrepareData.ordersToday,
+      realPrepareData.prescription?.frequency_per_week ?? null,
+    );
   }, [selectedPatient, realPrepareData]);
 
   useEffect(() => {
@@ -1607,7 +1653,12 @@ export default function DialysisEntryPage() {
       setOrders({});
       return;
     }
-    setOrders(buildInitialOrdersMapFromSessions(list));
+    setOrders(
+      buildInitialOrdersMapFromSessions(
+        list,
+        realPrepareData?.prescription?.frequency_per_week ?? null,
+      ),
+    );
   }, [selectedPatient, sessionDate, realPrepareData]);
 
   /** prepare 就绪后恢复 sessionStorage 草稿（与处方刷新后再次叠加，以本地未入库编辑为准） */
@@ -2000,7 +2051,7 @@ export default function DialysisEntryPage() {
     }
   };
 
-  const autoGeneratedDate = dayjs().format('YYYY年M月D日');
+  const autoGeneratedDate = sessionDate.format('YYYY年M月D日');
   const prescribingDoctorName =
     PATIENTS_LIST.find(p => p.value === selectedPatient)?.prescribingDoctorName ?? null;
   const hasEmergency = complications.some(c => COMPLICATIONS.find(co => co.value === c)?.emergency);
@@ -2011,7 +2062,7 @@ export default function DialysisEntryPage() {
     const formValues = form.getFieldsValue() as Record<string, unknown>;
     const html = generatePrintHtml({
       patientLabel: patient?.label?.split(' — ').join(' ') ?? selectedPatient,
-      printDate: dayjs().format('YYYY年MM月DD日'),
+      printDate: sessionDate.format('YYYY年MM月DD日'),
       prescribingDoctorName,
       rxPrint: buildRxPrintBundle(rxDefaults, patient ?? null),
       dryWeight,
@@ -2041,7 +2092,7 @@ export default function DialysisEntryPage() {
     win.document.write(html);
     win.document.close();
   }, [
-    selectedPatient, prescribingDoctorName, rxDefaults, dryWeight, postWeight,
+    selectedPatient, sessionDate, prescribingDoctorName, rxDefaults, dryWeight, postWeight,
     durationHours, preBun, postBun, computedUF, ufPercent, ufAlert,
     accessType, catheterLocation, catheterDays, complications, complicationRecords,
     orders, orderDisplayList, vitalRows, ktv, urr, ktvAdequate, urrAdequate, form,
@@ -2056,17 +2107,18 @@ export default function DialysisEntryPage() {
         borderBottom: '2px solid #EDF0F7',
         marginBottom: 16,
       }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} size="small">返回</Button>
-
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
             <span style={{ fontWeight: 700, fontSize: 16, color: '#0D1B3E' }}>录入透析记录</span>
-            <span style={{ fontSize: 12, color: '#94A3B8' }}>{dayjs().format('YYYY年MM月DD日 dddd')}</span>
+            <span style={{ fontSize: 12, color: '#94A3B8' }}>
+              {sessionDate.format('YYYY年MM月DD日 dddd')}
+            </span>
           </div>
         </div>
 
-        {/* 透析日期（患者请从「今日上机名单」或带 patient_id 的链接进入） */}
+        {/* 与标题旁日期、prepare、保存 session_date 均为同一 sessionDate */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: '#64748B', whiteSpace: 'nowrap' }}>透析日期</span>
           <DatePicker
             value={sessionDate}
             onChange={(val) => val && setSessionDate(val)}
@@ -3627,11 +3679,10 @@ export default function DialysisEntryPage() {
 
         {/* 底部操作栏 */}
         <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
           padding: '14px 0 6px',
           borderTop: '1px solid #EDF0F7',
         }}>
-          <Button onClick={() => navigate(-1)}>取消，返回上页</Button>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {hasEmergency && (
               <span style={{ color: '#DC2626', fontSize: 13, fontWeight: 600 }}>

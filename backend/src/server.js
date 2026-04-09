@@ -91,6 +91,12 @@ app.use('/api/patients', (req, res, next) => {
   next();
 });
 
+// ── 透析记录/准备数据含医嘱与处方摘要，禁止中间层/浏览器用 304 返回陈旧体 ──
+app.use('/api/dialysis', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  next();
+});
+
 // ── 请求解析 ─────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));

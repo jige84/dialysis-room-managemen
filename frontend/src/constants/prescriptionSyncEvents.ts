@@ -7,3 +7,13 @@ export type PrescriptionSavedDetail = {
   patientId: string;
   savedAt: string;
 };
+
+/**
+ * 长期医嘱开立/停止等变更后与透析录入页联动（重新拉取 prepare 中的 ordersToday）
+ */
+export const HD_LONG_TERM_ORDER_SAVED_EVENT = 'hd-long-term-order-saved';
+
+export type LongTermOrderSavedDetail = {
+  patientId: string;
+  savedAt: string;
+};

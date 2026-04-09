@@ -154,7 +154,14 @@ router.post('/:patientId', auth, rbac(['admin','doctor']),
         [req.params.patientId]
       );
 
-      const vf = valid_from || new Date().toISOString().slice(0, 10);
+      // 勿用 toISOString() 取日期（UTC 与中国时区夜间会差一天）；缺省时用服务端本地日或依赖前端传 valid_from
+      const vf =
+        valid_from ||
+        (() => {
+          const d = new Date();
+          const p = (n) => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        })();
 
       await client.query('BEGIN');
 

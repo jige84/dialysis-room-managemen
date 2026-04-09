@@ -4,9 +4,9 @@
  * 主要功能：处方表单编辑；历史版本 Modal；保存时对接 prescriptions API。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Select, Button, InputNumber, Input, Form, Divider, Table, Modal, message, Tag, Alert, TimePicker, Collapse } from 'antd';
+import { Card, Select, Button, InputNumber, Input, Form, Divider, Table, Modal, message, Tag, Alert, TimePicker, Collapse, Tooltip } from 'antd';
 import dayjs from 'dayjs';
-import { HistoryOutlined, SaveOutlined } from '@ant-design/icons';
+import { HistoryOutlined, SaveOutlined, InfoCircleFilled, CheckCircleFilled } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import PageShell from '../../components/PageShell/PageShell';
 import { getDialyzerSelectOptions } from '../../constants/dialyzerConsumables';
@@ -33,9 +33,20 @@ import prescriptionsApi, { type PrescriptionRecord } from '../../api/prescriptio
 import { patientsApi, type Patient } from '../../api/patients';
 import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import { isUuid } from '../../utils/anomalyAnalysis';
+import {
+  scheduleShiftLabel,
+  sessionDialysisModeShort,
+  accessTypeCn,
+  isolationTagProps,
+  ageFromDob,
+  groupTodayScheduleRowsByShiftThenZone,
+} from '../../utils/dialysisTodayScheduleDisplay';
 import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantToDb } from '../../constants/prescriptionAnticoagulant';
 import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
 import { useAuthStore } from '../../stores/authStore';
+
+/** 今日排班名单侧栏宽度（窄栏 + 标签换行；与透析工作台 240px 同级） */
+const PRESCRIPTION_TODAY_SIDER_WIDTH = 228;
 
 const FREQUENCY_PRESET_OPTIONS = [
   { value: 'weekly_2', label: '每周2次' },
@@ -522,58 +533,6 @@ function scheduleDateKeyLocal(raw: unknown): string {
   return scheduleDateKeyLocal(String(raw));
 }
 
-function todayScheduleModeShort(mode: string | null | undefined): string {
-  if (!mode) return 'HD';
-  const u = String(mode).trim().toUpperCase().replace(/\+/g, '_');
-  if (u === 'HD_HP' || u === 'HDHP') return 'HD+HP';
-  if (u === 'HDF') return 'HDF';
-  return 'HD';
-}
-
-/** 与排班 shift 字段对齐，用于今日上机名单按时段分组 */
-type ScheduleTimeGroup = 'am' | 'pm' | 'eve' | 'other';
-
-const SCHEDULE_TIME_SECTIONS: { key: ScheduleTimeGroup; title: string; accent: string }[] = [
-  { key: 'am', title: '上午', accent: '#1D4ED8' },
-  { key: 'pm', title: '下午', accent: '#0369A1' },
-  { key: 'eve', title: '晚班', accent: '#7C3AED' },
-  { key: 'other', title: '其他时段', accent: '#64748B' },
-];
-
-function scheduleRowToTimeGroup(shift: string | undefined | null): ScheduleTimeGroup {
-  const s = String(shift ?? '')
-    .trim()
-    .toLowerCase();
-  if (s === 'am' || s === 'morning') return 'am';
-  if (s === 'pm' || s === 'afternoon') return 'pm';
-  if (s === 'eve' || s === 'evening' || s === 'night') return 'eve';
-  if (!s) return 'other';
-  return 'other';
-}
-
-function groupTodayScheduleByTime(rows: TodaySchedulePatientRow[]): Record<ScheduleTimeGroup, TodaySchedulePatientRow[]> {
-  const empty: Record<ScheduleTimeGroup, TodaySchedulePatientRow[]> = {
-    am: [],
-    pm: [],
-    eve: [],
-    other: [],
-  };
-  for (const row of rows) {
-    empty[scheduleRowToTimeGroup(row.shift)].push(row);
-  }
-  const sortInGroup = (a: TodaySchedulePatientRow, b: TodaySchedulePatientRow) => {
-    const ma = Number.parseInt(String(a.machine_no ?? '').replace(/\D/g, ''), 10);
-    const mb = Number.parseInt(String(b.machine_no ?? '').replace(/\D/g, ''), 10);
-    if (Number.isFinite(ma) && Number.isFinite(mb) && ma !== mb) return ma - mb;
-    return String(a.patient_name ?? '').localeCompare(String(b.patient_name ?? ''), 'zh-Hans-CN');
-  };
-  empty.am.sort(sortInGroup);
-  empty.pm.sort(sortInGroup);
-  empty.eve.sort(sortInGroup);
-  empty.other.sort(sortInGroup);
-  return empty;
-}
-
 export default function PrescriptionWorkspacePage() {
   const [form] = Form.useForm();
   const [selectedPatient, setSelectedPatient] = useState('');
@@ -674,8 +633,9 @@ export default function PrescriptionWorkspacePage() {
     return [...real, ...demo];
   }, [realPatients]);
 
-  const scheduleTodayByTime = useMemo(
-    () => groupTodayScheduleByTime(scheduleTodayRows),
+  /** 与透析工作台侧栏「今日上机名单」相同：先班次、再分区 */
+  const scheduleTodayGrouped = useMemo(
+    () => groupTodayScheduleRowsByShiftThenZone(scheduleTodayRows),
     [scheduleTodayRows],
   );
 
@@ -1322,127 +1282,245 @@ export default function PrescriptionWorkspacePage() {
         </Button>
       </div>
 
-      {scheduleTodayRows.length > 0 && (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="今日排班 · 上机日处方"
-          description={
-            <div>
-              <span style={{ color: '#64748B', fontSize: 12, display: 'block', marginBottom: 14 }}>
-                以下患者今日有排班；透析处方宜在<strong>上机当日</strong>书写。点选卡片打开并完善处方（透析模式优先采用「今日本条排班」中的透析模式与备注；与提前一周的排班表一致）。
-              </span>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                {SCHEDULE_TIME_SECTIONS.map(({ key, title, accent }) => {
-                  const rows = scheduleTodayByTime[key];
-                  if (!rows.length) return null;
-                  return (
-                    <div key={key}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          marginBottom: 10,
-                          paddingBottom: 6,
-                          borderBottom: `2px solid ${accent}33`,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontWeight: 700,
-                            fontSize: 13,
-                            color: accent,
-                            letterSpacing: 0.5,
-                          }}
-                        >
-                          {title}
-                        </span>
-                        <Tag color="default" style={{ margin: 0, fontSize: 11 }}>
-                          {rows.length} 人
-                        </Tag>
-                      </div>
-                      <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                          gap: 10,
-                        }}
-                      >
-                        {rows.map((row) => {
-                          const active = selectedPatient === row.patient_id;
-                          return (
-                            <Card
-                              key={row.id}
-                              size="small"
-                              hoverable
-                              onClick={() => setSelectedPatient(row.patient_id)}
-                              styles={{
-                                body: { padding: '10px 12px' },
-                              }}
-                              style={{
-                                cursor: 'pointer',
-                                borderRadius: 8,
-                                border: active ? `1px solid ${accent}` : '1px solid #E2E8F0',
-                                background: active ? `${accent}0D` : '#fff',
-                                boxShadow: active ? `0 0 0 1px ${accent}40` : '0 1px 2px rgba(15,23,42,0.06)',
-                                transition: 'border-color 0.2s, box-shadow 0.2s, background 0.2s',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontWeight: 700,
-                                  fontSize: 14,
-                                  color: '#0D1B3E',
-                                  marginBottom: 6,
-                                  lineHeight: 1.3,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                {String(row.patient_name ?? '患者')}
-                              </div>
-                              <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.5 }}>
-                                <span style={{ color: '#334155' }}>
-                                  机位 {row.machine_no != null ? String(row.machine_no) : '—'}
-                                </span>
-                                <span style={{ margin: '0 6px', color: '#CBD5E1' }}>|</span>
-                                <span style={{ fontWeight: 600, color: '#0369A1' }}>
-                                  {todayScheduleModeShort(row.session_dialysis_mode as string | null)}
-                                </span>
-                              </div>
-                            </Card>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+      <div
+        style={{
+          display: 'flex',
+          gap: 16,
+          alignItems: 'stretch',
+          minHeight: 'min(72vh, calc(100vh - 180px))',
+        }}
+      >
+        {scheduleTodayRows.length > 0 ? (
+          <aside
+            style={{
+              flex: `0 0 ${PRESCRIPTION_TODAY_SIDER_WIDTH}px`,
+              width: PRESCRIPTION_TODAY_SIDER_WIDTH,
+              maxWidth: PRESCRIPTION_TODAY_SIDER_WIDTH,
+              alignSelf: 'stretch',
+              background: '#fff',
+              borderRadius: 8,
+              border: '1px solid #EEF2F7',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}
+          >
+            <div
+              style={{
+                padding: '12px 8px 8px',
+                fontWeight: 700,
+                fontSize: 13,
+                color: '#0D1B3E',
+                borderBottom: '1px solid #EEF2F7',
+                flexShrink: 0,
+              }}
+            >
+              今日排班 · 上机日
+            </div>
+            <div
+              style={{
+                padding: '8px 8px 6px',
+                flexShrink: 0,
+                borderBottom: '1px solid #F1F5F9',
+              }}
+            >
+              <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>
+                与排班同步 · 点击卡片选择患者书写处方
               </div>
             </div>
-          }
-        />
-      )}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+                padding: '8px 8px 14px',
+              }}
+            >
+              <div
+                style={{
+                  padding: '0 0 10px',
+                  marginBottom: 8,
+                  borderBottom: '1px solid #EEF2F7',
+                  fontSize: 12,
+                  color: '#64748b',
+                }}
+              >
+                <span style={{ fontWeight: 600, color: '#0f172a' }}>{scheduleTodayRows.length} 人</span>
+                <span style={{ marginLeft: 8 }}>{dayjs().format('YYYY-MM-DD')}</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                {scheduleTodayGrouped.map((shiftBlock, shiftIdx) => (
+                  <section
+                    key={shiftBlock.shiftKey}
+                    style={{
+                      marginTop: shiftIdx > 0 ? 12 : 0,
+                      paddingTop: shiftIdx > 0 ? 10 : 0,
+                      borderTop: shiftIdx > 0 ? '1px solid #EEF2F7' : 'none',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: '#334155',
+                        marginBottom: 8,
+                        letterSpacing: '0.02em',
+                      }}
+                    >
+                      {shiftBlock.shiftLabel}
+                      <Tag color="blue" style={{ marginLeft: 6, fontSize: 11 }}>
+                        {shiftBlock.zones.reduce((n, z) => n + z.rows.length, 0)} 人
+                      </Tag>
+                    </div>
+                    {shiftBlock.zones.map((zoneBlock) => (
+                      <div key={`${shiftBlock.shiftKey}-${zoneBlock.zoneKey}`} style={{ marginBottom: 10 }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            marginBottom: 6,
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 3,
+                              height: 12,
+                              borderRadius: 2,
+                              flexShrink: 0,
+                              background:
+                                zoneBlock.zoneColor === 'orange'
+                                  ? '#ea580c'
+                                  : zoneBlock.zoneColor === 'magenta'
+                                    ? '#c026d3'
+                                    : '#2563eb',
+                            }}
+                            aria-hidden
+                          />
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>
+                            {zoneBlock.zoneLabel}
+                          </span>
+                          <span style={{ fontSize: 11, color: '#94a3b8' }}>{zoneBlock.rows.length} 人</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                          {zoneBlock.rows.map((row) => {
+                            const zone = isolationTagProps(row.isolation_zone);
+                            const hasRecord = Boolean(row.dialysis_record_id);
+                            const remark = row.schedule_remark?.trim();
+                            const age = ageFromDob(row.dob);
+                            const gender = row.gender?.trim();
+                            const meta = [gender, age].filter(Boolean).join(' · ');
+                            const active = selectedPatient === row.patient_id;
+                            const tagCompact = {
+                              margin: 0,
+                              fontSize: 10,
+                              lineHeight: '15px' as const,
+                              padding: '0 3px',
+                            };
+                            return (
+                              <div
+                                key={row.id}
+                                role="button"
+                                tabIndex={0}
+                                className={`hd-schedule-patient-card${active ? ' hd-schedule-patient-card--active' : ''}`}
+                                onClick={() => setSelectedPatient(row.patient_id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setSelectedPatient(row.patient_id);
+                                  }
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontSize: 13,
+                                    fontWeight: 700,
+                                    color: '#0f172a',
+                                    marginBottom: 5,
+                                    lineHeight: 1.3,
+                                    letterSpacing: '0.01em',
+                                  }}
+                                >
+                                  {row.patient_name || '患者'}
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: 3 }}>
+                                  <Tag color={zone.color} style={tagCompact}>
+                                    {zone.label}
+                                  </Tag>
+                                  <Tag style={tagCompact}>{scheduleShiftLabel(row.shift)}</Tag>
+                                  {row.machine_no != null && row.machine_no !== '' ? (
+                                    <Tag color="geekblue" style={tagCompact}>
+                                      {row.machine_no} 号机
+                                    </Tag>
+                                  ) : (
+                                    <Tag style={tagCompact}>机位待定</Tag>
+                                  )}
+                                  <Tag color="cyan" style={tagCompact}>
+                                    {sessionDialysisModeShort(row.session_dialysis_mode)}
+                                  </Tag>
+                                  <Tag style={tagCompact}>{accessTypeCn(row.access_type)}</Tag>
+                                </div>
+                                <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>
+                                  {hasRecord ? (
+                                    <Tag color="success" icon={<CheckCircleFilled />} style={{ margin: 0, fontSize: 10 }}>
+                                      已有记录
+                                    </Tag>
+                                  ) : (
+                                    <span style={{ color: '#ca8a04' }}>待录入</span>
+                                  )}
+                                  {meta ? <span style={{ marginLeft: 6 }}>{meta}</span> : null}
+                                </div>
+                                {remark ? (
+                                  <Tooltip title={remark}>
+                                    <div
+                                      style={{
+                                        marginTop: 4,
+                                        fontSize: 10,
+                                        color: '#0369a1',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      <InfoCircleFilled style={{ marginRight: 4 }} />
+                                      {remark}
+                                    </div>
+                                  </Tooltip>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </section>
+                ))}
+              </div>
+            </div>
+          </aside>
+        ) : null}
 
-      {!selectedPatient && (
-        <div
-          style={{
-            padding: 28,
-            textAlign: 'center',
-            color: '#94A3B8',
-            background: '#F8FAFC',
-            borderRadius: 8,
-            border: '1px dashed #CBD5E1',
-            fontSize: 13,
-          }}
-        >
-          请先在上方选择患者。下方摘要与「录入透析记录」第①段「患者信息 · 处方参数 · 体重超滤」使用同一套演示数据。
-        </div>
-      )}
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+          {!selectedPatient && (
+            <div
+              style={{
+                padding: 28,
+                textAlign: 'center',
+                color: '#94A3B8',
+                background: '#F8FAFC',
+                borderRadius: 8,
+                border: '1px dashed #CBD5E1',
+                fontSize: 13,
+              }}
+            >
+              {scheduleTodayRows.length > 0
+                ? '请先在左侧今日排班名单中点击患者，或使用上方下拉框选择。处方宜在上机当日书写。'
+                : '请先在上方选择患者。下方摘要与「录入透析记录」第①段「患者信息 · 处方参数 · 体重超滤」使用同一套演示数据。'}
+            </div>
+          )}
 
-      {selectedPatient && (
+          {selectedPatient && (
         <Form
           form={form}
           layout="vertical"
@@ -2207,7 +2285,10 @@ export default function PrescriptionWorkspacePage() {
             </div>
           </div>
         </Form>
-      )}
+          )}
+
+        </div>
+      </div>
 
       {/* 处方历史弹窗 */}
       <Modal title="处方修改历史" open={showHistory} onCancel={() => setShowHistory(false)} footer={null} width={680}>

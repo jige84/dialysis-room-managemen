@@ -16,7 +16,7 @@ import { getPageTitle } from '../../utils/pageTitle';
 import { ROLE_LABELS } from '../../constants/roleLabels';
 import { usePermission } from '../../utils/permission';
 import { SIDEBAR_NAV_SECTIONS } from '../../constants/sidebarModules';
-import type { SidebarMenuKey } from '../../constants/sidebarModules';
+import type { SidebarMenuKey, SidebarNavItem } from '../../constants/sidebarModules';
 
 const SIDER_WIDTH = 240;
 const SIDER_COLLAPSED_WIDTH = 64;
@@ -101,11 +101,11 @@ export default function AppLayout() {
     },
   };
 
-  const isActive = (key: string) => {
-    if (key === '/dashboard') return location.pathname === '/dashboard' || location.pathname === '/';
-    if (key === '/dialysis/today') return location.pathname.startsWith('/dialysis/today');
-    if (key === '/dialysis/entry') return location.pathname.startsWith('/dialysis/entry');
-    return location.pathname.startsWith(key);
+  const isNavItemActive = (item: SidebarNavItem) => {
+    const path = item.routePath ?? item.key;
+    if (path === '/dashboard') return location.pathname === '/dashboard' || location.pathname === '/';
+    if (path === '/dialysis') return location.pathname.startsWith('/dialysis');
+    return location.pathname.startsWith(path);
   };
 
   const currentTitle = getPageTitle(location.pathname);
@@ -188,7 +188,8 @@ export default function AppLayout() {
               )}
               {collapsed && <div style={{ height: 8 }} />}
               {section.items.map(item => {
-                const active = isActive(item.key);
+                const navTarget = item.routePath ?? item.key;
+                const active = isNavItemActive(item);
                 const navItem = (
                   <div
                     key={item.key}
@@ -196,11 +197,11 @@ export default function AppLayout() {
                     tabIndex={0}
                     className={`hd-nav-item${active ? ' active' : ''}`}
                     aria-current={active ? 'page' : undefined}
-                    onClick={() => navigate(item.key)}
+                    onClick={() => navigate(navTarget)}
                     onKeyDown={e => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        navigate(item.key);
+                        navigate(navTarget);
                       }
                     }}
                     style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}

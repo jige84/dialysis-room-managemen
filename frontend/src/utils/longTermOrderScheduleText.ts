@@ -81,3 +81,26 @@ export function describeFrequencyDetailForOrder(
       return raw || '—';
   }
 }
+
+/**
+ * 透析录入「今日医嘱执行确认」：在长期医嘱频次说明基础上叠加当前处方每周透析次数，
+ * 与长期医嘱单「具体执行」同源且便于核对「每透析日 / 周几次」是否与处方一致。
+ */
+export function describeDialysisOrderFrequencyForSession(
+  frequency: string,
+  frequencyDetail: string | null | undefined,
+  prescriptionSessionsPerWeek: number | null | undefined,
+): string {
+  const base = describeFrequencyDetailForOrder(frequency, frequencyDetail);
+  const n =
+    prescriptionSessionsPerWeek != null &&
+    Number.isFinite(Number(prescriptionSessionsPerWeek)) &&
+    Number(prescriptionSessionsPerWeek) > 0
+      ? Number(prescriptionSessionsPerWeek)
+      : null;
+  if (n == null) return base;
+  if (frequency === 'every_session') {
+    return `每透析日执行（患者当前处方 ${n} 次/周）`;
+  }
+  return `${base} · 处方 ${n} 次/周`;
+}

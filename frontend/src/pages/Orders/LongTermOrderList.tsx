@@ -3,6 +3,7 @@
  * 以患者为维度展示有效/已停止医嘱，支持开立/停止操作，对接 ordersApi。
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import dayjs from 'dayjs';
 import {
   Card, Select, Button, Table, Tag, Modal, Form, Input, Space, message, Divider, List, Typography, Spin, Alert,
 } from 'antd';
@@ -18,9 +19,21 @@ import ordersApi, {
 } from '../../api/orders';
 import { usePermission } from '../../utils/permission';
 import {
+  describeDialysisOrderFrequencyForSession,
   describeFrequencyDetailForOrder,
   frequencyDetailPlaceholder,
 } from '../../utils/longTermOrderScheduleText';
+import { HD_LONG_TERM_ORDER_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
+
+/** 通知透析录入页重新拉取 prepare（ordersToday），与患者 ID 绑定避免串患者 */
+function dispatchLongTermOrderSavedForDialysisSync(patientId: string) {
+  window.dispatchEvent(
+    new CustomEvent(HD_LONG_TERM_ORDER_SAVED_EVENT, {
+      detail: { patientId, savedAt: new Date().toISOString() },
+    }),
+  );
+}
+import prescriptionsApi from '../../api/prescriptions';
 
 interface ComboChildDraft {
   drug_name: string;
@@ -162,6 +175,8 @@ export default function LongTermOrderListPage() {
   const [stopForm] = Form.useForm();
   const [draftOrders, setDraftOrders] = useState<NewOrderDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  /** 与透析录入「今日医嘱执行确认」同源：用于透析用药频次旁注处方每周次数 */
+  const [prescriptionSessionsPerWeek, setPrescriptionSessionsPerWeek] = useState<number | null>(null);
 
   const newRouteWatch = Form.useWatch('route', newForm);
   const orderTypeWatch = Form.useWatch('order_type', newForm) ?? 'dialysis_drug';
@@ -212,6 +227,30 @@ export default function LongTermOrderListPage() {
     if (selectedPatient) loadOrders(selectedPatient);
   }, [selectedPatient, loadOrders]);
 
+  useEffect(() => {
+    if (!selectedPatient) {
+      setPrescriptionSessionsPerWeek(null);
+      return;
+    }
+    let cancelled = false;
+    prescriptionsApi
+      .getCurrent(selectedPatient)
+      .then((res) => {
+        if (cancelled) return;
+        const rx = res.data.data;
+        const n = rx?.frequency_per_week;
+        setPrescriptionSessionsPerWeek(
+          n != null && Number.isFinite(Number(n)) && Number(n) > 0 ? Number(n) : null,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setPrescriptionSessionsPerWeek(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPatient]);
+
   const patientInfo = patientOptions.find(p => p.value === selectedPatient);
 
   const parentIdsWithChildren = useMemo(() => {
@@ -251,7 +290,14 @@ export default function LongTermOrderListPage() {
       key: 'schedule',
       width: 220,
       render: (_: unknown, r: LongTermOrder) => {
-        const schedule = describeFrequencyDetailForOrder(r.frequency, r.frequency_detail);
+        const schedule =
+          r.order_type === 'dialysis_drug'
+            ? describeDialysisOrderFrequencyForSession(
+                r.frequency,
+                r.frequency_detail,
+                prescriptionSessionsPerWeek,
+              )
+            : describeFrequencyDetailForOrder(r.frequency, r.frequency_detail);
         if (r.order_type === 'dialysis_drug' && r.execute_timing) {
           return (
             <span style={{ fontSize: 12, color: '#475569', lineHeight: 1.45 }}>
@@ -269,8 +315,15 @@ export default function LongTermOrderListPage() {
       },
     },
     { title: '开具医生', dataIndex: 'ordered_by_name' },
-    { title: '开具日期', dataIndex: 'valid_from',
-      render: (v: string) => <span className="num text-sm">{v}</span> },
+    {
+      title: '开立时间',
+      key: 'ordered_at',
+      width: 152,
+      render: (_: unknown, r: LongTermOrder) => {
+        const t = r.ordered_at ? dayjs(r.ordered_at).format('YYYY-MM-DD HH:mm') : '';
+        return <span className="num text-sm">{t || r.valid_from || '—'}</span>;
+      },
+    },
     {
       title: '状态',
       render: () => <span style={{ background: '#ECFDF5', color: '#059669', padding: '2px 8px', borderRadius: 20, fontSize: 12, fontWeight: 500 }}>有效</span>,
@@ -307,7 +360,14 @@ export default function LongTermOrderListPage() {
       key: 'schedule',
       width: 200,
       render: (_: unknown, r: LongTermOrder) => {
-        const schedule = describeFrequencyDetailForOrder(r.frequency, r.frequency_detail);
+        const schedule =
+          r.order_type === 'dialysis_drug'
+            ? describeDialysisOrderFrequencyForSession(
+                r.frequency,
+                r.frequency_detail,
+                prescriptionSessionsPerWeek,
+              )
+            : describeFrequencyDetailForOrder(r.frequency, r.frequency_detail);
         if (r.order_type === 'dialysis_drug' && r.execute_timing) {
           return (
             <span style={{ fontSize: 12, color: '#64748B', lineHeight: 1.45 }}>
@@ -397,6 +457,8 @@ export default function LongTermOrderListPage() {
           route: draft.route,
           frequency: draft.freq as LongTermOrder['frequency'],
           frequency_detail: draft.frequency_detail || undefined,
+          /** 浏览器本地日历日，避免服务端 UTC 日期与临床「今日」不一致 */
+          valid_from: dayjs().format('YYYY-MM-DD'),
           execute_timing:
             draft.order_type === 'dialysis_drug'
               ? (draft.execute_timing ?? 'during_dialysis')
@@ -415,6 +477,7 @@ export default function LongTermOrderListPage() {
       newForm.resetFields();
       setDraftOrders([]);
       message.success(`长期医嘱已批量开具，共 ${finalOrders.length} 条`);
+      dispatchLongTermOrderSavedForDialysisSync(selectedPatient);
       loadOrders(selectedPatient);
       if (lastGuidance.length > 0) {
         Modal.info({
@@ -464,6 +527,7 @@ export default function LongTermOrderListPage() {
       stopForm.resetFields();
       setStopTarget(null);
       message.success('医嘱已停止');
+      dispatchLongTermOrderSavedForDialysisSync(selectedPatient);
       loadOrders(selectedPatient);
     } catch {
       message.error('停止医嘱失败');

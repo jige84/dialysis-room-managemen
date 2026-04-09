@@ -330,7 +330,8 @@ export const dialysisApi = {
    */
   prepare: (patientId: string, date: string) =>
     request.get<ApiResponse<PrepareDialysisData>>('/dialysis/prepare', {
-      params: { patientId, date },
+      /** 避免浏览器对相同 URL 使用磁盘缓存导致 304、沿用旧 ordersToday */
+      params: { patientId, date, _cb: Date.now() },
     }),
 
   /** 每日统计（用于仪表盘和日报） */

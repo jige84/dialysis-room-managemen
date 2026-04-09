@@ -147,3 +147,36 @@ export function groupTodayScheduleRowsByShiftThenZone(
   }
   return result;
 }
+
+/** 按透析隔离分区聚合（普通区 / 乙肝区 / 丙肝区），组内顺序与 {@link sortTodayScheduleRows} 一致 */
+export type TodayScheduleZoneGroup = {
+  zoneKey: NormalizedZoneKey;
+  zoneLabel: string;
+  /** Ant Design Tag color */
+  zoneColor: string;
+  rows: TodaySchedulePatientRow[];
+};
+
+export function groupTodayScheduleRowsByZone(rows: TodaySchedulePatientRow[]): TodayScheduleZoneGroup[] {
+  const zoneOrder: NormalizedZoneKey[] = ['general', 'hbv', 'hcv'];
+  const nested = new Map<NormalizedZoneKey, TodaySchedulePatientRow[]>();
+  for (const zk of zoneOrder) nested.set(zk, []);
+  const sorted = sortTodayScheduleRows(rows);
+  for (const row of sorted) {
+    const zk = normalizeIsolationZoneKey(row.isolation_zone);
+    nested.get(zk)!.push(row);
+  }
+  const result: TodayScheduleZoneGroup[] = [];
+  for (const zk of zoneOrder) {
+    const list = nested.get(zk)!;
+    if (!list.length) continue;
+    const tag = isolationTagProps(zk === 'general' ? null : zk);
+    result.push({
+      zoneKey: zk,
+      zoneLabel: tag.label,
+      zoneColor: tag.color,
+      rows: list,
+    });
+  }
+  return result;
+}

@@ -23,11 +23,18 @@ export interface GuidelineDocRow {
   updated_at: string;
 }
 
+export interface GuidelineNoticeRow {
+  id: string;
+  title: string;
+  message: string;
+  created_at: string;
+}
+
 export const guidelinesApi = {
-  list(page = 1, pageSize = 20) {
+  list(page = 1, pageSize = 20, q?: string) {
     return request.get<ApiResponse<PagedData<GuidelineDocRow>>>(
       '/guidelines',
-      { params: { page, pageSize } },
+      { params: { page, pageSize, ...(q != null && q !== '' ? { q } : {}) } },
     );
   },
 
@@ -42,16 +49,30 @@ export const guidelinesApi = {
     sourceDoi?: string | null;
     rawText?: string | null;
   }) {
-    return request.post<ApiResponse<GuidelineDocRow>>('/guidelines', body);
+    return request.post<ApiResponse<GuidelineDocRow>>('/guidelines', body, { timeout: 120000 });
   },
 
   generateNote(id: string) {
-    return request.post<ApiResponse<GuidelineDocRow>>(`/guidelines/${id}/generate-note`);
+    return request.post<ApiResponse<GuidelineDocRow>>(`/guidelines/${id}/generate-note`, {}, {
+      timeout: 180000,
+    });
   },
 
   saveToKb(id: string) {
     return request.post<ApiResponse<{ saved: boolean; duplicate?: boolean; documentId?: string | null }>>(
       `/guidelines/${id}/save-to-kb`,
     );
+  },
+
+  listNotices() {
+    return request.get<ApiResponse<{ list: GuidelineNoticeRow[] }>>('/guidelines/notices');
+  },
+
+  markAllNoticesRead() {
+    return request.post<ApiResponse<{ updated: number }>>('/guidelines/notices/read-all');
+  },
+
+  remove(id: string) {
+    return request.delete<ApiResponse<{ deleted: boolean }>>(`/guidelines/${id}`);
   },
 };

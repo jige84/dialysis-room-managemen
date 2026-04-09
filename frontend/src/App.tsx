@@ -20,7 +20,7 @@ import PatientListPage from './pages/Patients/PatientList';
 import PatientDetailPage from './pages/Patients/PatientDetail';
 import PatientCreatePage from './pages/Patients/PatientCreate';
 import DialysisEntryPage from './pages/Dialysis/DialysisEntry';
-import DialysisTodayBoardPage from './pages/Dialysis/DialysisTodayBoard';
+import DialysisWorkspace from './pages/Dialysis/DialysisWorkspace';
 import PrescriptionWorkspacePage from './pages/Prescription/PrescriptionWorkspace';
 import LongTermOrderListPage from './pages/Orders/LongTermOrderList';
 import LabResultListPage from './pages/Labs/LabResultList';
@@ -111,8 +111,11 @@ export default function App() {
               <Route path="patients/new"    element={<PatientCreatePage />} />
               <Route path="patients"        element={<PatientListPage />} />
               <Route path="patients/:id"    element={<PatientDetailPage />} />
-              <Route path="dialysis/today"  element={<DialysisTodayBoardPage />} />
-              <Route path="dialysis/entry"  element={<DialysisEntryPage />} />
+              <Route path="dialysis" element={<DialysisWorkspace />}>
+                <Route index element={<Navigate to="entry" replace />} />
+                <Route path="entry" element={<DialysisEntryPage />} />
+              </Route>
+              <Route path="dialysis/today" element={<Navigate to="/dialysis" replace />} />
               <Route path="prescription"    element={<PrescriptionWorkspacePage />} />
               <Route path="orders"          element={<LongTermOrderListPage />} />
               <Route path="labs"            element={<LabResultListPage />} />
