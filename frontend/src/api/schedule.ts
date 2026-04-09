@@ -30,6 +30,8 @@ export interface PatientSlot {
   dialysisMode?: string | null;
   /** 本条排班备注（临时调班说明、无肝素等） */
   scheduleRemark?: string | null;
+  /** 档案约定机位说明（与患者档案同步，可选） */
+  machineStation?: string | null;
 }
 
 export interface NurseSlot {
@@ -95,6 +97,8 @@ export interface TodaySchedulePatientRow {
   access_type?: string | null;
   session_dialysis_mode?: string | null;
   schedule_remark?: string | null;
+  /** 与档案同步的约定机位（schedules.machine_station） */
+  machine_station?: string | null;
   prescription_dry_weight?: number | string | null;
   dialysis_record_id?: string | null;
   dialysis_pre_weight?: number | string | null;
@@ -104,6 +108,66 @@ export interface TodaySchedulePatientRow {
   dialysis_start_time?: string | null;
   dialysis_ktv?: number | string | null;
   [key: string]: unknown;
+}
+
+/** 护士排班空白表一行：姓名 + 周一至周日 + 欠休（共 14 行，末行为「本周二线」） */
+export type NurseScheduleWeekdayTexts = [string, string, string, string, string, string, string];
+
+export interface NurseScheduleSheetRow {
+  name: string;
+  days: NurseScheduleWeekdayTexts;
+  owe: string;
+}
+
+export interface NurseScheduleSheetPayload {
+  week_start_date: string;
+  rows: NurseScheduleSheetRow[];
+  /** 白班合并分区格内容 */
+  white_zone?: string;
+  updated_at: string | null;
+  updated_by_name: string | null;
+}
+
+const NURSE_SHEET_ROW_COUNT = 14;
+
+export function createEmptyNurseSheetRows(): NurseScheduleSheetRow[] {
+  const emptyDays = (): NurseScheduleWeekdayTexts => ['', '', '', '', '', '', ''];
+  return Array.from({ length: NURSE_SHEET_ROW_COUNT }, () => ({
+    name: '',
+    days: emptyDays(),
+    owe: '',
+  }));
+}
+
+/** 与后端 normalize 一致，用于加载接口数据 */
+export function normalizeNurseSheetRowsClient(input: unknown): NurseScheduleSheetRow[] {
+  const emptyDays = (): NurseScheduleWeekdayTexts => ['', '', '', '', '', '', ''];
+  const emptyRow = (): NurseScheduleSheetRow => ({ name: '', days: emptyDays(), owe: '' });
+  if (!Array.isArray(input)) {
+    return createEmptyNurseSheetRows();
+  }
+  const out: NurseScheduleSheetRow[] = [];
+  for (let i = 0; i < NURSE_SHEET_ROW_COUNT; i += 1) {
+    const r = input[i] as Record<string, unknown> | undefined;
+    if (!r || typeof r !== 'object') {
+      out.push(emptyRow());
+      continue;
+    }
+    const name = typeof r.name === 'string' ? r.name : '';
+    const owe = typeof r.owe === 'string' ? r.owe : '';
+    const rawDays = Array.isArray(r.days) ? r.days : [];
+    const daysStr = rawDays.map((x) => {
+      if (typeof x !== 'string') return '';
+      const t = x.trim();
+      /* 占位横线不作为有效内容，便于格子恢复为可编辑空白 */
+      if (t === '—' || t === '－' || t === '-') return '';
+      return x;
+    });
+    while (daysStr.length < 7) daysStr.push('');
+    const days = daysStr.slice(0, 7) as NurseScheduleWeekdayTexts;
+    out.push({ name, days, owe });
+  }
+  return out;
 }
 
 export const scheduleApi = {
@@ -150,5 +214,22 @@ export const scheduleApi = {
 
   deleteSlot: (scheduleId: string) =>
     request.delete<ApiResponse<null>>(`/schedule/slots/${scheduleId}`),
+
+  /** 护士长排班空白表（按周） */
+  getNurseSheet: async (weekStart: string): Promise<NurseScheduleSheetPayload> => {
+    const res = await request.get<ApiResponse<NurseScheduleSheetPayload>>('/schedule/nurse-sheet', {
+      params: { week_start: weekStart },
+    });
+    return res.data.data;
+  },
+
+  putNurseSheet: async (payload: {
+    week_start_date: string;
+    rows: NurseScheduleSheetRow[];
+    white_zone?: string;
+  }): Promise<NurseScheduleSheetPayload> => {
+    const res = await request.put<ApiResponse<NurseScheduleSheetPayload>>('/schedule/nurse-sheet', payload);
+    return res.data.data;
+  },
 };
 

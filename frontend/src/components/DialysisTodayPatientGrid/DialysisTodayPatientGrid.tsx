@@ -223,10 +223,12 @@ function PatientTodayCard({ row, isSelected, onSelect }: PatientTodayCardProps) 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             <Tag color={zone.color}>{zone.label}</Tag>
             <Tag>{scheduleShiftLabel(row.shift)}</Tag>
-            {row.machine_no != null && row.machine_no !== '' ? (
-              <Tag color="geekblue">{`${row.machine_no} 号机`}</Tag>
+            {typeof row.machine_station === 'string' && row.machine_station.trim() ? (
+              <Tag color="geekblue" title="档案约定机位">
+                机位 {row.machine_station.trim()}
+              </Tag>
             ) : (
-              <Tag>机位待定</Tag>
+              <Tag>机位未填写</Tag>
             )}
             <Tag color="cyan">{sessionDialysisModeShort(row.session_dialysis_mode)}</Tag>
             <Tag>{accessTypeCn(row.access_type)}</Tag>

@@ -169,12 +169,12 @@ function SidebarPatientRow({ row, isSelected, onSelect }: SidebarPatientRowProps
           {zone.label}
         </Tag>
         <Tag style={tagCompact}>{scheduleShiftLabel(row.shift)}</Tag>
-        {row.machine_no != null && row.machine_no !== '' ? (
-          <Tag color="geekblue" style={tagCompact}>
-            {row.machine_no} 号机
+        {typeof row.machine_station === 'string' && row.machine_station.trim() ? (
+          <Tag color="geekblue" style={tagCompact} title="档案约定机位">
+            机位 {row.machine_station.trim()}
           </Tag>
         ) : (
-          <Tag style={tagCompact}>机位待定</Tag>
+          <Tag style={tagCompact}>机位未填写</Tag>
         )}
         <Tag color="cyan" style={tagCompact}>
           {sessionDialysisModeShort(row.session_dialysis_mode)}

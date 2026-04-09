@@ -1213,7 +1213,6 @@ export default function DialysisEntryPage() {
   /** 来自 URL / 排班快捷入口，用于展示当前患者标签 */
   const [pinnedPatientOption, setPinnedPatientOption] = useState<{ value: string; label: string } | null>(null);
   const [todayDialysisQuickList, setTodayDialysisQuickList] = useState<TodaySchedulePatientRow[]>([]);
-  const urlPatientInitRef = useRef(false);
 
   /** 切换患者/透析日前一状态，用于临时保存草稿 key 与快照日期 */
   const prevPatientRef = useRef<string>(selectedPatient);
@@ -1287,7 +1286,12 @@ export default function DialysisEntryPage() {
       setDurationHours(d.durationHours);
       setPreBun(d.preBun);
       setPostBun(d.postBun);
-      setDryWeight(d.dryWeight);
+      /** 草稿里往往未存干体重(null)，若直接覆盖会抹掉 prepare 已从处方写入的值；处方干体重以库为准 */
+      const rxDw =
+        isRealPatientId(selectedPatient) && realPrepareData?.prescription
+          ? normNum(realPrepareData.prescription.dry_weight)
+          : undefined;
+      setDryWeight(rxDw != null ? rxDw : d.dryWeight ?? null);
     },
     [form, selectedPatient, realPrepareData],
   );
@@ -1388,7 +1392,8 @@ export default function DialysisEntryPage() {
     };
   }, [selectedPatient]);
 
-  /** URL：?patient_id=&date= 与排班页跳转一致；无 date 时用当前本地日，避免残留状态与「今日」不一致 */
+  /** URL：?patient_id=&date= 与排班页跳转一致；无 date 时用当前本地日，避免残留状态与「今日」不一致。
+   * 须随 patient_id 每次变化同步 selectedPatient（侧栏切换会更新 URL；若仅用 ref 拦首次则右侧仍停留在上一人）。 */
   useEffect(() => {
     const pid = searchParams.get('patient_id');
     const ds = searchParams.get('date');
@@ -1397,21 +1402,28 @@ export default function DialysisEntryPage() {
     } else {
       setSessionDate(dayjs().startOf('day'));
     }
-    if (pid && isRealPatientId(pid) && !urlPatientInitRef.current) {
-      urlPatientInitRef.current = true;
+    if (pid && isRealPatientId(pid)) {
+      setSelectedPatient(pid);
+      let cancelled = false;
       patientsApi
         .get(pid)
         .then((res) => {
+          if (cancelled) return;
           const p = res.data.data;
           if (!p) return;
           const label = `${p.name} — ${p.primary_diagnosis} — ${
             p.isolation_zone === 'normal' ? '普通区' : p.isolation_zone === 'hbv' ? '乙肝区' : '丙肝区'
           }`;
           setPinnedPatientOption({ value: pid, label });
-          setSelectedPatient(pid);
         })
         .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
     }
+    setSelectedPatient('');
+    setPinnedPatientOption(null);
+    return undefined;
   }, [searchParams]);
 
   /** 处方页保存成功广播：当前选中患者一致时刷新 prepare */
@@ -1592,7 +1604,7 @@ export default function DialysisEntryPage() {
     return todayDialysisQuickList.find((r) => r.patient_id === selectedPatient) ?? null;
   }, [selectedPatient, sessionDate, todayDialysisQuickList]);
 
-  /** 今日医嘱执行确认：真实患者为长期医嘱「透析用药」且服务端按频次筛入；演示患者为本地示例 */
+  /** 今日医嘱执行确认：真实患者来自 prepare.ordersToday（透析用药；口服 qd/bid/tid 间期药不在此同步）；演示患者为本地示例 */
   const orderDisplayList = useMemo(() => {
     if (!isRealPatientId(selectedPatient)) {
       return PENDING_ORDERS.map((o) => ({
@@ -1681,6 +1693,15 @@ export default function DialysisEntryPage() {
     prepareRefreshNonce,
     applyDialysisEntryDraftSnapshot,
   ]);
+
+  /** 干体重（处方）展示依赖 state；草稿恢复可能曾把 null 写回，此处与 prepare 处方再对齐一次 */
+  useEffect(() => {
+    if (!selectedPatient || !isRealPatientId(selectedPatient)) return;
+    const rx = realPrepareData?.prescription;
+    if (!rx) return;
+    const dw = normNum(rx.dry_weight);
+    setDryWeight(dw ?? null);
+  }, [selectedPatient, realPrepareData]);
 
   const postSbpWatch = Form.useWatch('post_sbp', form);
   const postDbpWatch = Form.useWatch('post_dbp', form);
@@ -1782,7 +1803,15 @@ export default function DialysisEntryPage() {
       bleedingDisplay,
       preAssessOtherDisplay: preAssessOtherText ? preAssessOtherText : '—',
       shiftChinese: scheduleTodayRow ? shiftShort[scheduleTodayRow.shift] ?? scheduleTodayRow.shift : '—',
-      machineNo: scheduleTodayRow?.machine_no ?? '—',
+      /** 机位：与患者档案 machine_station 一致（prepare 返回档案字段；无则回退当日排班同步字段） */
+      machineStation:
+        (typeof realPrepareData?.machine_station === 'string' && realPrepareData.machine_station.trim()
+          ? realPrepareData.machine_station.trim()
+          : '') ||
+        (typeof scheduleTodayRow?.machine_station === 'string' && scheduleTodayRow.machine_station.trim()
+          ? scheduleTodayRow.machine_station.trim()
+          : '') ||
+        '—',
       preMachineWeightRx: preM,
       prescriptionUfMl: ufMl,
       prescriptionUfRate: ufRate,
@@ -2179,7 +2208,7 @@ export default function DialysisEntryPage() {
                     {selectedDemoPatient.label.split(' — ')[0]}
                   </span>
                   <Tag color="blue">{rxPreview.shiftChinese}</Tag>
-                  <Tag color="geekblue">{rxPreview.machineNo}</Tag>
+                  <Tag color="geekblue">机位 {rxPreview.machineNo}</Tag>
                   <Tag color={accessType === 'AVF' || accessType === 'AVG' ? 'green' : 'orange'}>
                     {accessType}
                   </Tag>
@@ -2346,7 +2375,7 @@ export default function DialysisEntryPage() {
                         {selectedPatientDisplayLabel?.split(' — ')[0] ?? '患者'}
                       </span>
                       <Tag color="blue">{realPatientRxPreview.shiftChinese}班</Tag>
-                      <Tag color="geekblue">机位 {realPatientRxPreview.machineNo}</Tag>
+                      <Tag color="geekblue">机位 {realPatientRxPreview.machineStation}</Tag>
                       <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
                         与「透析处方管理」当前保存参数同步；上机前体重可在下方第⑦段修改
                       </span>

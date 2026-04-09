@@ -99,10 +99,17 @@ router.get('/', auth, async (req, res, next) => {
       `SELECT p.id, p.name, p.gender, p.dob, p.primary_diagnosis, p.status,
               p.dialysis_start_date, p.isolation_zone, p.consent_dialysis,
               p.phone_encrypted,
+              p.profile_dry_weight,
+              pr.dry_weight AS prescription_dry_weight,
               rn.real_name AS responsible_nurse_name,
               va.access_type, va.location as access_location
        FROM patients p
        LEFT JOIN users rn ON rn.id = p.responsible_nurse_id
+       LEFT JOIN LATERAL (
+         SELECT dry_weight FROM prescriptions
+         WHERE patient_id = p.id AND is_current = true
+         LIMIT 1
+       ) pr ON true
        LEFT JOIN LATERAL (
          SELECT access_type, location FROM vascular_accesses
          WHERE patient_id = p.id AND is_active = true
@@ -573,6 +580,24 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
          WHERE patient_id = $4 AND is_current = true`,
         [dw, dwd, dwr, req.params.id],
       );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'machine_station')) {
+      const raw = req.body.machine_station;
+      const normalized =
+        raw != null && String(raw).trim() ? String(raw).trim().slice(0, 80) : null;
+      try {
+        await pool.query(
+          `UPDATE patients SET machine_station = $1, updated_at = NOW() WHERE id = $2`,
+          [normalized, req.params.id],
+        );
+        await pool.query(
+          `UPDATE schedules SET machine_station = $1 WHERE patient_id = $2`,
+          [normalized, req.params.id],
+        );
+      } catch (syncErr) {
+        if (!syncErr || syncErr.code !== '42703') throw syncErr;
+      }
     }
 
     return success(res, rows[0], '患者信息更新成功');

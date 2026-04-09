@@ -14,6 +14,41 @@ const { expandDialysisScheduleCode } = require('../services/DialysisScheduleExpa
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const isValidUuid = (value) => typeof value === 'string' && UUID_REGEX.test(value);
 
+const NURSE_SHEET_ROW_COUNT = 14;
+const DATE_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 白班「分区」备注：与 rows 并列存于 payload */
+function normalizeNurseSheetWhiteZone(input) {
+  if (typeof input !== 'string') return '';
+  const t = input.trim();
+  if (t === '—' || t === '－' || t === '-') return '';
+  return t.slice(0, 80);
+}
+
+/** 护士排班空白表 JSON 行：白班 3 + A区 8 + B区 2 + 本周二线 1（白班分区格为只读合并格，不存 rows） */
+function normalizeNurseSheetRows(input) {
+  const emptyDays = () => ['', '', '', '', '', '', ''];
+  const emptyRow = () => ({ name: '', days: emptyDays(), owe: '' });
+  if (!Array.isArray(input)) {
+    return Array.from({ length: NURSE_SHEET_ROW_COUNT }, emptyRow);
+  }
+  const out = [];
+  for (let i = 0; i < NURSE_SHEET_ROW_COUNT; i += 1) {
+    const r = input[i];
+    if (!r || typeof r !== 'object') {
+      out.push(emptyRow());
+      continue;
+    }
+    const name = typeof r.name === 'string' ? r.name : '';
+    const owe = typeof r.owe === 'string' ? r.owe : '';
+    let days = Array.isArray(r.days) ? r.days.map((x) => (typeof x === 'string' ? x : '')) : emptyDays();
+    while (days.length < 7) days.push('');
+    days = days.slice(0, 7);
+    out.push({ name, days, owe });
+  }
+  return out;
+}
+
 /**
  * 患者隔离分区 → 透析机分区（仅 machines.zone 三种）
  * @param {string | null} isolationZone
@@ -30,7 +65,7 @@ function mapIsolationToMachineZone(isolationZone) {
  */
 async function fetchPatientsForGenerateWeek() {
   const sqlWithAnchor = `
-    SELECT id, dialysis_schedule_code, dialysis_schedule_anchor_date, isolation_zone
+    SELECT id, dialysis_schedule_code, dialysis_schedule_anchor_date, isolation_zone, machine_station
     FROM patients
     WHERE status = 'active'
       AND dialysis_schedule_code IS NOT NULL
@@ -41,6 +76,31 @@ async function fetchPatientsForGenerateWeek() {
     return rows;
   } catch (err) {
     if (err && err.code === '42703') {
+      const errMsg = String(err.message || '');
+      if (errMsg.includes('machine_station')) {
+        try {
+          const { rows } = await pool.query(
+            `SELECT id, dialysis_schedule_code, dialysis_schedule_anchor_date, isolation_zone
+             FROM patients
+             WHERE status = 'active'
+               AND dialysis_schedule_code IS NOT NULL
+               AND dialysis_schedule_code <> 'other'`,
+          );
+          return rows.map((r) => ({ ...r, machine_station: null }));
+        } catch (err2) {
+          if (err2 && err2.code === '42703') {
+            const { rows } = await pool.query(
+              `SELECT id, dialysis_schedule_code, isolation_zone
+               FROM patients
+               WHERE status = 'active'
+                 AND dialysis_schedule_code IS NOT NULL
+                 AND dialysis_schedule_code <> 'other'`,
+            );
+            return rows.map((r) => ({ ...r, dialysis_schedule_anchor_date: null, machine_station: null }));
+          }
+          throw err2;
+        }
+      }
       const { rows } = await pool.query(
         `SELECT id, dialysis_schedule_code, isolation_zone
          FROM patients
@@ -48,7 +108,7 @@ async function fetchPatientsForGenerateWeek() {
            AND dialysis_schedule_code IS NOT NULL
            AND dialysis_schedule_code <> 'other'`,
       );
-      return rows.map((r) => ({ ...r, dialysis_schedule_anchor_date: null }));
+      return rows.map((r) => ({ ...r, dialysis_schedule_anchor_date: null, machine_station: null }));
     }
     throw err;
   }
@@ -223,7 +283,8 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
               p.dialysis_mode AS patient_dialysis_mode,
               s.session_dialysis_mode,
               m.id AS machine_uuid,
-              m.machine_no
+              m.machine_no,
+              COALESCE(s.machine_station, p.machine_station) AS machine_station
      ${WEEK_PATIENT_SLOTS_BASE}`,
     `SELECT s.id AS schedule_id,
               s.scheduled_date,
@@ -238,7 +299,8 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
               p.dialysis_mode AS patient_dialysis_mode,
               NULL::text AS session_dialysis_mode,
               m.id AS machine_uuid,
-              m.machine_no
+              m.machine_no,
+              COALESCE(s.machine_station, p.machine_station) AS machine_station
      ${WEEK_PATIENT_SLOTS_BASE}`,
     `SELECT s.id AS schedule_id,
               s.scheduled_date,
@@ -253,7 +315,8 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
               p.dialysis_mode AS patient_dialysis_mode,
               s.session_dialysis_mode,
               m.id AS machine_uuid,
-              m.machine_no
+              m.machine_no,
+              COALESCE(s.machine_station, p.machine_station) AS machine_station
      ${WEEK_PATIENT_SLOTS_BASE}`,
     `SELECT s.id AS schedule_id,
               s.scheduled_date,
@@ -268,7 +331,8 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
               p.dialysis_mode AS patient_dialysis_mode,
               NULL::text AS session_dialysis_mode,
               m.id AS machine_uuid,
-              m.machine_no
+              m.machine_no,
+              COALESCE(s.machine_station, p.machine_station) AS machine_station
      ${WEEK_PATIENT_SLOTS_BASE}`,
     `SELECT s.id AS schedule_id,
               s.scheduled_date,
@@ -283,7 +347,8 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
               NULL::text AS patient_dialysis_mode,
               s.session_dialysis_mode,
               m.id AS machine_uuid,
-              m.machine_no
+              m.machine_no,
+              COALESCE(s.machine_station, p.machine_station) AS machine_station
      ${WEEK_PATIENT_SLOTS_BASE}`,
     `SELECT s.id AS schedule_id,
               s.scheduled_date,
@@ -298,7 +363,105 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
               NULL::text AS patient_dialysis_mode,
               NULL::text AS session_dialysis_mode,
               m.id AS machine_uuid,
-              m.machine_no
+              m.machine_no,
+              COALESCE(s.machine_station, p.machine_station) AS machine_station
+     ${WEEK_PATIENT_SLOTS_BASE}`,
+    // 未执行 053 迁移时：无 machine_station 列则降级为 NULL
+    `SELECT s.id AS schedule_id,
+              s.scheduled_date,
+              s.shift,
+              s.patient_id,
+              s.machine_id,
+              s.is_temp,
+              s.status,
+              s.schedule_remark,
+              p.name AS patient_name,
+              p.isolation_zone,
+              p.dialysis_mode AS patient_dialysis_mode,
+              s.session_dialysis_mode,
+              m.id AS machine_uuid,
+              m.machine_no,
+              NULL::text AS machine_station
+     ${WEEK_PATIENT_SLOTS_BASE}`,
+    `SELECT s.id AS schedule_id,
+              s.scheduled_date,
+              s.shift,
+              s.patient_id,
+              s.machine_id,
+              s.is_temp,
+              s.status,
+              s.schedule_remark,
+              p.name AS patient_name,
+              p.isolation_zone,
+              p.dialysis_mode AS patient_dialysis_mode,
+              NULL::text AS session_dialysis_mode,
+              m.id AS machine_uuid,
+              m.machine_no,
+              NULL::text AS machine_station
+     ${WEEK_PATIENT_SLOTS_BASE}`,
+    `SELECT s.id AS schedule_id,
+              s.scheduled_date,
+              s.shift,
+              s.patient_id,
+              s.machine_id,
+              s.is_temp,
+              s.status,
+              NULL::text AS schedule_remark,
+              p.name AS patient_name,
+              p.isolation_zone,
+              p.dialysis_mode AS patient_dialysis_mode,
+              s.session_dialysis_mode,
+              m.id AS machine_uuid,
+              m.machine_no,
+              NULL::text AS machine_station
+     ${WEEK_PATIENT_SLOTS_BASE}`,
+    `SELECT s.id AS schedule_id,
+              s.scheduled_date,
+              s.shift,
+              s.patient_id,
+              s.machine_id,
+              s.is_temp,
+              s.status,
+              NULL::text AS schedule_remark,
+              p.name AS patient_name,
+              p.isolation_zone,
+              p.dialysis_mode AS patient_dialysis_mode,
+              NULL::text AS session_dialysis_mode,
+              m.id AS machine_uuid,
+              m.machine_no,
+              NULL::text AS machine_station
+     ${WEEK_PATIENT_SLOTS_BASE}`,
+    `SELECT s.id AS schedule_id,
+              s.scheduled_date,
+              s.shift,
+              s.patient_id,
+              s.machine_id,
+              s.is_temp,
+              s.status,
+              NULL::text AS schedule_remark,
+              p.name AS patient_name,
+              p.isolation_zone,
+              NULL::text AS patient_dialysis_mode,
+              s.session_dialysis_mode,
+              m.id AS machine_uuid,
+              m.machine_no,
+              NULL::text AS machine_station
+     ${WEEK_PATIENT_SLOTS_BASE}`,
+    `SELECT s.id AS schedule_id,
+              s.scheduled_date,
+              s.shift,
+              s.patient_id,
+              s.machine_id,
+              s.is_temp,
+              s.status,
+              NULL::text AS schedule_remark,
+              p.name AS patient_name,
+              p.isolation_zone,
+              NULL::text AS patient_dialysis_mode,
+              NULL::text AS session_dialysis_mode,
+              m.id AS machine_uuid,
+              m.machine_no,
+              NULL::text AS machine_station
      ${WEEK_PATIENT_SLOTS_BASE}`,
   ];
 
@@ -400,6 +563,7 @@ router.get('/week', auth, async (req, res, next) => {
         isolationZone: row.isolation_zone,
         machineId: row.machine_uuid,
         machineNo: row.machine_no,
+        machineStation: row.machine_station || null,
         isTemp: !!row.is_temp,
         status: row.status || 'planned',
         patientRenalCategory,
@@ -515,12 +679,29 @@ router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, r
           }
 
           const creatorId = req.user && req.user.id ? req.user.id : null;
-          await client.query(
-            `INSERT INTO schedules (
-               patient_id, machine_id, scheduled_date, shift, status, is_temp, created_by
-             ) VALUES ($1, $2, $3::date, $4, 'planned', false, $5)`,
-            [p.id, free[0].id, slot.scheduledDate, slot.shift, creatorId],
-          );
+          const stationLabel =
+            p.machine_station != null && String(p.machine_station).trim()
+              ? String(p.machine_station).trim().slice(0, 80)
+              : null;
+          try {
+            await client.query(
+              `INSERT INTO schedules (
+                 patient_id, machine_id, scheduled_date, shift, status, is_temp, created_by, machine_station
+               ) VALUES ($1, $2, $3::date, $4, 'planned', false, $5, $6)`,
+              [p.id, free[0].id, slot.scheduledDate, slot.shift, creatorId, stationLabel],
+            );
+          } catch (insErr) {
+            if (insErr && insErr.code === PG_UNDEFINED_COLUMN) {
+              await client.query(
+                `INSERT INTO schedules (
+                   patient_id, machine_id, scheduled_date, shift, status, is_temp, created_by
+                 ) VALUES ($1, $2, $3::date, $4, 'planned', false, $5)`,
+                [p.id, free[0].id, slot.scheduledDate, slot.shift, creatorId],
+              );
+            } else {
+              throw insErr;
+            }
+          }
           inserted += 1;
         }
       }
@@ -689,6 +870,23 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
       } else {
         throw err;
       }
+    }
+
+    try {
+      const { rows: stRows } = await pool.query(
+        'SELECT machine_station FROM patients WHERE id = $1',
+        [patient_id],
+      );
+      const stVal =
+        stRows[0]?.machine_station != null && String(stRows[0].machine_station).trim()
+          ? String(stRows[0].machine_station).trim().slice(0, 80)
+          : null;
+      await pool.query(
+        `UPDATE schedules SET machine_station = $1 WHERE id = $2`,
+        [stVal, insRows[0].id],
+      );
+    } catch {
+      /* 未迁移 053 或列不存在：不阻断排班创建 */
     }
 
     let msg = '排班已创建';
@@ -1090,6 +1288,87 @@ router.get('/today', auth, async (req, res, next) => {
       [today]
     );
     return success(res, rows);
+  } catch (err) { next(err); }
+});
+
+// GET /api/schedule/nurse-sheet?week_start=YYYY-MM-DD — 护士长排班空白表（按周）
+router.get('/nurse-sheet', auth, async (req, res, next) => {
+  try {
+    const weekStart = req.query.week_start;
+    if (!weekStart || !DATE_PARAM_RE.test(String(weekStart))) {
+      return error(res, 'week_start 须为 YYYY-MM-DD', 400);
+    }
+    const { rows } = await pool.query(
+      `SELECT s.week_start_date, s.payload, s.updated_at, u.real_name AS updated_by_name
+       FROM nurse_schedule_sheet s
+       LEFT JOIN users u ON u.id = s.updated_by
+       WHERE s.week_start_date = $1::date`,
+      [weekStart],
+    );
+    if (rows.length === 0) {
+      return success(res, {
+        week_start_date: weekStart,
+        rows: normalizeNurseSheetRows([]),
+        white_zone: '',
+        updated_at: null,
+        updated_by_name: null,
+      });
+    }
+    const row = rows[0];
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+    const whiteZone = normalizeNurseSheetWhiteZone(payload.white_zone);
+    return success(res, {
+      week_start_date: weekStart,
+      rows: normalizeNurseSheetRows(rawRows),
+      white_zone: whiteZone,
+      updated_at: row.updated_at,
+      updated_by_name: row.updated_by_name,
+    });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/schedule/nurse-sheet — 保存护士长排班空白表
+router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+  try {
+    const { week_start_date: weekStart, rows: bodyRows, white_zone: bodyWhiteZone } = req.body || {};
+    if (!weekStart || !DATE_PARAM_RE.test(String(weekStart))) {
+      return error(res, 'week_start_date 须为 YYYY-MM-DD', 400);
+    }
+    const normalized = normalizeNurseSheetRows(bodyRows);
+    const whiteZone = normalizeNurseSheetWhiteZone(bodyWhiteZone);
+    const userId = req.user?.id;
+    if (!userId) return error(res, '未认证', 401);
+
+    await pool.query(
+      `INSERT INTO nurse_schedule_sheet (week_start_date, payload, updated_by)
+       VALUES ($1::date, $2::jsonb, $3)
+       ON CONFLICT (week_start_date)
+       DO UPDATE SET
+         payload = EXCLUDED.payload,
+         updated_at = NOW(),
+         updated_by = EXCLUDED.updated_by`,
+      [weekStart, { rows: normalized, white_zone: whiteZone }, userId],
+    );
+
+    const { rows: out } = await pool.query(
+      `SELECT s.updated_at, u.real_name AS updated_by_name
+       FROM nurse_schedule_sheet s
+       LEFT JOIN users u ON u.id = s.updated_by
+       WHERE s.week_start_date = $1::date`,
+      [weekStart],
+    );
+    return success(
+      res,
+      {
+        week_start_date: weekStart,
+        rows: normalized,
+        white_zone: whiteZone,
+        updated_at: out[0]?.updated_at ?? null,
+        updated_by_name: out[0]?.updated_by_name ?? null,
+      },
+      '护士排班表已保存',
+    );
   } catch (err) { next(err); }
 });
 

@@ -32,6 +32,20 @@ type PatientRow = {
   responsibleNurseName: string;
 };
 
+function parseDryWeightKg(
+  profile: Patient['profile_dry_weight'],
+  prescription: Patient['prescription_dry_weight'],
+): number | null {
+  const toNum = (v: unknown): number | null => {
+    if (v == null || v === '') return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
+  const fromProfile = toNum(profile);
+  if (fromProfile != null) return fromProfile;
+  return toNum(prescription);
+}
+
 function toPatientRow(p: Patient): PatientRow {
   const access = (p.access_type || 'NCC').toUpperCase();
   const zone = p.isolation_zone || 'normal';
@@ -47,7 +61,7 @@ function toPatientRow(p: Patient): PatientRow {
     accessDetail: p.access_location || '—',
     zone,
     dialysisAge: p.dialysis_age || '—',
-    dryWeight: null,
+    dryWeight: parseDryWeightKg(p.profile_dry_weight, p.prescription_dry_weight),
     status: p.status,
     responsibleNurseName: p.responsible_nurse_name?.trim() || '—',
   };
@@ -169,7 +183,11 @@ export default function PatientListPage() {
     {
       title: '干体重',
       key: 'dryWeight',
-      render: (_, r) => <span className="num">{r.dryWeight != null ? `${r.dryWeight} kg` : '—'}</span>,
+      render: (_, r) => (
+        <span className="num">
+          {r.dryWeight != null ? `${r.dryWeight.toFixed(1)} kg` : '—'}
+        </span>
+      ),
     },
     {
       title: '状态',

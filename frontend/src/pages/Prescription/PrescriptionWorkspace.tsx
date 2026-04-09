@@ -555,6 +555,8 @@ export default function PrescriptionWorkspacePage() {
   const prescriptionLoadSeqRef = useRef(0);
   /** 今日排班实例（与 /schedule/today 一致，用于快捷选患者与合并当日透析模式） */
   const [scheduleTodayRows, setScheduleTodayRows] = useState<TodaySchedulePatientRow[]>([]);
+  /** 选中患者时 GET /patients/:id 拉取的档案快照（机位等以服务端为准，避免列表缓存滞后） */
+  const [patientDetailFromApi, setPatientDetailFromApi] = useState<Patient | null>(null);
 
   const frequencyPreset = Form.useWatch('frequencyPreset', form);
   const modeWatched = Form.useWatch('mode', form);
@@ -572,6 +574,46 @@ export default function PrescriptionWorkspacePage() {
   const durationWatched = Form.useWatch('duration', form);
   const shiftWatched = Form.useWatch('shift', form);
   const machineNoWatched = Form.useWatch('machineNo', form);
+
+  const selectedRealPatient = useMemo(
+    () => realPatients.find((p) => p.id === selectedPatient),
+    [realPatients, selectedPatient],
+  );
+
+  const archiveMachineStationDisplay = useMemo(() => {
+    const fromApi = patientDetailFromApi?.machine_station?.trim();
+    if (fromApi) return fromApi;
+    return selectedRealPatient?.machine_station?.trim() ?? '';
+  }, [patientDetailFromApi, selectedRealPatient]);
+
+  useEffect(() => {
+    if (!isUuid(selectedPatient)) {
+      setPatientDetailFromApi(null);
+      return;
+    }
+    setPatientDetailFromApi(null);
+    let cancelled = false;
+    patientsApi
+      .get(selectedPatient)
+      .then((res) => {
+        const p = res.data.data;
+        if (cancelled || !p || typeof p !== 'object') return;
+        setPatientDetailFromApi(p);
+        setRealPatients((prev) => {
+          const idx = prev.findIndex((x) => x.id === p.id);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...p };
+          return next;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setPatientDetailFromApi(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPatient]);
   const naWatched = Form.useWatch('na', form);
   const kWatched = Form.useWatch('k', form);
   const caWatched = Form.useWatch('ca', form);
@@ -1449,12 +1491,12 @@ export default function PrescriptionWorkspacePage() {
                                     {zone.label}
                                   </Tag>
                                   <Tag style={tagCompact}>{scheduleShiftLabel(row.shift)}</Tag>
-                                  {row.machine_no != null && row.machine_no !== '' ? (
-                                    <Tag color="geekblue" style={tagCompact}>
-                                      {row.machine_no} 号机
+                                  {typeof row.machine_station === 'string' && row.machine_station.trim() ? (
+                                    <Tag color="geekblue" style={tagCompact} title="档案约定机位">
+                                      机位 {row.machine_station.trim()}
                                     </Tag>
                                   ) : (
-                                    <Tag style={tagCompact}>机位待定</Tag>
+                                    <Tag style={tagCompact}>机位未填写</Tag>
                                   )}
                                   <Tag color="cyan" style={tagCompact}>
                                     {sessionDialysisModeShort(row.session_dialysis_mode)}
@@ -2015,9 +2057,22 @@ export default function PrescriptionWorkspacePage() {
                   ]}
                 />
               </Form.Item>
-              <Form.Item label="默认机器编号" name="machineNo">
-                <Input placeholder="如：5号机" />
-              </Form.Item>
+              {isUuid(selectedPatient) ? (
+                <Form.Item
+                  label="档案约定机位"
+                  tooltip="与患者档案「机位」一致；请在患者档案中维护，保存后同步至排班。"
+                >
+                  <Input
+                    readOnly
+                    placeholder="未在档案中填写"
+                    value={archiveMachineStationDisplay}
+                  />
+                </Form.Item>
+              ) : (
+                <Form.Item label="机位（演示）" name="machineNo">
+                  <Input placeholder="如：5号机" />
+                </Form.Item>
+              )}
             </div>
           </Card>
                   </div>

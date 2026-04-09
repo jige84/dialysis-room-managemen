@@ -28,9 +28,11 @@ export interface Patient {
   profile_heparin_prime_dose?: number | null;
   profile_heparin_maintain?: number | null;
   /** 档案干体重，与当前处方双向同步 */
-  profile_dry_weight?: number | null;
+  profile_dry_weight?: number | string | null;
   profile_dry_weight_date?: string | null;
   profile_dry_weight_reason?: string | null;
+  /** 当前有效处方干体重（列表等场景下与 profile_dry_weight 二选一：优先档案） */
+  prescription_dry_weight?: number | string | null;
   family_contact?: { name?: string; phone?: string } | null;
   address?: string | null;
   consent_dialysis?: boolean;
@@ -43,6 +45,8 @@ export interface Patient {
   dialysis_schedule_notes?: string | null;
   /** 隔日透析(qod)排班锚点日期 */
   dialysis_schedule_anchor_date?: string | null;
+  /** 约定机位/位置说明（可选）；保存档案时同步至该患者全部排班记录 */
+  machine_station?: string | null;
   /** 知情同意书图片相对路径列表（详情返回；列表不返回） */
   consent_dialysis_image_paths?: string[] | null;
   /** 责任护士用户 ID */
@@ -191,6 +195,7 @@ export interface CreatePatientPayload {
   dialysis_schedule_code?: string | null;
   dialysis_schedule_notes?: string | null;
   dialysis_schedule_anchor_date?: string | null;
+  machine_station?: string | null;
   /** 责任护士（须为本科室已启用的护士/护士长账号，新建必填） */
   responsible_nurse_id: string;
 }

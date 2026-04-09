@@ -73,11 +73,14 @@ function pgParam(v) {
   return v === undefined ? null : v;
 }
 
-/** node-pg 对 DATE 可能返回 Date 或 string，统一为 YYYY-MM-DD 供 ::date 绑定 */
+/** node-pg 对 DATE 可能返回 Date 或 string，统一为 YYYY-MM-DD 供 ::date 绑定（勿用 toISOString 切片，避免 UTC 与服务器本地日历差一天） */
 function coercePgDateValue(v) {
   if (v == null) return null;
   if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    return v.toISOString().slice(0, 10);
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, '0');
+    const d = String(v.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
   const s = String(v).trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);

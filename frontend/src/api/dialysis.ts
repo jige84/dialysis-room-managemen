@@ -220,6 +220,8 @@ export interface OrderForSession {
 export interface PrepareDialysisData {
   prescription: PreparedPrescription | null;
   ordersToday: OrderForSession[];
+  /** 患者档案约定机位（与 patients.machine_station 一致） */
+  machine_station?: string | null;
 }
 
 /**
@@ -232,7 +234,7 @@ export function parsePrepareDialysisResponse(resp: {
 }): PrepareDialysisData {
   const outer = resp?.data;
   if (!outer || typeof outer !== 'object') {
-    return { prescription: null, ordersToday: [] };
+    return { prescription: null, ordersToday: [], machine_station: null };
   }
   const inner = outer.data;
   const payload =
@@ -240,14 +242,18 @@ export function parsePrepareDialysisResponse(resp: {
       ? inner
       : null;
   if (!payload) {
-    return { prescription: null, ordersToday: [] };
+    return { prescription: null, ordersToday: [], machine_station: null };
   }
   const ordersRaw = payload.ordersToday ?? payload.orders_today;
   const prescription =
     (payload.prescription as PreparedPrescription | null | undefined) ?? null;
+  const ms = payload.machine_station;
+  const machine_station =
+    typeof ms === 'string' ? (ms.trim() ? ms.trim() : null) : ms == null ? null : String(ms).trim() || null;
   return {
     prescription,
     ordersToday: Array.isArray(ordersRaw) ? (ordersRaw as OrderForSession[]) : [],
+    machine_station,
   };
 }
 

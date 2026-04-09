@@ -27,6 +27,42 @@ function isEverySessionDialysisOrder(order) {
   );
 }
 
+/**
+ * 透析录入「今日医嘱执行确认」仅同步「透析用药」：与长期医嘱页约定一致，
+ * qd/bid/tid 且用法为口服/随餐/睡前者应在「间期用药」维护，不在床旁栏同步。
+ * 注射/透析专用途径 + qd 等仍保留（如床旁注射类医嘱）。
+ */
+function isHomeOralStyleRoute(routeRaw) {
+  const route = routeRaw != null ? String(routeRaw).trim() : '';
+  if (!route) return false;
+  return /^口服(\s|$)/.test(route) || route.includes('随餐') || route.includes('睡前');
+}
+
+/**
+ * @param {object} order long_term_orders 行
+ * @returns {boolean} 是否应进入透析 prepare 的 ordersToday（在 order_type 已限定为 dialysis_drug 时调用）
+ */
+function shouldIncludeDialysisDrugForBedside(order) {
+  if (normalizeOrderType(order.order_type) !== 'dialysis_drug') return true;
+  const freq = normalizeOrderFrequency(order.frequency);
+  if (!['qd', 'bid', 'tid'].includes(freq)) return true;
+  if (!isHomeOralStyleRoute(order.route)) return true;
+  return false;
+}
+
+/**
+ * 组合子药若父医嘱未进入列表，则子药也不应单独出现在床旁确认区。
+ * @param {Array<object>} rows 已构建的 ordersToday 行（含 id / parent_order_id）
+ */
+function dropOrphanComboChildren(rows) {
+  const idSet = new Set(rows.map((r) => String(r.id)));
+  return rows.filter((r) => {
+    const pid = r.parent_order_id;
+    if (pid == null || pid === '') return true;
+    return idSet.has(String(pid));
+  });
+}
+
 class OrderAutoFill {
   /**
    * 患者是否已有任意排班记录（用于判断是否启用「仅排班透析日」规则）
@@ -75,6 +111,15 @@ class OrderAutoFill {
     );
     const prescription = rxRows[0] || null;
 
+    const { rows: patStationRows } = await pool.query(
+      `SELECT machine_station FROM patients WHERE id = $1 LIMIT 1`,
+      [patientId],
+    );
+    const machine_station =
+      patStationRows[0]?.machine_station != null && String(patStationRows[0].machine_station).trim()
+        ? String(patStationRows[0].machine_station).trim()
+        : null;
+
     const usesSchedules = await this.patientHasAnySchedule(patientId);
     const onDialysisScheduleDate = usesSchedules
       ? await this.hasDialysisScheduleOnDate(patientId, date)
@@ -101,6 +146,7 @@ class OrderAutoFill {
         const allowed = orderTypes.some((t) => normalizeOrderType(t) === ot);
         if (!allowed) continue;
       }
+      if (!shouldIncludeDialysisDrugForBedside(order)) continue;
       const shouldExecute = await this.shouldExecuteToday(order, date, patientId, prescription);
       if (!shouldExecute) continue;
       const otNorm = normalizeOrderType(order.order_type);
@@ -120,12 +166,14 @@ class OrderAutoFill {
       });
     }
 
+    let ordersTodayFiltered = dropOrphanComboChildren(ordersToday);
+
     /**
      * 若按频次筛选后为空，但库内仍有「当日有效期内」的透析用药：全部带出并标记 syncFallback，
      * 避免长期医嘱页有药、床旁确认区空白（常见于周几/频次与排班未对齐、或历史脏数据）。
      * 仍仅限 orderTypes 含 dialysis_drug 时的主查询结果。
      */
-    if (ordersToday.length === 0) {
+    if (ordersTodayFiltered.length === 0) {
       for (const order of orders) {
         if (Array.isArray(orderTypes) && orderTypes.length > 0) {
           const ot = normalizeOrderType(order.order_type);
@@ -133,22 +181,29 @@ class OrderAutoFill {
           if (!allowed) continue;
         }
         if (normalizeOrderType(order.order_type) !== 'dialysis_drug') continue;
+        if (!shouldIncludeDialysisDrugForBedside(order)) continue;
         if (usesSchedules && !onDialysisScheduleDate && !isEverySessionDialysisOrder(order)) continue;
         const { rows: execRows } = await pool.query(
           `SELECT id FROM order_executions
            WHERE long_term_order_id = $1 AND execution_date = $2::date`,
           [order.id, date],
         );
-        ordersToday.push({
+        ordersTodayFiltered.push({
           ...order,
           alreadyExecuted: execRows.length > 0,
           executionId: execRows[0]?.id || null,
           syncFallback: true,
         });
       }
+      ordersTodayFiltered = dropOrphanComboChildren(ordersTodayFiltered);
     }
 
-    return { prescription, ordersToday, orders_today: ordersToday };
+    return {
+      prescription,
+      ordersToday: ordersTodayFiltered,
+      orders_today: ordersTodayFiltered,
+      machine_station,
+    };
   }
 
   /**

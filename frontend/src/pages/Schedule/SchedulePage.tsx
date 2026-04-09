@@ -24,6 +24,7 @@ import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
+import NurseScheduleBlankTemplate from '../../components/NurseScheduleBlankTemplate/NurseScheduleBlankTemplate';
 import {
   scheduleApi,
   type PatientSlot,
@@ -34,6 +35,7 @@ import {
 import { patientsApi } from '../../api/patients';
 import { devicesApi, type MachineRow } from '../../api/devices';
 import { usePermission } from '../../utils/permission';
+import { groupTodayScheduleRowsByShiftThenZone } from '../../utils/dialysisTodayScheduleDisplay';
 
 const SHIFT_CONFIG: { key: ShiftKey; label: string }[] = [
   { key: 'am', label: '上午班 (06:00-12:00)' },
@@ -43,6 +45,21 @@ const SHIFT_CONFIG: { key: ShiftKey; label: string }[] = [
 const DAYS_OF_WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
 const SHIFT_LABEL_CN: Record<string, string> = { am: '早', pm: '中', eve: '晚' };
+
+/** GET /schedule/today 返回的 shift 为 DB 英文（morning/afternoon/evening），与周视图键 am/pm/eve 不同 */
+function todayListShiftLabel(shift: string | undefined | null): string {
+  if (shift === undefined || shift === null || shift === '') return '—';
+  const map: Record<string, string> = {
+    morning: '上午',
+    afternoon: '下午',
+    evening: '晚班',
+    am: '上午',
+    pm: '下午',
+    eve: '晚班',
+  };
+  const key = String(shift).toLowerCase();
+  return map[key] ?? String(shift);
+}
 
 /** 本条排班透析模式（HD / HDF / HD+HP），与档案「腹透/血透」类别无关 */
 const HEMO_MODALITY_OPTIONS: { value: string; label: string }[] = [
@@ -223,6 +240,12 @@ export default function SchedulePage() {
   const [todayDialysisRows, setTodayDialysisRows] = useState<TodaySchedulePatientRow[]>([]);
 
   const weekLabel = `${currentWeek.format('YYYY年M月D日')} — ${currentWeek.add(6, 'day').format('M月D日')}`;
+
+  /** 今日上机：先按班次、再按透析隔离区分组（与透析工作台今日名单一致） */
+  const todayDialysisGrouped = useMemo(
+    () => groupTodayScheduleRowsByShiftThenZone(todayDialysisRows),
+    [todayDialysisRows],
+  );
 
   const loadWeek = async (weekStart: dayjs.Dayjs) => {
     try {
@@ -677,29 +700,81 @@ export default function SchedulePage() {
           style={{ marginBottom: 16 }}
           message="今日上机患者 · 透析录入快捷入口"
           description={
-            <Space wrap size="small">
-              {todayDialysisRows.map((row) => (
-                <Button
-                  key={row.id}
-                  type="primary"
-                  ghost
-                  size="small"
-                  onClick={() =>
-                    navigate(
-                      `/dialysis/entry?patient_id=${encodeURIComponent(row.patient_id)}&date=${encodeURIComponent(dayjs().format('YYYY-MM-DD'))}`,
-                    )
-                  }
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {todayDialysisGrouped.map((shiftBlock, shiftIdx) => (
+                <div
+                  key={shiftBlock.shiftKey}
+                  style={{
+                    paddingTop: shiftIdx > 0 ? 12 : 0,
+                    marginTop: shiftIdx > 0 ? 4 : 0,
+                    borderTop: shiftIdx > 0 ? '1px solid #bfdbfe' : undefined,
+                  }}
                 >
-                  {row.patient_name || '患者'}
-                  {row.machine_no ? ` · ${row.machine_no}` : ''}
-                  {' · '}
-                  {SHIFT_LABEL_CN[String(row.shift)] ?? row.shift}
-                  {row.session_dialysis_mode
-                    ? ` · ${scheduleDialysisModeLabel(row.session_dialysis_mode)}`
-                    : ''}
-                </Button>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 13,
+                      color: '#1e40af',
+                      marginBottom: 10,
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    {shiftBlock.shiftLabel}
+                    <Tag color="processing" style={{ marginLeft: 8 }}>
+                      {shiftBlock.zones.reduce((n, z) => n + z.rows.length, 0)} 人
+                    </Tag>
+                  </div>
+                  {shiftBlock.zones.map((zoneBlock, zi) => (
+                    <div
+                      key={`${shiftBlock.shiftKey}-${zoneBlock.zoneKey}`}
+                      style={{ marginBottom: zi < shiftBlock.zones.length - 1 ? 12 : 0 }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <span
+                          style={{
+                            width: 3,
+                            height: 14,
+                            borderRadius: 2,
+                            background:
+                              zoneBlock.zoneColor === 'orange'
+                                ? '#ea580c'
+                                : zoneBlock.zoneColor === 'magenta'
+                                  ? '#c026d3'
+                                  : '#2563eb',
+                          }}
+                          aria-hidden
+                        />
+                        <Tag color={zoneBlock.zoneColor}>{zoneBlock.zoneLabel}</Tag>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>{zoneBlock.rows.length} 人</span>
+                      </div>
+                      <Space wrap size="small">
+                        {zoneBlock.rows.map((row) => (
+                          <Button
+                            key={row.id}
+                            type="primary"
+                            ghost
+                            size="small"
+                            onClick={() =>
+                              navigate(
+                                `/dialysis/entry?patient_id=${encodeURIComponent(row.patient_id)}&date=${encodeURIComponent(dayjs().format('YYYY-MM-DD'))}`,
+                              )
+                            }
+                          >
+                            {row.patient_name || '患者'}
+                            {row.machine_no ? ` · ${row.machine_no}` : ''}
+                            {' · '}
+                            {todayListShiftLabel(row.shift)}
+                            {row.session_dialysis_mode
+                              ? ` · ${scheduleDialysisModeLabel(row.session_dialysis_mode)}`
+                              : ''}
+                          </Button>
+                        ))}
+                      </Space>
+                    </div>
+                  ))}
+                </div>
               ))}
-            </Space>
+            </div>
           }
         />
       )}
@@ -876,9 +951,11 @@ export default function SchedulePage() {
                                           {p.scheduleRemark}
                                         </div>
                                       ) : null}
-                                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
-                                        {p.machineNo ? `机位 ${p.machineNo}` : '未分配机位'}
-                                      </div>
+                                      {p.machineStation?.trim() ? (
+                                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
+                                          {p.machineStation.trim()}
+                                        </div>
+                                      ) : null}
                                     </div>
                                   ))}
                                 </div>
@@ -899,6 +976,13 @@ export default function SchedulePage() {
           </div>
         </Spin>
       </Card>
+
+      <NurseScheduleBlankTemplate
+        weekStart={currentWeek}
+        canEdit={canSchedule}
+        weekSchedule={weekData}
+        weekScheduleLoading={loading}
+      />
 
       {/* 护患比不合规提示 */}
       {nonCompliantCount > 0 && (
@@ -975,7 +1059,7 @@ export default function SchedulePage() {
               },
             },
             {
-              title: '机位',
+              title: '透析机',
               key: 'machine',
               width: 220,
               render: (_, row) => (
@@ -1021,7 +1105,7 @@ export default function SchedulePage() {
               allowClear
             />
             <Select
-              placeholder="选择机位"
+              placeholder="选择透析机"
               style={{ minWidth: 220 }}
               options={addMachineOptions}
               value={addMachineId}
@@ -1144,10 +1228,10 @@ export default function SchedulePage() {
               render: (_, r) => scheduleDialysisModeLabel(r.slot.dialysisMode),
             },
             {
-              title: '机位',
+              title: '档案机位',
               key: 'm',
-              width: 72,
-              render: (_, r) => r.slot.machineNo ?? '—',
+              width: 120,
+              render: (_, r) => r.slot.machineStation?.trim() ?? '',
             },
             {
               title: '备注',

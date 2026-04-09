@@ -16,6 +16,11 @@ import {
 } from '../../constants/prescriptionAnticoagulant';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
+import {
+  formatLocalDateKey,
+  parseApiDateOnlyForPicker,
+  parseApiDateOnlyNullable,
+} from '../../utils/medicalDate';
 import PageShell from '../../components/PageShell/PageShell';
 import IsolationZoneTag from '../../components/IsolationZoneTag/IsolationZoneTag';
 import { PageLoading, PageErrorResult } from '../../components/PageStates/PageStates';
@@ -62,7 +67,8 @@ function buildPresentIllness(p: PatientDetailRecord): string {
   const comorb = p.comorbidities?.filter(Boolean).length
     ? `合并症包括：${p.comorbidities.join('、')}。`
     : '';
-  return `患者诊断「${dx}」${stage ? `，${stage}` : ''}。自 ${p.dialysis_start_date ?? '—'} 起在本科行维持性血液透析。${comorb}`;
+  const startKey = formatLocalDateKey(p.dialysis_start_date);
+  return `患者诊断「${dx}」${stage ? `，${stage}` : ''}。自 ${startKey || '—'} 起在本科行维持性血液透析。${comorb}`;
 }
 
 function buildPastHistory(p: PatientDetailRecord): string {
@@ -190,6 +196,8 @@ type EditFormValues = {
   dialysis_schedule_notes?: string;
   dialysis_schedule_anchor_date?: Dayjs | null;
   dialysis_schedule_adjust?: boolean;
+  /** 约定机位（可选），保存后同步至排班表 */
+  machine_station?: string;
   responsible_nurse_id?: string;
 };
 
@@ -227,7 +235,7 @@ function formatDryWeightDisplay(p: PatientDetailRecord): string {
   const dwr = (p.profile_dry_weight_reason ?? p.dry_weight_reason)?.trim();
   if (dw == null || !Number.isFinite(dw)) return '—';
   const bits = [`${dw} kg`];
-  if (dwd) bits.push(`评估日 ${dwd}`);
+  if (dwd) bits.push(`评估日 ${formatLocalDateKey(dwd)}`);
   if (dwr) bits.push(`原因：${dwr}`);
   return bits.join(' · ');
 }
@@ -235,7 +243,7 @@ function formatDryWeightDisplay(p: PatientDetailRecord): string {
 function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
   const navigate = useNavigate();
   const ac = formatProfileAnticoagulantSummary(patient);
-  const dobStr = patient.dob ? dayjs(patient.dob).format('YYYY-MM-DD') : '—';
+  const dobStr = patient.dob ? formatLocalDateKey(patient.dob) || '—' : '—';
   const currentAccess = getCurrentAccessRecord(patient);
   const rawAccessType =
     (currentAccess?.access_type || patient.access_type || '').toString();
@@ -257,6 +265,7 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
     ['主要诊断', patient.primary_diagnosis],
     ['CKD 分期', patient.ckd_stage ? `${patient.ckd_stage} 期` : '—'],
     ['合并症', patient.comorbidities?.length ? patient.comorbidities.join('、') : '—'],
+    ['约定机位', patient.machine_station?.trim() || '—'],
     ['干体重', formatDryWeightDisplay(patient)],
     ['联系电话', patient.phone || '—'],
     ['家属联系人', formatFamilyContact(patient.family_contact)],
@@ -291,7 +300,7 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
             <>
               <br />
               <span style={{ fontSize: 12, color: '#64748B' }}>
-                隔日锚点：{patient.dialysis_schedule_anchor_date}
+                隔日锚点：{formatLocalDateKey(patient.dialysis_schedule_anchor_date)}
               </span>
             </>
           ) : null}
@@ -305,21 +314,26 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
       ),
     ],
     ['血管通路', accessDisplay],
-    ['透析开始日期', `${patient.dialysis_start_date ?? '—'}（透析龄 ${patient.dialysis_age ?? '—'}）`],
+    [
+      '透析开始日期',
+      `${formatLocalDateKey(patient.dialysis_start_date) || '—'}（透析龄 ${patient.dialysis_age ?? '—'}）`,
+    ],
     ['责任护士', patient.responsible_nurse_name?.trim() || '—'],
   ] as const;
 
   const infectionTable = infectionRows.map((r, i) => {
     const next =
-      r.next_due_date ||
-      (r.screen_date ? dayjs(r.screen_date).add(6, 'month').format('YYYY-MM-DD') : '—');
+      (r.next_due_date ? formatLocalDateKey(r.next_due_date) : '') ||
+      (r.screen_date
+        ? dayjs(formatLocalDateKey(r.screen_date)).add(6, 'month').format('YYYY-MM-DD')
+        : '—');
     const neg = r.result === 'negative' || r.result === 'normal';
     return {
       key: String(i),
       item: infectionItemLabel(r.screen_type),
       resultText: formatInfectionResult(r.result),
       neg,
-      date: r.screen_date,
+      date: formatLocalDateKey(r.screen_date) || r.screen_date,
       next,
     };
   });
@@ -521,7 +535,7 @@ function TabCareCoordination({
   const abnormalLabCount = labRows.filter(l => l.is_abnormal).length;
   const criticalLabCount = labRows.filter(l => l.is_critical).length;
   const nextInfectionDate = infectionRows
-    .map(r => r.next_due_date)
+    .map(r => (r.next_due_date ? formatLocalDateKey(r.next_due_date) : ''))
     .filter((v): v is string => Boolean(v))
     .sort()[0];
   const currentAccessType = getCurrentAccessType(patient);
@@ -545,7 +559,7 @@ function TabCareCoordination({
   const infectionAlerts: CareReminderItem[] = infectionRows
     .filter(r => Boolean(r.screen_date))
     .flatMap((r, idx): CareReminderItem[] => {
-      const daysSince = dayjs().diff(dayjs(r.screen_date), 'day');
+      const daysSince = dayjs().diff(dayjs(formatLocalDateKey(r.screen_date)), 'day');
       if (daysSince >= INFECTION_OVERDUE_DAYS) {
         return [{
           key: `infection-overdue-${idx}`,
@@ -901,8 +915,8 @@ export default function PatientDetailPage() {
     editForm.setFieldsValue({
       name: p.name,
       gender: p.gender,
-      dob: p.dob ? dayjs(p.dob) : dayjs(),
-      dialysis_start_date: p.dialysis_start_date ? dayjs(p.dialysis_start_date) : dayjs(),
+      dob: parseApiDateOnlyForPicker(p.dob),
+      dialysis_start_date: parseApiDateOnlyForPicker(p.dialysis_start_date),
       primary_diagnosis: p.primary_diagnosis,
       present_illness: p.present_illness || undefined,
       past_history: p.past_history || undefined,
@@ -917,9 +931,9 @@ export default function PatientDetailPage() {
           : p.dry_weight != null
             ? Number(p.dry_weight)
             : undefined,
-      profile_dry_weight_date: (p.profile_dry_weight_date ?? p.dry_weight_date)
-        ? dayjs(p.profile_dry_weight_date ?? p.dry_weight_date)
-        : dayjs(),
+      profile_dry_weight_date: parseApiDateOnlyForPicker(
+        p.profile_dry_weight_date ?? p.dry_weight_date,
+      ),
       profile_dry_weight_reason: p.profile_dry_weight_reason ?? p.dry_weight_reason ?? undefined,
       id_card: p.id_card || undefined,
       phone: p.phone || undefined,
@@ -927,9 +941,9 @@ export default function PatientDetailPage() {
       family_contact_phone: p.family_contact?.phone || undefined,
       address: p.address || undefined,
       consent_dialysis: p.consent_dialysis ?? false,
-      consent_dialysis_date: p.consent_dialysis_date ? dayjs(p.consent_dialysis_date) : null,
+      consent_dialysis_date: parseApiDateOnlyNullable(p.consent_dialysis_date),
       consent_cvc: p.consent_cvc ?? false,
-      consent_cvc_date: p.consent_cvc_date ? dayjs(p.consent_cvc_date) : null,
+      consent_cvc_date: parseApiDateOnlyNullable(p.consent_cvc_date),
       current_access_type: getCurrentAccessType(p),
       dialysis_schedule_code: p.dialysis_schedule_code || undefined,
       dialysis_schedule_notes: p.dialysis_schedule_notes || undefined,
@@ -937,8 +951,9 @@ export default function PatientDetailPage() {
         p.dialysis_schedule_notes?.trim() || p.dialysis_schedule_code === 'other',
       ),
       dialysis_schedule_anchor_date: p.dialysis_schedule_anchor_date
-        ? dayjs(p.dialysis_schedule_anchor_date)
+        ? parseApiDateOnlyForPicker(p.dialysis_schedule_anchor_date)
         : undefined,
+      machine_station: p.machine_station?.trim() || undefined,
       responsible_nurse_id: p.responsible_nurse_id || undefined,
     });
     setEditConsentFileList([]);
@@ -1006,6 +1021,9 @@ export default function PatientDetailPage() {
           values.dialysis_schedule_code === 'qod' && values.dialysis_schedule_anchor_date
             ? values.dialysis_schedule_anchor_date.format('YYYY-MM-DD')
             : null,
+        machine_station: values.machine_station?.trim()
+          ? values.machine_station.trim().slice(0, 80)
+          : null,
         responsible_nurse_id: values.responsible_nurse_id ?? undefined,
       };
       await patientsApi.update(id, updatePayload);
@@ -1050,7 +1068,12 @@ export default function PatientDetailPage() {
       }
 
       const data = await loadPatientData(id);
-      setPatient(data.patient);
+      const nextPatient: PatientDetailRecord = {
+        ...data.patient,
+        machine_station:
+          data.patient.machine_station ?? updatePayload.machine_station ?? null,
+      };
+      setPatient(nextPatient);
       setInfectionRows(data.infectionRows);
       setLabRows(data.labRows);
       setDialysisRows(data.dialysisRows);
@@ -1250,6 +1273,14 @@ export default function PatientDetailPage() {
             </Form.Item>
             <Form.Item name="dialysis_start_date" label="开始透析日期">
               <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" disabled />
+            </Form.Item>
+            <Form.Item
+              name="machine_station"
+              label="机位（可选）"
+              style={{ gridColumn: 'span 2' }}
+              tooltip="约定机位或位置说明；保存档案后将同步至该患者在排班表中的全部记录。"
+            >
+              <Input maxLength={80} allowClear placeholder="如：靠窗、固定区域等" />
             </Form.Item>
             <Form.Item
               name="primary_diagnosis"
