@@ -3,7 +3,7 @@
  */
 import { useRef, useCallback } from 'react';
 import { Upload, Dropdown, message } from 'antd';
-import type { UploadFile } from 'antd/es/upload/interface';
+import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type { MenuProps } from 'antd';
 
 const ACCEPT_ATTR = 'image/jpeg,image/png,image/webp,image/gif';
@@ -58,7 +58,7 @@ export default function ConsentDialysisImageUpload({
           uid: `consent-${Date.now()}-${Math.random().toString(36).slice(2, 11)}-${file.name}`,
           name: file.name || 'image',
           status: 'done',
-          originFileObj: file,
+          originFileObj: file as RcFile,
         });
       }
       if (toAdd.length) emit([...list, ...toAdd]);

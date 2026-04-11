@@ -29,7 +29,6 @@ import {
 import { patientsApi } from '../../api/patients';
 import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import {
-  mergePrescriptionDefaultsForPatient,
   shiftCodeToChinese,
   computePrescriptionUltrafiltrationMl,
   dialyzerShortFromFormValue,
@@ -992,20 +991,9 @@ function SectionTitle({ step, color, title, extra }: {
   step: number; color: string; title: string; extra?: React.ReactNode;
 }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 16px',
-      background: '#FAFBFC',
-      borderBottom: '1px solid #EAECF0',
-    }}>
-      <div style={{
-        width: 24, height: 24, borderRadius: '50%',
-        background: color, color: '#fff',
-        fontSize: 12, fontWeight: 700,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-      }}>{step}</div>
-      <span style={{ fontWeight: 600, fontSize: 14, color: '#0D1B3E', flex: 1 }}>{title}</span>
+    <div className="hd-record-section__header">
+      <div className="hd-record-section__step" style={{ background: color }}>{step}</div>
+      <span className="hd-record-section__title">{title}</span>
       {extra}
     </div>
   );
@@ -1016,13 +1004,14 @@ function ReadonlyValue({ label, value, color = '#0369A1', bg = '#F0F9FF', border
   label: string; value: React.ReactNode; color?: string; bg?: string; border?: string; mono?: boolean;
 }) {
   return (
-    <div>
-      <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 3, fontWeight: 500 }}>{label}</div>
-      <div style={{
-        padding: '5px 10px', background: bg, border: `1px solid ${border}`,
-        borderRadius: 6, fontSize: 14, fontWeight: 700, color,
-        fontFamily: mono ? 'DM Mono, monospace' : 'inherit',
-      }}>{value}</div>
+    <div className="hd-readonly-field">
+      <div className="hd-readonly-field__label">{label}</div>
+      <div
+        className={`hd-readonly-field__value${mono ? ' num' : ''}`}
+        style={{ background: bg, borderColor: border, color }}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -1030,7 +1019,7 @@ function ReadonlyValue({ label, value, color = '#0369A1', bg = '#F0F9FF', border
 // ── 表单项标签 ────────────────────────────────────────────
 function FieldLabel({ text, required }: { text: string; required?: boolean }) {
   return (
-    <span style={{ fontSize: 12, color: '#475569', fontWeight: 500 }}>
+    <span className="hd-field-label">
       {text}{required && <span style={{ color: '#EF4444', marginLeft: 2 }}>*</span>}
     </span>
   );
@@ -1039,22 +1028,14 @@ function FieldLabel({ text, required }: { text: string; required?: boolean }) {
 // ── 区块容器 ──────────────────────────────────────────────
 function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
-    <div style={{
-      background: '#fff',
-      borderRadius: 10,
-      border: '1px solid #E2E8F0',
-      marginBottom: 12,
-      overflow: 'hidden',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-      ...style,
-    }}>
+    <div className="hd-record-section" style={style}>
       {children}
     </div>
   );
 }
 
 function SectionBody({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <div style={{ padding: '16px 18px', ...style }}>{children}</div>;
+  return <div className="hd-record-section__body" style={style}>{children}</div>;
 }
 
 // ── 网格布局辅助 ──────────────────────────────────────────
@@ -1074,16 +1055,7 @@ function Grid({ cols = 4, gap = 14, children, style }: {
 /** 透析后评估区块内二级分组标题 */
 function SubsectionTitle({ children, first }: { children: React.ReactNode; first?: boolean }) {
   return (
-    <div style={{
-      fontSize: 12,
-      fontWeight: 600,
-      color: '#334155',
-      letterSpacing: '0.03em',
-      marginBottom: 10,
-      marginTop: first ? 0 : 18,
-      paddingBottom: 6,
-      borderBottom: '1px solid #E8EEF4',
-    }}>{children}</div>
+    <div className={`hd-subsection-title${first ? ' hd-subsection-title--first' : ''}`}>{children}</div>
   );
 }
 
@@ -2129,25 +2101,28 @@ export default function DialysisEntryPage() {
 
   return (
     <PageShell fullWidth>
-      {/* ═══════════════════════ 顶部操作栏（固定） ═══════════════════════ */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 0 14px',
-        borderBottom: '2px solid #EDF0F7',
-        marginBottom: 16,
-      }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <span style={{ fontWeight: 700, fontSize: 16, color: '#0D1B3E' }}>录入透析记录</span>
-            <span style={{ fontSize: 12, color: '#94A3B8' }}>
-              {sessionDate.format('YYYY年MM月DD日 dddd')}
-            </span>
+      <div className="hd-page-intro">
+        <div>
+          <div className="hd-page-intro__eyebrow">Session Record</div>
+          <div className="hd-page-intro__title">透析记录录入</div>
+          <div className="hd-page-intro__desc">
+            聚焦当次透析的处方带入、通路评估、生命体征、并发症与透后记录，维持护士端连续录入节奏，不改变原有功能与保存逻辑。
           </div>
         </div>
+        <div className="hd-page-intro__chips">
+          <span className="hd-page-intro__chip">{sessionDate.format('YYYY年MM月DD日 dddd')}</span>
+          <span className="hd-page-intro__chip">{selectedPatientDisplayLabel ?? '未选择患者'}</span>
+          {draftSavedAtIso && selectedPatient ? (
+            <span className="hd-page-intro__chip">
+              临时保存 {dayjs(draftSavedAtIso).format('HH:mm:ss')}
+            </span>
+          ) : null}
+        </div>
+      </div>
 
-        {/* 与标题旁日期、prepare、保存 session_date 均为同一 sessionDate */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: '#64748B', whiteSpace: 'nowrap' }}>透析日期</span>
+      <div className="hd-filter-bar">
+        <div className="hd-filter-bar__left">
+          <span className="hd-toolbar-label">透析日期</span>
           <DatePicker
             value={sessionDate}
             onChange={(val) => val && setSessionDate(val)}
@@ -2156,18 +2131,14 @@ export default function DialysisEntryPage() {
             size="middle"
           />
         </div>
-
-        <Button icon={<PrinterOutlined />} onClick={handlePrint} size="middle">
-          打印记录单
-        </Button>
-        {draftSavedAtIso && selectedPatient && (
-          <Tag color="processing" style={{ marginInlineEnd: 0 }}>
-            临时保存 {dayjs(draftSavedAtIso).format('HH:mm:ss')}
-          </Tag>
-        )}
-        <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit} size="middle">
-          保存记录
-        </Button>
+        <div className="hd-filter-bar__right">
+          <Button icon={<PrinterOutlined />} onClick={handlePrint}>
+            打印记录单
+          </Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit}>
+            保存记录
+          </Button>
+        </div>
       </div>
 
       <Form
@@ -2185,26 +2156,15 @@ export default function DialysisEntryPage() {
           <SectionTitle step={1} color="#1D4ED8" title="患者信息 · 处方参数 · 体重超滤" />
           <SectionBody>
             {!selectedPatient && (
-              <div style={{
-                padding: '20px', textAlign: 'center',
-                color: '#94A3B8', background: '#F8FAFC', borderRadius: 8,
-                border: '1px dashed #CBD5E1', fontSize: 13,
-              }}>
+              <div className="hd-empty-state">
                 请从侧栏「今日上机名单」选择患者，或由排班/处方页携带患者链接进入；系统将自动带入处方与评估信息
               </div>
             )}
 
             {rxPreview && selectedDemoPatient && (
               <>
-                {/* 患者基础信息条（与处方工作台一致） */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                  padding: '8px 12px',
-                  background: 'linear-gradient(90deg,#EFF6FF,#F0F9FF)',
-                  borderRadius: 8, marginBottom: 14,
-                  border: '1px solid #BFDBFE',
-                }}>
-                  <span style={{ fontWeight: 700, fontSize: 15, color: '#1E40AF' }}>
+                <div className="hd-clinical-banner">
+                  <span className="hd-clinical-banner__name">
                     {selectedDemoPatient.label.split(' — ')[0]}
                   </span>
                   <Tag color="blue">{rxPreview.shiftChinese}</Tag>
@@ -2212,22 +2172,18 @@ export default function DialysisEntryPage() {
                   <Tag color={accessType === 'AVF' || accessType === 'AVG' ? 'green' : 'orange'}>
                     {accessType}
                   </Tag>
-                  <span style={{ fontSize: 12, color: '#64748B' }}>
+                  <span className="hd-clinical-banner__copy">
                     开立医师：
                     <strong style={{ color: '#0D1B3E' }}>{selectedDemoPatient.prescribingDoctorName}</strong>
                   </span>
-                  <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
+                  <span className="hd-clinical-banner__hint">
                     处方与评估信息自动导入，仅查看不可修改
                   </span>
                 </div>
 
-                {/* 处方参数 + 透前评估（与 PrescriptionWorkspace ②③④ 字段同源，只读） */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-                  <div style={{
-                    padding: 12, background: '#F8FAFC', borderRadius: 8,
-                    border: '1px solid #DBEAFE',
-                  }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                <div className="hd-split-panels" style={{ marginBottom: 16 }}>
+                  <div className="hd-summary-block">
+                    <div className="hd-summary-block__title">
                       处方参数
                     </div>
                     <Grid cols={3} gap={10}>
@@ -2255,11 +2211,8 @@ export default function DialysisEntryPage() {
                     </Grid>
                   </div>
 
-                  <div style={{
-                    padding: 12, background: '#F8FAFC', borderRadius: 8,
-                    border: '1px solid #DBEAFE',
-                  }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                  <div className="hd-summary-block">
+                    <div className="hd-summary-block__title">
                       透前评估
                     </div>
                     <Grid cols={3} gap={10}>
@@ -2286,12 +2239,8 @@ export default function DialysisEntryPage() {
                   </div>
                 </div>
 
-                {/* 体重 & 超滤：与处方工作台摘要区一致 */}
-                <div style={{
-                  padding: '12px 14px', background: '#FFFDF0', borderRadius: 8,
-                  border: '1px solid #FDE68A',
-                }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 10, letterSpacing: 0.5 }}>
+                <div className="hd-summary-block hd-summary-block--warm">
+                  <div className="hd-summary-block__title">
                     体重与超滤（与处方工作台「超滤量」一致：(上机前体重−干体重)×1000 + 附加（HD/HDF +200mL，HD+HP +500mL）；处方为只读）
                   </div>
                   <Grid cols={4} gap={14}>
@@ -2329,31 +2278,9 @@ export default function DialysisEntryPage() {
                   </Grid>
                 </div>
 
-                <div
-                  style={{
-                    marginTop: 14,
-                    paddingTop: 12,
-                    borderTop: '1px dashed #E2E8F0',
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    alignItems: 'baseline',
-                    gap: 8,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <span style={{ fontSize: 12, color: '#64748B' }}>医生签名：</span>
-                  <span
-                    style={{
-                      fontFamily: '"KaiTi", "STKaiti", "FangSong", "SimSun", serif',
-                      fontSize: 20,
-                      color: '#1e293b',
-                      letterSpacing: '0.12em',
-                      padding: '0 10px 6px',
-                      borderBottom: '1px solid #cbd5e1',
-                      minWidth: 100,
-                      textAlign: 'center',
-                    }}
-                  >
+                <div className="hd-signature-row">
+                  <span className="hd-signature-label">医生签名：</span>
+                  <span className="hd-signature-line">
                     {prescribingDoctorName ?? '—'}
                   </span>
                 </div>
@@ -2364,29 +2291,20 @@ export default function DialysisEntryPage() {
               <>
                 {realPatientRxPreview ? (
                   <>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                      padding: '8px 12px',
-                      background: 'linear-gradient(90deg,#EFF6FF,#F0F9FF)',
-                      borderRadius: 8, marginBottom: 14,
-                      border: '1px solid #BFDBFE',
-                    }}>
-                      <span style={{ fontWeight: 700, fontSize: 15, color: '#1E40AF' }}>
+                    <div className="hd-clinical-banner">
+                      <span className="hd-clinical-banner__name">
                         {selectedPatientDisplayLabel?.split(' — ')[0] ?? '患者'}
                       </span>
                       <Tag color="blue">{realPatientRxPreview.shiftChinese}班</Tag>
                       <Tag color="geekblue">机位 {realPatientRxPreview.machineStation}</Tag>
-                      <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
+                      <span className="hd-clinical-banner__hint">
                         与「透析处方管理」当前保存参数同步；上机前体重可在下方第⑦段修改
                       </span>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-                      <div style={{
-                        padding: 12, background: '#F8FAFC', borderRadius: 8,
-                        border: '1px solid #DBEAFE',
-                      }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                    <div className="hd-split-panels" style={{ marginBottom: 16 }}>
+                      <div className="hd-summary-block">
+                        <div className="hd-summary-block__title">
                           处方参数（数据库当前处方）
                         </div>
                         <Grid cols={3} gap={10}>
@@ -2435,11 +2353,8 @@ export default function DialysisEntryPage() {
                         </Grid>
                       </div>
 
-                      <div style={{
-                        padding: 12, background: '#F8FAFC', borderRadius: 8,
-                        border: '1px solid #DBEAFE',
-                      }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 10, letterSpacing: 0.5 }}>
+                      <div className="hd-summary-block">
+                        <div className="hd-summary-block__title">
                           透前评估（与透析处方管理同步）
                         </div>
                         <Grid cols={3} gap={10}>
@@ -2493,11 +2408,8 @@ export default function DialysisEntryPage() {
                       </div>
                     </div>
 
-                    <div style={{
-                      padding: '12px 14px', background: '#FFFDF0', borderRadius: 8,
-                      border: '1px solid #FDE68A',
-                    }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 10, letterSpacing: 0.5 }}>
+                    <div className="hd-summary-block hd-summary-block--warm">
+                      <div className="hd-summary-block__title">
                         体重与超滤（与处方工作台公式一致；上机前体重默认取干体重，请在第⑦段改为实测值）
                       </div>
                       <Grid cols={4} gap={14}>
@@ -3707,12 +3619,8 @@ export default function DialysisEntryPage() {
         })()}
 
         {/* 底部操作栏 */}
-        <div style={{
-          display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
-          padding: '14px 0 6px',
-          borderTop: '1px solid #EDF0F7',
-        }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div className="hd-form-footer" style={{ justifyContent: 'flex-end' }}>
+          <div className="hd-form-footer__actions">
             {hasEmergency && (
               <span style={{ color: '#DC2626', fontSize: 13, fontWeight: 600 }}>
                 <WarningFilled /> 存在紧急并发症，请确认已通知医生

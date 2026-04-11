@@ -312,19 +312,11 @@ function RxReadonlyValue({
   mono?: boolean;
 }) {
   return (
-    <div>
-      <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 3, fontWeight: 500 }}>{label}</div>
+    <div className="hd-readonly-field">
+      <div className="hd-readonly-field__label">{label}</div>
       <div
-        style={{
-          padding: '5px 10px',
-          background: bg,
-          border: `1px solid ${border}`,
-          borderRadius: 6,
-          fontSize: 14,
-          fontWeight: 700,
-          color,
-          fontFamily: mono ? 'DM Mono, monospace' : 'inherit',
-        }}
+        className={`hd-readonly-field__value${mono ? ' num' : ''}`}
+        style={{ background: bg, borderColor: border, color }}
       >
         {value}
       </div>
@@ -489,22 +481,6 @@ function applyHeparinCoreFromLoadedRx(
   return Math.max(0, core);
 }
 
-function scheduleDbShiftLabel(shift: string | undefined): string {
-  const m: Record<string, string> = {
-    morning: '上午',
-    afternoon: '下午',
-    evening: '晚',
-    am: '上午',
-    pm: '下午',
-    eve: '晚',
-  };
-  return (shift && m[shift]) || shift || '—';
-}
-
-/**
- * 排班 scheduled_date 与「今日」比较用。node-pg/JSON 常把 DATE 序列化为 ISO 串，
- * 若仅用 slice(0,10) 会得到 UTC 日期，东八区易与本地日历差一天，导致匹配不到今日本条排班、透析模式无法覆盖。
- */
 /** 医生签名为空时填入当前登录用户（优先 real_name，否则 username；可修改） */
 function ensureDoctorSignatureFromCurrentUser(form: {
   getFieldValue: (name: string) => unknown;
@@ -1290,23 +1266,24 @@ export default function PrescriptionWorkspacePage() {
 
   return (
     <PageShell fullWidth>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 12,
-          padding: '10px 0 14px',
-          borderBottom: '2px solid #EDF0F7',
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, fontSize: 16, color: '#0D1B3E' }}>透析处方</span>
-            <span style={{ fontSize: 12, color: '#94A3B8' }}>{dayjs().format('YYYY年MM月DD日 dddd')}</span>
+      <div className="hd-page-intro">
+        <div>
+          <div className="hd-page-intro__eyebrow">Prescription Workspace</div>
+          <div className="hd-page-intro__title">透析处方工作台</div>
+          <div className="hd-page-intro__desc">
+            面向医生维护当次透析处方，强调患者上下文、处方摘要、今日排班联动与透后评估同步，不改变原有字段、接口和保存方式。
           </div>
         </div>
+        <div className="hd-page-intro__chips">
+          <span className="hd-page-intro__chip">{dayjs().format('YYYY年MM月DD日 dddd')}</span>
+          <span className="hd-page-intro__chip">{selectedPatient ? '已选患者' : '待选择患者'}</span>
+          <span className="hd-page-intro__chip">今日排班 {scheduleTodayRows.length} 人</span>
+        </div>
+      </div>
+
+      <div className="hd-filter-bar">
+        <div className="hd-filter-bar__left">
+          <span className="hd-toolbar-label">患者</span>
         <Select
           placeholder="选择患者…"
           value={selectedPatient || undefined}
@@ -1316,82 +1293,38 @@ export default function PrescriptionWorkspacePage() {
           showSearch
           optionFilterProp="label"
         />
-        <Button icon={<HistoryOutlined />} onClick={() => setShowHistory(true)} disabled={!selectedPatient}>
-          处方历史
-        </Button>
-        <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} disabled={!selectedPatient}>
-          保存处方
-        </Button>
+        </div>
+        <div className="hd-filter-bar__right">
+          <Button icon={<HistoryOutlined />} onClick={() => setShowHistory(true)} disabled={!selectedPatient}>
+            处方历史
+          </Button>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} disabled={!selectedPatient}>
+            保存处方
+          </Button>
+        </div>
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 16,
-          alignItems: 'stretch',
-          minHeight: 'min(72vh, calc(100vh - 180px))',
-        }}
-      >
+      <div className="hd-workspace-frame">
         {scheduleTodayRows.length > 0 ? (
-          <aside
-            style={{
-              flex: `0 0 ${PRESCRIPTION_TODAY_SIDER_WIDTH}px`,
-              width: PRESCRIPTION_TODAY_SIDER_WIDTH,
-              maxWidth: PRESCRIPTION_TODAY_SIDER_WIDTH,
-              alignSelf: 'stretch',
-              background: '#fff',
-              borderRadius: 8,
-              border: '1px solid #EEF2F7',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              minHeight: 0,
-            }}
-          >
-            <div
-              style={{
-                padding: '12px 8px 8px',
-                fontWeight: 700,
-                fontSize: 13,
-                color: '#0D1B3E',
-                borderBottom: '1px solid #EEF2F7',
-                flexShrink: 0,
-              }}
-            >
-              今日排班 · 上机日
-            </div>
-            <div
-              style={{
-                padding: '8px 8px 6px',
-                flexShrink: 0,
-                borderBottom: '1px solid #F1F5F9',
-              }}
-            >
-              <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>
-                与排班同步 · 点击卡片选择患者书写处方
+          <aside className="hd-workspace-sidebar" style={{ flexBasis: PRESCRIPTION_TODAY_SIDER_WIDTH, width: PRESCRIPTION_TODAY_SIDER_WIDTH, maxWidth: PRESCRIPTION_TODAY_SIDER_WIDTH }}>
+            <div className="hd-workspace-sidebar__head">
+              <div className="hd-workspace-sidebar__title">今日排班 · 上机日</div>
+              <div className="hd-workspace-sidebar__desc">
+                与排班同步，点击患者卡片后直接进入处方编辑。
               </div>
             </div>
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflow: 'auto',
-                padding: '8px 8px 14px',
-              }}
-            >
+            <div className="hd-workspace-sidebar__meta">
+              <span style={{ fontWeight: 700, color: '#0f172a' }}>{scheduleTodayRows.length} 人</span>
+              <span style={{ marginLeft: 8 }}>{dayjs().format('YYYY-MM-DD')}</span>
+            </div>
+            <div className="hd-workspace-sidebar__body">
               <div
                 style={{
-                  padding: '0 0 10px',
-                  marginBottom: 8,
-                  borderBottom: '1px solid #EEF2F7',
-                  fontSize: 12,
-                  color: '#64748b',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 0,
                 }}
               >
-                <span style={{ fontWeight: 600, color: '#0f172a' }}>{scheduleTodayRows.length} 人</span>
-                <span style={{ marginLeft: 8 }}>{dayjs().format('YYYY-MM-DD')}</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
                 {scheduleTodayGrouped.map((shiftBlock, shiftIdx) => (
                   <section
                     key={shiftBlock.shiftKey}
@@ -1543,19 +1476,9 @@ export default function PrescriptionWorkspacePage() {
           </aside>
         ) : null}
 
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+        <div className="hd-workspace-content">
           {!selectedPatient && (
-            <div
-              style={{
-                padding: 28,
-                textAlign: 'center',
-                color: '#94A3B8',
-                background: '#F8FAFC',
-                borderRadius: 8,
-                border: '1px dashed #CBD5E1',
-                fontSize: 13,
-              }}
-            >
+            <div className="hd-empty-state">
               {scheduleTodayRows.length > 0
                 ? '请先在左侧今日排班名单中点击患者，或使用上方下拉框选择。处方宜在上机当日书写。'
                 : '请先在上方选择患者。下方摘要与「录入透析记录」第①段「患者信息 · 处方参数 · 体重超滤」使用同一套演示数据。'}
@@ -1582,62 +1505,18 @@ export default function PrescriptionWorkspacePage() {
           initialValues={PATIENTS.find((p) => p.value === selectedPatient)?.defaults}
         >
           {patientInfo && (
-            <div
-              style={{
-                background: '#fff',
-                borderRadius: 10,
-                border: '1px solid #E2E8F0',
-                marginBottom: 12,
-                overflow: 'hidden',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 16px',
-                  background: '#FAFBFC',
-                  borderBottom: '1px solid #EAECF0',
-                }}
-              >
-                <div
-                  style={{
-                    width: 24,
-                    height: 24,
-                    borderRadius: '50%',
-                    background: '#1D4ED8',
-                    color: '#fff',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                >
+            <div className="hd-record-section">
+              <div className="hd-record-section__header">
+                <div className="hd-record-section__step" style={{ background: '#1D4ED8' }}>
                   1
                 </div>
-                <span style={{ fontWeight: 600, fontSize: 14, color: '#0D1B3E', flex: 1 }}>
+                <span className="hd-record-section__title">
                   患者信息 · 处方参数 · 体重超滤（与「录入透析记录」同步）
                 </span>
               </div>
-              <div style={{ padding: '16px 18px' }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    flexWrap: 'wrap',
-                    padding: '8px 12px',
-                    background: 'linear-gradient(90deg,#EFF6FF,#F0F9FF)',
-                    borderRadius: 8,
-                    marginBottom: 14,
-                    border: '1px solid #BFDBFE',
-                  }}
-                >
-                  <span style={{ fontWeight: 700, fontSize: 16, color: '#1E40AF' }}>
+              <div className="hd-record-section__body">
+                <div className="hd-clinical-banner">
+                  <span className="hd-clinical-banner__name">
                     {patientInfo.label.split(' — ')[0]}
                   </span>
                   <Tag color="blue">{shiftCodeToChinese(shiftWatched)}</Tag>
@@ -1645,27 +1524,20 @@ export default function PrescriptionWorkspacePage() {
                   <Tag color={patientInfo.demo.vascular.accessType === 'AVF' || patientInfo.demo.vascular.accessType === 'AVG' ? 'green' : 'orange'}>
                     {patientInfo.demo.vascular.accessType}
                   </Tag>
-                  <span style={{ fontSize: 12, color: '#64748B' }}>
+                  <span className="hd-clinical-banner__copy">
                     开立医师：<strong style={{ color: '#0D1B3E' }}>{patientInfo.demo.prescribingDoctorName}</strong>
                   </span>
-                  <span style={{ marginLeft: 'auto', fontSize: 12, color: '#7B92BC' }}>
+                  <span className="hd-clinical-banner__hint">
                     下方编辑后此处实时更新
                   </span>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
-                  <div
-                    style={{
-                      padding: 12,
-                      background: '#F8FAFC',
-                      borderRadius: 8,
-                      border: '1px solid #DBEAFE',
-                    }}
-                  >
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 8, letterSpacing: 0.5 }}>
+                <div className="hd-summary-stack" style={{ marginBottom: 16 }}>
+                  <div className="hd-summary-block">
+                    <div className="hd-summary-block__title">
                       基本参数 · 透析处方
                     </div>
-                    <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 10 }}>方案与体外循环</div>
+                    <div className="hd-summary-block__meta">方案与体外循环</div>
                     <RxGrid cols={3} gap={10}>
                       <RxReadonlyValue label="透析频次" value={frequencyLabel} />
                       <RxReadonlyValue label="透析模式" value={modeDisplay} />
@@ -1712,18 +1584,11 @@ export default function PrescriptionWorkspacePage() {
                       />
                     </RxGrid>
                   </div>
-                  <div
-                    style={{
-                      padding: 12,
-                      background: '#F8FAFC',
-                      borderRadius: 8,
-                      border: '1px solid #DBEAFE',
-                    }}
-                  >
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', marginBottom: 8, letterSpacing: 0.5 }}>
+                  <div className="hd-summary-block">
+                    <div className="hd-summary-block__title">
                       基本参数 · 透前评估
                     </div>
-                    <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 10 }}>生命体征与临床</div>
+                    <div className="hd-summary-block__meta">生命体征与临床</div>
                     <RxGrid cols={3} gap={10}>
                       <RxReadonlyValue label="收缩压" value={`${preAssessSbpLive ?? '—'} mmHg`} />
                       <RxReadonlyValue label="舒张压" value={`${preAssessDbpLive ?? '—'} mmHg`} />
@@ -1752,15 +1617,8 @@ export default function PrescriptionWorkspacePage() {
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    padding: '12px 14px',
-                    background: '#FFFDF0',
-                    borderRadius: 8,
-                    border: '1px solid #FDE68A',
-                  }}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 10, letterSpacing: 0.5 }}>
+                <div className="hd-summary-block hd-summary-block--warm">
+                  <div className="hd-summary-block__title">
                     体重与超滤（与下方「超滤量 (mL)」一致：(上机前体重−干体重)×1000 + 附加（HD/HDF +200mL，HD+HP +500mL），可手动修改）
                   </div>
                   <RxGrid cols={4} gap={14}>
@@ -1808,8 +1666,8 @@ export default function PrescriptionWorkspacePage() {
           )}
 
           <Collapse
+            className="hd-prescription-collapse"
             bordered={false}
-            style={{ background: 'transparent' }}
             defaultActiveKey={['rx']}
             items={[
               {
@@ -1823,11 +1681,10 @@ export default function PrescriptionWorkspacePage() {
                   <div>
           {/* 基本透析参数 */}
           <Card
-            style={{ marginBottom: 16, border: '1px solid #DBEAFE' }}
-            styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-            title={<span style={{ fontWeight: 600, color: '#0369A1' }}>📋 基本透析参数</span>}
+            className="hd-panel-card hd-prescription-card"
+            title={<span className="hd-card-title">基本透析参数</span>}
           >
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>透析方案与频次</div>
+            <div className="hd-card-subtitle">透析方案与频次</div>
             <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
               <Form.Item label="透析频次" name="frequencyPreset" rules={[{ required: true, message: '请选择透析频次' }]}>
                 <Select options={[...FREQUENCY_PRESET_OPTIONS]} />
@@ -1996,11 +1853,10 @@ export default function PrescriptionWorkspacePage() {
           </Card>
 
           <Card
-            style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
-            styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-            title={<span style={{ fontWeight: 600, color: '#0369A1' }}>📊 透前评估</span>}
+            className="hd-panel-card hd-prescription-card"
+            title={<span className="hd-card-title">透前评估</span>}
           >
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>生命体征</div>
+            <div className="hd-card-subtitle">生命体征</div>
             <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
               <Form.Item label="透前收缩压 (mmHg)" name="preAssessSbp">
                 <InputNumber min={60} max={250} style={{ width: '100%' }} />
@@ -2013,7 +1869,7 @@ export default function PrescriptionWorkspacePage() {
               </Form.Item>
             </div>
             <Divider style={{ margin: '8px 0 16px', borderColor: '#DBEAFE' }} />
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>临床与症状</div>
+            <div className="hd-card-subtitle">临床与症状</div>
             <Form.Item label="其他（透前补充）" name="preAssessOther" style={{ marginBottom: 16 }}>
               <Input.TextArea rows={2} placeholder="呼吸道、全身情况等补充说明（手填）" />
             </Form.Item>
@@ -2046,7 +1902,7 @@ export default function PrescriptionWorkspacePage() {
               </Form.Item>
             )}
             <Divider style={{ margin: '8px 0 16px', borderColor: '#DBEAFE' }} />
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>上机安排</div>
+            <div className="hd-card-subtitle">上机安排</div>
             <div className="grid-4" style={{ gap: 16 }}>
               <Form.Item label="班次" name="shift">
                 <Select
@@ -2085,9 +1941,8 @@ export default function PrescriptionWorkspacePage() {
                   <div>
           {/* 透析液参数 */}
           <Card
-            style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
-            styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-            title={<span style={{ fontWeight: 600, color: '#0369A1' }}>🧪 透析液参数</span>}
+            className="hd-panel-card hd-prescription-card"
+            title={<span className="hd-card-title">透析液参数</span>}
           >
             <div className="grid-4" style={{ gap: 16 }}>
               <Form.Item label="钠浓度 (mmol/L)" name="na">
@@ -2104,7 +1959,7 @@ export default function PrescriptionWorkspacePage() {
               </Form.Item>
             </div>
             <Divider style={{ margin: '20px 0 16px', borderColor: '#DBEAFE' }} />
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>可调钠曲线</div>
+            <div className="hd-card-subtitle">可调钠曲线</div>
             <div className="grid-4" style={{ gap: 16, marginBottom: 12 }}>
               <Form.Item label="钠曲线模式" name="sodiumCurve" tooltip="含单超及序贯单超选项，与机器钠程序/治疗阶段联动">
                 <Select options={[...SODIUM_CURVE_OPTIONS]} placeholder="请选择" />
@@ -2218,9 +2073,8 @@ export default function PrescriptionWorkspacePage() {
                   <div>
           {/* 透析后评估（与透析记录录入同步，一方填写则另一方只读） */}
           <Card
-            style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
-            styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-            title={<span style={{ fontWeight: 600, color: '#0369A1' }}>📉 透析后评估（医生填写）</span>}
+            className="hd-panel-card hd-prescription-card"
+            title={<span className="hd-card-title">透后评估（医生填写）</span>}
           >
             {postDialysisLockedByNurse && (
               <Alert
@@ -2270,9 +2124,8 @@ export default function PrescriptionWorkspacePage() {
 
           {/* 处方备注 */}
           <Card
-            style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
-            styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-            title={<span style={{ fontWeight: 600, color: '#0369A1' }}>📝 处方备注</span>}
+            className="hd-panel-card hd-prescription-card"
+            title={<span className="hd-card-title">处方备注</span>}
           >
             <Form.Item
               label="血透方式备注（入库 hemodialysis_remark，可与排班备注同步）"
@@ -2294,21 +2147,12 @@ export default function PrescriptionWorkspacePage() {
             ]}
           />
 
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-end',
-              flexWrap: 'wrap',
-              gap: 20,
-              marginTop: 8,
-            }}
-          >
+          <div className="hd-form-footer">
             <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-              <span style={{ fontSize: 12, color: '#7B92BC' }}>
+              <span className="hd-form-footer__hint">
                 保存与顶部按钮相同；基本参数可本地记忆。
               </span>
-              <div className="flex gap-8" style={{ marginTop: 12 }}>
+              <div className="hd-form-footer__actions" style={{ marginTop: 12 }}>
                 <Button
                   onClick={() => {
                     form.resetFields();

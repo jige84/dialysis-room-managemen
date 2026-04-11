@@ -714,7 +714,7 @@ export default function CQIPage() {
         styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
       >
         <Form form={editForm} layout="vertical" size="middle">
-          <Divider orientation="left">P 计划</Divider>
+          <Divider titlePlacement="left">P 计划</Divider>
           <Form.Item name="problem_found" label="发现的问题" rules={[{ required: true }]}>
             <Input.TextArea rows={2} />
           </Form.Item>
@@ -747,7 +747,7 @@ export default function CQIPage() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
 
-          <Divider orientation="left">D 实施</Divider>
+          <Divider titlePlacement="left">D 实施</Divider>
           <Form.Item name="implementation_notes" label="实施记录">
             <Input.TextArea rows={3} />
           </Form.Item>
@@ -755,7 +755,7 @@ export default function CQIPage() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
 
-          <Divider orientation="left">C 评估</Divider>
+          <Divider titlePlacement="left">C 评估</Divider>
           <Form.Item name="outcome" label="结果评价">
             <Input.TextArea rows={2} />
           </Form.Item>
@@ -769,7 +769,7 @@ export default function CQIPage() {
             <Checkbox />
           </Form.Item>
 
-          <Divider orientation="left">A 处理</Divider>
+          <Divider titlePlacement="left">A 处理</Divider>
           <Form.Item name="summary" label="标准化总结">
             <Input.TextArea rows={2} />
           </Form.Item>

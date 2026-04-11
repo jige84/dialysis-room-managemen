@@ -36,61 +36,23 @@ export default function LoginPage() {
 
   return (
     <div className="login-bg">
-      {/* 动态光晕 */}
       <div className="login-glow" />
 
-      {/* 登录卡片 */}
-      <div
-        className="login-card-animate"
-        style={{
-          background: 'rgba(255,255,255,0.98)',
-          borderRadius: 14,
-          padding: '48px 44px',
-          width: 420,
-          boxShadow: `
-            0 25px 50px rgba(6,12,36,0.55),
-            0 0 0 1px rgba(14,165,233,0.25),
-            0 0 40px rgba(14,165,233,0.12)
-          `,
-        }}
-      >
-        {/* 品牌标识 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-          <div style={{
-            width: 46,
-            height: 46,
-            background: 'linear-gradient(135deg, #0EA5E9, #06B6D4)',
-            borderRadius: 12,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 22,
-            boxShadow: '0 4px 14px rgba(14,165,233,0.4)',
-            flexShrink: 0,
-          }}>
-            🩸
-          </div>
+      <div className="login-card-animate login-card">
+        <div className="login-brand-row">
+          <div className="login-brand-mark">HD</div>
           <div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: '#0D1B3E', lineHeight: '1.2' }}>
-              涉县善谷医院
-            </div>
-            <div style={{ fontSize: 12, color: '#7B92BC', marginTop: 2 }}>
-              血液透析室管理系统 v3.0
-            </div>
+            <div className="login-brand-name">涉县善谷医院</div>
+            <div className="login-brand-system">血液透析室管理系统</div>
           </div>
         </div>
 
-        <h1 style={{
-          fontSize: 22,
-          fontWeight: 700,
-          color: '#0D1B3E',
-          margin: '24px 0 6px',
-        }}>
-          欢迎回来
-        </h1>
-        <p style={{ fontSize: 13, color: '#7B92BC', marginBottom: 32 }}>
-          请输入您的账号密码登录系统，角色将由系统自动识别
-        </p>
+        <div className="login-content">
+          <div className="login-heading">账号登录</div>
+          <p className="login-subheading">
+            适用于医生、责任护士、护士长及质控人员的院内业务登录。
+          </p>
+        </div>
 
         <Form
           name="login"
@@ -101,37 +63,29 @@ export default function LoginPage() {
           <Form.Item
             name="username"
             rules={[{ required: true, message: '请输入用户名' }]}
-            style={{ marginBottom: 18 }}
+            style={{ marginBottom: 16 }}
           >
             <Input
-              prefix={<UserOutlined style={{ color: '#7B92BC' }} />}
+              prefix={<UserOutlined className="login-input-icon" />}
               placeholder="用户名"
-              style={{
-                borderColor: '#DBEAFE',
-                borderRadius: 6,
-                fontSize: 14,
-              }}
+              className="login-input"
             />
           </Form.Item>
 
           <Form.Item
             name="password"
             rules={[{ required: true, message: '请输入密码' }]}
-            style={{ marginBottom: 18 }}
+            style={{ marginBottom: 16 }}
           >
             <Input.Password
-              prefix={<LockOutlined style={{ color: '#7B92BC' }} />}
+              prefix={<LockOutlined className="login-input-icon" />}
               placeholder="密码（≥8位含大小写数字）"
-              style={{
-                borderColor: '#DBEAFE',
-                borderRadius: 6,
-                fontSize: 14,
-              }}
+              className="login-input"
             />
           </Form.Item>
 
-          <p style={{ fontSize: 12, color: '#7B92BC', marginBottom: 16 }}>
-            🔒 连续5次错误将锁定30分钟 · 数据传输已加密
+          <p className="login-note">
+            连续 5 次错误将锁定 30 分钟，登录与数据传输均使用加密保护。
           </p>
 
           <Form.Item style={{ marginBottom: 0 }}>
@@ -140,28 +94,16 @@ export default function LoginPage() {
               htmlType="submit"
               block
               loading={loading}
-              style={{
-                height: 46,
-                borderRadius: 6,
-                fontSize: 15,
-                fontWeight: 500,
-                background: 'linear-gradient(135deg, #0EA5E9, #0284C7)',
-                border: 'none',
-                boxShadow: '0 2px 10px rgba(14,165,233,0.30)',
-              }}
+              className="login-submit"
             >
-              登 录
+              登录系统
             </Button>
           </Form.Item>
         </Form>
 
-        <div style={{
-          marginTop: 20,
-          paddingTop: 16,
-          borderTop: '1px solid #DBEAFE',
-        }}>
-          <p style={{ fontSize: 12, color: '#7B92BC', textAlign: 'center', margin: 0 }}>
-            依据《血液净化标准化操作规程（2021版）》· 内网访问
+        <div className="login-footer">
+          <p className="login-footer-text">
+            依据《血液净化标准化操作规程（2021版）》设计，仅供院内授权人员使用。
           </p>
         </div>
       </div>

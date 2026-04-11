@@ -230,7 +230,7 @@ export interface PrepareDialysisData {
  * - data 内医嘱列表蛇形键名 orders_today
  */
 export function parsePrepareDialysisResponse(resp: {
-  data: ApiResponse<Record<string, unknown> | null | undefined>;
+  data: ApiResponse<Record<string, unknown> | PrepareDialysisData | null | undefined>;
 }): PrepareDialysisData {
   const outer = resp?.data;
   if (!outer || typeof outer !== 'object') {
@@ -244,10 +244,11 @@ export function parsePrepareDialysisResponse(resp: {
   if (!payload) {
     return { prescription: null, ordersToday: [], machine_station: null };
   }
-  const ordersRaw = payload.ordersToday ?? payload.orders_today;
+  const payloadRecord = payload as Record<string, unknown>;
+  const ordersRaw = payloadRecord.ordersToday ?? payloadRecord.orders_today;
   const prescription =
-    (payload.prescription as PreparedPrescription | null | undefined) ?? null;
-  const ms = payload.machine_station;
+    (payloadRecord.prescription as PreparedPrescription | null | undefined) ?? null;
+  const ms = payloadRecord.machine_station;
   const machine_station =
     typeof ms === 'string' ? (ms.trim() ? ms.trim() : null) : ms == null ? null : String(ms).trim() || null;
   return {

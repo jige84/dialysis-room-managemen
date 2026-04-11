@@ -4,7 +4,7 @@
  * 主要功能：折叠侧栏；用户信息与退出；按路由显示页面标题；消息/预警入口（依实现）。
  */
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Badge, Dropdown, Space, Tooltip } from 'antd';
+import { Badge, Dropdown, Tooltip } from 'antd';
 import { LogoutOutlined, SettingOutlined, BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
@@ -144,37 +144,22 @@ export default function AppLayout() {
   }, [menuPermissions]);
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
+    <div className="hd-app-frame">
       {/* ── 侧边栏 ── */}
       <aside
         aria-label="系统主导航侧栏"
+        className={`hd-app-sidebar${collapsed ? ' is-collapsed' : ''}`}
         style={{
-        width: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH,
-        background: 'linear-gradient(180deg, #0F1C3F 0%, #162352 60%, #0D2060 100%)',
-        boxShadow: '2px 0 20px rgba(14,165,233,0.08)',
-        borderRight: '1px solid rgba(14,165,233,0.12)',
-        position: 'fixed',
-        height: '100vh',
-        left: 0, top: 0,
-        zIndex: 100,
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        transition: 'width 0.25s',
-        flexShrink: 0,
-      }}
+          width: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH,
+        }}
       >
         {/* 品牌标识 */}
         <div className="hd-sidebar-brand">
-          <div className="hd-sidebar-brand-icon">🩸</div>
+          <div className="hd-sidebar-brand-icon">HD</div>
           {!collapsed && (
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', lineHeight: '1.2' }}>
-                善谷医院
-              </div>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 1 }}>
-                血液透析室
-              </div>
+            <div className="hd-sidebar-brand-copy">
+              <div className="hd-sidebar-brand-name">善谷医院</div>
+              <div className="hd-sidebar-brand-unit">血液透析室管理系统</div>
             </div>
           )}
         </div>
@@ -186,7 +171,7 @@ export default function AppLayout() {
               {!collapsed && (
                 <div className="hd-nav-section-title">{section.title}</div>
               )}
-              {collapsed && <div style={{ height: 8 }} />}
+              {collapsed && <div className="hd-nav-section-gap" />}
               {section.items.map(item => {
                 const navTarget = item.routePath ?? item.key;
                 const active = isNavItemActive(item);
@@ -209,7 +194,7 @@ export default function AppLayout() {
                     <span className="hd-nav-icon">{item.icon}</span>
                     {!collapsed && (
                       <>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span className="hd-nav-label">
                           {item.label}
                         </span>
                         {item.badge !== undefined && item.badge > 0 && (
@@ -218,11 +203,7 @@ export default function AppLayout() {
                       </>
                     )}
                     {collapsed && item.badge !== undefined && item.badge > 0 && (
-                      <span style={{
-                        position: 'absolute', top: 4, right: 4,
-                        width: 8, height: 8, borderRadius: '50%',
-                        background: '#F43F5E', border: '1.5px solid rgba(15,28,63,0.8)',
-                      }} />
+                      <span className="hd-nav-dot" />
                     )}
                   </div>
                 );
@@ -242,11 +223,11 @@ export default function AppLayout() {
             <div className="hd-sidebar-user">
               <div className="hd-user-avatar">{userInitial}</div>
               {!collapsed && (
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div className="hd-sidebar-user-meta">
+                  <div className="hd-sidebar-user-name">
                     {user?.real_name}
                   </div>
-                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
+                  <div className="hd-sidebar-user-role">
                     {ROLE_LABELS[user?.role || ''] || user?.role}
                   </div>
                 </div>
@@ -257,67 +238,33 @@ export default function AppLayout() {
       </aside>
 
       {/* ── 右侧主区域 ── */}
-      <div style={{
-        marginLeft: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH,
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: '100vh',
-        transition: 'margin-left 0.25s',
-      }}>
+      <div
+        className="hd-app-main"
+        style={{ marginLeft: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH }}
+      >
         {/* 顶部栏 */}
-        <header style={{
-          height: 60,
-          background: '#fff',
-          padding: '0 24px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          boxShadow: '0 1px 0 0 #BFDBFE, 0 2px 12px rgba(14,165,233,0.06)',
-          position: 'sticky',
-          top: 0,
-          zIndex: 99,
-          flexShrink: 0,
-        }}>
+        <header className="hd-topbar">
           {/* 折叠按钮 */}
           <button
             type="button"
-            className="hd-focus-ring"
+            className="hd-topbar-toggle hd-focus-ring"
             aria-expanded={!collapsed}
             aria-controls="sidebar-nav"
             aria-label={collapsed ? '展开侧边导航' : '收起侧边导航'}
-            style={{
-              fontSize: 18,
-              cursor: 'pointer',
-              color: '#3D5280',
-              flexShrink: 0,
-              background: 'none',
-              border: 'none',
-              padding: 4,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
             onClick={() => setCollapsed(!collapsed)}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </button>
 
-          {/* 当前页标题 */}
-          <h1 className="hd-topbar-title" style={{ flex: 1 }}>{currentTitle}</h1>
+          <div className="hd-topbar-context">
+            <div className="hd-topbar-context-label">善谷医院血液透析室</div>
+            <h1 className="hd-topbar-title">{currentTitle}</h1>
+          </div>
 
-          {/* 右侧信息区 */}
-          <Space size={12}>
-            <Space size={6}>
-              <span style={{ fontSize: 12, color: '#7B92BC' }}>涉县善谷医院 血液透析室</span>
-              <span style={{
-                background: '#EEF2FF', color: '#4338CA',
-                fontSize: 12, padding: '2px 10px', borderRadius: 20,
-                border: '1px solid #C7D2FE', fontWeight: 500,
-              }}>
-                {ROLE_LABELS[user?.role || ''] || user?.role}
-              </span>
-            </Space>
+          <div className="hd-topbar-meta">
+            <span className="hd-topbar-role">
+              {ROLE_LABELS[user?.role || ''] || user?.role}
+            </span>
 
             <div className="hd-topbar-date">
               {dayjs().format('YYYY年MM月DD日 dddd')}
@@ -332,47 +279,23 @@ export default function AppLayout() {
               >
                 <button
                   type="button"
-                  className="hd-focus-ring"
+                  className="hd-topbar-alert-btn hd-focus-ring"
                   aria-label={pendingAlerts > 0 ? `预警中心，${pendingAlerts} 条待处理` : '预警中心'}
-                  style={{
-                    width: 36, height: 36, borderRadius: '50%',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer', fontSize: 18,
-                    background: '#F0F9FF',
-                    border: '1.5px solid #BAE6FD',
-                    transition: 'background 0.15s',
-                  }}
                   onClick={() => navigate('/alerts')}
                 >
-                  <BellOutlined style={{ color: pendingAlerts > 0 ? '#F43F5E' : '#0369A1' }} />
+                  <BellOutlined className={pendingAlerts > 0 ? 'is-warning' : ''} />
                 </button>
               </Badge>
             ) : null}
 
-            <div style={{ width: 1, height: 20, background: '#DBEAFE' }} />
-
-            <span
-              style={{
-                fontSize: 13, color: '#3D5280', cursor: 'pointer',
-                padding: '5px 12px', borderRadius: 6,
-                border: '1.5px solid #BFDBFE',
-                transition: 'all 0.15s',
-              }}
+            <button
+              type="button"
+              className="hd-topbar-logout"
               onClick={handleLogout}
-              onMouseEnter={e => {
-                (e.currentTarget as HTMLElement).style.borderColor = '#0EA5E9';
-                (e.currentTarget as HTMLElement).style.color = '#0284C7';
-                (e.currentTarget as HTMLElement).style.background = '#F0F9FF';
-              }}
-              onMouseLeave={e => {
-                (e.currentTarget as HTMLElement).style.borderColor = '#BFDBFE';
-                (e.currentTarget as HTMLElement).style.color = '#3D5280';
-                (e.currentTarget as HTMLElement).style.background = 'transparent';
-              }}
             >
-              退出
-            </span>
-          </Space>
+              退出登录
+            </button>
+          </div>
         </header>
 
         {/* 页面内容：内边距由 PageShell 统一承担 */}

@@ -283,29 +283,43 @@ export default function DashboardPage() {
 
   return (
     <PageShell fullWidth>
+      <div className="hd-page-intro">
+        <div>
+          <div className="hd-page-intro__eyebrow">科室运行概览</div>
+          <div className="hd-page-intro__title">今日透析工作台</div>
+          <div className="hd-page-intro__desc">
+            优先展示今日排班、风险预警与质控摘要，方便医生、护士长和值班护士快速进入工作。
+          </div>
+        </div>
+        <div className="hd-page-intro__chips">
+          <span className="hd-page-intro__chip">今日排班 {shiftCounts.total} 人</span>
+          <span className="hd-page-intro__chip">在透患者 {patientStats?.total_active ?? '—'} 人</span>
+          <span className="hd-page-intro__chip">活跃预警 {alertSummary?.total ?? '—'} 条</span>
+        </div>
+      </div>
       <Spin spinning={loading}>
       {/* ── 4个统计卡 ── */}
-      <div className="grid-4" style={{ marginBottom: 20 }}>
+      <div className="grid-4 hd-stat-grid" style={{ marginBottom: 20 }}>
         <div className="hd-stat-card teal">
-          <div className="hd-stat-icon">👥</div>
+          <div className="hd-stat-icon">患者</div>
           <div className="hd-stat-label">在透患者总数</div>
           <div className="hd-stat-value num">{statCards?.totalActive ?? '—'}</div>
           <div className="hd-stat-meta">{statCards?.vaDetail ?? '加载中…'}</div>
         </div>
         <div className="hd-stat-card blue">
-          <div className="hd-stat-icon">💉</div>
+          <div className="hd-stat-icon">透析</div>
           <div className="hd-stat-label">今日已完成透析</div>
           <div className="hd-stat-value num">{statCards?.completedToday ?? '—'}</div>
           <div className="hd-stat-meta">{statCards?.shiftDetail ?? '—'}</div>
         </div>
         <div className="hd-stat-card amber">
-          <div className="hd-stat-icon">🔔</div>
+          <div className="hd-stat-icon">预警</div>
           <div className="hd-stat-label">活跃预警</div>
           <div className="hd-stat-value num">{statCards?.alertCount ?? '—'}</div>
           <div className="hd-stat-meta">{statCards?.alertDetail ?? '—'}</div>
         </div>
         <div className="hd-stat-card teal">
-          <div className="hd-stat-icon">👩‍⚕️</div>
+          <div className="hd-stat-icon">排班</div>
           <div className="hd-stat-label">今日护患比（透析记录）</div>
           <div className="hd-stat-value num">{statCards?.nurseRatio ?? '—'}</div>
           <div className="hd-stat-meta">{statCards?.ratioDetail ?? '—'}</div>
@@ -314,15 +328,16 @@ export default function DashboardPage() {
 
       {/* ── 今日透析患者 ── */}
       <Card
-        style={{ marginBottom: 20, border: '1px solid #DBEAFE' }}
+        className="hd-panel-card"
+        style={{ marginBottom: 20 }}
         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
         title={
-          <span style={{ fontWeight: 600, color: '#0D1B3E' }}>
-            💉 今日透析患者 ({dayjs().format('YYYY年MM月DD日')})
+          <span className="hd-panel-card__title">
+            今日透析安排 ({dayjs().format('YYYY年MM月DD日')})
           </span>
         }
         extra={
-          <div className="flex gap-8 items-center">
+          <div className="hd-panel-card__actions">
             <Select
               value={shiftFilter}
               onChange={setShiftFilter}
@@ -336,7 +351,7 @@ export default function DashboardPage() {
               ]}
             />
             <Button type="primary" size="small" onClick={() => navigate('/dialysis/entry')}>
-              ＋ 录入透析记录
+              录入透析
             </Button>
           </div>
         }
@@ -432,7 +447,7 @@ export default function DashboardPage() {
               },
             ]}
           />
-          <div style={{ padding: '10px 16px', textAlign: 'right', color: '#7B92BC', fontSize: 12 }}>
+          <div className="hd-table-footnote">
             今日排班共 {shiftCounts.total} 人 · 当前筛选显示 {filteredSessions.length} 条 ·
             <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => navigate('/schedule')}>
               查看排班
@@ -445,9 +460,9 @@ export default function DashboardPage() {
       <div className="grid-2" style={{ marginBottom: 20 }}>
         {/* 活跃预警 */}
         <Card
-          style={{ border: '1px solid #DBEAFE' }}
+          className="hd-panel-card"
           styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-          title={<span style={{ fontWeight: 600, color: '#0D1B3E' }}>🚨 活跃预警</span>}
+          title={<span className="hd-panel-card__title">活跃预警</span>}
           extra={<Button size="small" onClick={() => navigate('/alerts')}>查看全部</Button>}
         >
           {alertItems.length === 0 ? (
@@ -471,9 +486,9 @@ export default function DashboardPage() {
 
         {/* 今日排班快照 */}
         <Card
-          style={{ border: '1px solid #DBEAFE' }}
+          className="hd-panel-card"
           styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
-          title={<span style={{ fontWeight: 600, color: '#0D1B3E' }}>📅 今日排班 ({dayjs().format('M月D日')})</span>}
+          title={<span className="hd-panel-card__title">今日排班 ({dayjs().format('M月D日')})</span>}
           extra={<Button size="small" onClick={() => navigate('/schedule')}>排班管理</Button>}
         >
           <Table
@@ -510,15 +525,15 @@ export default function DashboardPage() {
 
       {/* ── 本月5项质控指标 ── */}
       <Card
-        style={{ border: '1px solid #DBEAFE' }}
+        className="hd-panel-card"
         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
         title={
-          <span style={{ fontWeight: 600, color: '#0D1B3E' }}>
-            📊 本月质控指标 ({dayjs().format('YYYY年MM月')} 截至{asOfDay}日)
+          <span className="hd-panel-card__title">
+            本月质控指标 ({dayjs().format('YYYY年MM月')} 截至{asOfDay}日)
           </span>
         }
         extra={
-          <div className="flex gap-8 items-center">
+          <div className="hd-panel-card__actions">
             <Segmented
               size="small"
               options={[

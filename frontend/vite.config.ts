@@ -23,14 +23,26 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('react-router')) {
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
             return 'react-vendor';
           }
-          if (id.includes('node_modules/antd') || id.includes('@ant-design')) {
-            return 'antd-vendor';
+          if (id.includes('react-router')) {
+            return 'router-vendor';
           }
           if (id.includes('node_modules/recharts')) {
             return 'chart-vendor';
+          }
+          if (id.includes('node_modules/tesseract.js')) {
+            return 'ocr-vendor';
+          }
+          if (id.includes('@ant-design/icons')) {
+            return 'antd-icons';
+          }
+          if (id.includes('node_modules/dayjs')) {
+            return 'dayjs-vendor';
+          }
+          if (id.includes('node_modules/zustand') || id.includes('node_modules/axios')) {
+            return 'data-vendor';
           }
         }
       }

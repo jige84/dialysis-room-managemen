@@ -124,6 +124,12 @@ export default function PatientListPage() {
     return true;
   }), [rows, search, statusFilter, accessFilter, zoneFilter]);
 
+  const summary = useMemo(() => ({
+    total: rows.length,
+    active: rows.filter(r => r.status === 'active').length,
+    isolated: rows.filter(r => r.zone !== 'normal').length,
+  }), [rows]);
+
   const rowClassName = (r: PatientRow) => {
     if (r.zone === 'hbv') return 'row-hbv';
     if (r.zone === 'hcv') return 'row-hcv';
@@ -233,78 +239,95 @@ export default function PatientListPage() {
 
   return (
     <PageShell fullWidth>
+      <div className="hd-page-intro">
+        <div>
+          <div className="hd-page-intro__eyebrow">患者档案中心</div>
+          <div className="hd-page-intro__title">在透患者与分区信息</div>
+          <div className="hd-page-intro__desc">
+            用于日常检索、分区识别、状态查看与快速进入患者档案或透析录入。
+          </div>
+        </div>
+        <div className="hd-page-intro__chips">
+          <span className="hd-page-intro__chip">患者总数 {summary.total}</span>
+          <span className="hd-page-intro__chip">在透 {summary.active}</span>
+          <span className="hd-page-intro__chip">隔离管理 {summary.isolated}</span>
+        </div>
+      </div>
+
       {/* 搜索筛选栏 */}
-      <div className="flex gap-8 items-center" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
-        <Input
-          prefix={<SearchOutlined style={{ color: '#7B92BC' }} />}
-          placeholder="搜索患者姓名 / 诊断…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ width: 240, borderColor: '#DBEAFE' }}
-          allowClear
-        />
-        <Select
-          placeholder="全部状态"
-          value={statusFilter || undefined}
-          onChange={v => setStatusFilter(v || '')}
-          style={{ width: 130 }}
-          allowClear
-          options={[
-            { value: 'active', label: '在透' },
-            { value: 'suspended', label: '暂停' },
-            { value: 'transferred', label: '转出' },
-            { value: 'transplanted', label: '肾移植' },
-            { value: 'deceased', label: '死亡' },
-          ]}
-        />
-        <Select
-          placeholder="全部通路"
-          value={accessFilter || undefined}
-          onChange={v => setAccessFilter(v || '')}
-          style={{ width: 140 }}
-          allowClear
-          options={[
-            { value: 'AVF', label: '动静脉内瘘 AVF' },
-            { value: 'AVG', label: '人工血管 AVG' },
-            { value: 'TCC', label: '带涤纶套导管 TCC' },
-            { value: 'NCC', label: '无涤纶套导管 NCC' },
-            { value: 'LTCC', label: '长期导管 LTCC' },
-          ]}
-        />
-        <Select
-          placeholder="全部分区"
-          value={zoneFilter || undefined}
-          onChange={v => setZoneFilter(v || '')}
-          style={{ width: 130 }}
-          allowClear
-          options={[
-            { value: 'normal', label: '普通区' },
-            { value: 'hbv',    label: '乙肝隔离区' },
-            { value: 'hcv',    label: '丙肝隔离区' },
-          ]}
-        />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+      <div className="hd-filter-bar">
+        <div className="hd-filter-bar__left">
+          <Input
+            prefix={<SearchOutlined style={{ color: '#7B92BC' }} />}
+            placeholder="搜索患者姓名 / 诊断"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ width: 260 }}
+            allowClear
+          />
+          <Select
+            placeholder="全部状态"
+            value={statusFilter || undefined}
+            onChange={v => setStatusFilter(v || '')}
+            style={{ width: 132 }}
+            allowClear
+            options={[
+              { value: 'active', label: '在透' },
+              { value: 'suspended', label: '暂停' },
+              { value: 'transferred', label: '转出' },
+              { value: 'transplanted', label: '肾移植' },
+              { value: 'deceased', label: '死亡' },
+            ]}
+          />
+          <Select
+            placeholder="全部通路"
+            value={accessFilter || undefined}
+            onChange={v => setAccessFilter(v || '')}
+            style={{ width: 152 }}
+            allowClear
+            options={[
+              { value: 'AVF', label: '动静脉内瘘 AVF' },
+              { value: 'AVG', label: '人工血管 AVG' },
+              { value: 'TCC', label: '带涤纶套导管 TCC' },
+              { value: 'NCC', label: '无涤纶套导管 NCC' },
+              { value: 'LTCC', label: '长期导管 LTCC' },
+            ]}
+          />
+          <Select
+            placeholder="全部分区"
+            value={zoneFilter || undefined}
+            onChange={v => setZoneFilter(v || '')}
+            style={{ width: 138 }}
+            allowClear
+            options={[
+              { value: 'normal', label: '普通区' },
+              { value: 'hbv', label: '乙肝隔离区' },
+              { value: 'hcv', label: '丙肝隔离区' },
+            ]}
+          />
+        </div>
+        <div className="hd-filter-bar__right">
           {canCreatePatient ? (
             <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => navigate('/patients/new')}
             >
-              新建档案
+              新建患者档案
             </Button>
           ) : (
             <Tooltip title="仅管理员与医生可新建患者档案">
               <Button type="primary" icon={<PlusOutlined />} disabled>
-                新建档案
+                新建患者档案
               </Button>
             </Tooltip>
           )}
-          <Button icon={<ExportOutlined />}>导出</Button>
+          <Button icon={<ExportOutlined />}>导出名单</Button>
         </div>
       </div>
 
       {/* 患者表格 */}
-      <Card style={{ border: '1px solid #DBEAFE' }} styles={{ body: { padding: 0 } }}>
+      <Card className="hd-table-card" styles={{ body: { padding: 0 } }}>
         <div className="hd-table-responsive">
         <Table
           rowKey="id"
@@ -321,7 +344,7 @@ export default function PatientListPage() {
         />
         </div>
       </Card>
-      <div style={{ marginTop: 10, textAlign: 'right', fontSize: 12, color: '#7B92BC' }}>
+      <div className="hd-list-summary">
         显示 {filtered.length} / {rows.length} 条患者记录
       </div>
     </PageShell>
