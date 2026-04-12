@@ -35,6 +35,7 @@ import {
   type WaterMachineRow,
   type WaterMaintenanceRow,
   type WaterQualityRecord,
+  type WaterDailyInspectionRow,
 } from '../../api/devices';
 import { patientsApi, type Patient } from '../../api/patients';
 
@@ -87,26 +88,6 @@ const STOCK_STATUS: Record<string, { label: string; color: string; bg: string }>
   low: { label: '不足', color: '#BE123C', bg: '#FFF1F2' },
 };
 
-type DailyWaterCheckRow = {
-  id: string;
-  check_date: string;
-  hardness: string;
-  total_chlorine: string;
-  tap_pressure: string;
-  sand_delta_p: string;
-  resin_delta_p: string;
-  carbon_delta_p: string;
-  ro_in_pressure: string;
-  ro_out_pressure: string;
-  feed_conductivity: string;
-  product_conductivity: string;
-  product_flow: string;
-  drain_flow: string;
-  feed_temp: string;
-  operator: string;
-  notes?: string;
-};
-
 export default function DevicesPage() {
   const { hasRole } = useAuthStore();
   const canWriteDevice = hasRole(['admin', 'head_nurse']);
@@ -132,6 +113,7 @@ export default function DevicesPage() {
   const [showMaintModal, setShowMaintModal] = useState(false);
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [maintTargetId, setMaintTargetId] = useState<string | null>(null);
+  const [maintTargetKind, setMaintTargetKind] = useState<'machine' | 'water' | null>(null);
   const [showInboundModal, setShowInboundModal] = useState(false);
   const [machineForm] = Form.useForm();
   const [maintForm] = Form.useForm();
@@ -151,6 +133,10 @@ export default function DevicesPage() {
   const [activeMainTab, setActiveMainTab] = useState<'machines' | 'consumables' | 'water'>('machines');
   const [todayUsage, setTodayUsage] = useState<OutboundLineRow[]>([]);
   const [todayUsageLoading, setTodayUsageLoading] = useState(false);
+  const [showWaterMachineModal, setShowWaterMachineModal] = useState(false);
+  const [showWaterQualityModal, setShowWaterQualityModal] = useState(false);
+  const [waterMachineForm] = Form.useForm();
+  const [waterQualityForm] = Form.useForm();
   const [waterMachines, setWaterMachines] = useState<WaterMachineRow[]>([]);
   const [waterMachinesLoading, setWaterMachinesLoading] = useState(false);
   const [waterMaintRows, setWaterMaintRows] = useState<WaterMaintenanceRow[]>([]);
@@ -159,7 +145,8 @@ export default function DevicesPage() {
   const [waterDrawerLoading, setWaterDrawerLoading] = useState(false);
   const [waterQualityRows, setWaterQualityRows] = useState<WaterQualityRecord[]>([]);
   const [waterQualityLoading, setWaterQualityLoading] = useState(false);
-  const [dailyChecks, setDailyChecks] = useState<DailyWaterCheckRow[]>([]);
+  const [dailyInspectionRows, setDailyInspectionRows] = useState<WaterDailyInspectionRow[]>([]);
+  const [dailyInspectionLoading, setDailyInspectionLoading] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -218,6 +205,18 @@ export default function DevicesPage() {
     },
     [],
   );
+
+  const loadWaterDailyInspections = useCallback(async () => {
+    setDailyInspectionLoading(true);
+    try {
+      const res = await devicesApi.waterDailyInspections({ page: 1, page_size: 100 });
+      setDailyInspectionRows(res.data.data ?? []);
+    } catch {
+      message.error('加载水处理日常检测记录失败');
+    } finally {
+      setDailyInspectionLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     loadAll();
@@ -386,6 +385,7 @@ export default function DevicesPage() {
               icon={<ToolOutlined />}
               onClick={() => {
                 setMaintTargetId(r.id);
+                setMaintTargetKind('machine');
                 maintForm.resetFields();
                 setShowMaintModal(true);
               }}
@@ -619,6 +619,7 @@ export default function DevicesPage() {
             } else if (key === 'water') {
               loadWaterMachines();
               loadWaterQuality();
+              loadWaterDailyInspections();
             }
           }}
           items={[
@@ -799,7 +800,25 @@ export default function DevicesPage() {
               label: '水机管理',
               children: (
                 <div>
-                  <Card style={{ border: '1px solid #DBEAFE', marginBottom: 16 }} loading={waterMachinesLoading}>
+                  <Card
+                    style={{ border: '1px solid #DBEAFE', marginBottom: 16 }}
+                    loading={waterMachinesLoading}
+                    extra={
+                      canWriteDevice && (
+                        <Button
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          size="small"
+                          onClick={() => {
+                            waterMachineForm.resetFields();
+                            setShowWaterMachineModal(true);
+                          }}
+                        >
+                          登记新水机
+                        </Button>
+                      )
+                    }
+                  >
                     <Table
                       dataSource={waterMachines}
                       rowKey="id"
@@ -888,33 +907,46 @@ export default function DevicesPage() {
                       form={dailyWaterForm}
                       layout="vertical"
                       size="middle"
-                      onFinish={(v) => {
-                        const row: DailyWaterCheckRow = {
-                          id: `${Date.now()}`,
-                          check_date: v.check_date
-                            ? dayjs(v.check_date).format('YYYY-MM-DD')
-                            : dayjs().format('YYYY-MM-DD'),
-                          hardness: v.hardness ?? '',
-                          total_chlorine: v.total_chlorine ?? '',
-                          tap_pressure: v.tap_pressure ?? '',
-                          sand_delta_p: v.sand_delta_p ?? '',
-                          resin_delta_p: v.resin_delta_p ?? '',
-                          carbon_delta_p: v.carbon_delta_p ?? '',
-                          ro_in_pressure: v.ro_in_pressure ?? '',
-                          ro_out_pressure: v.ro_out_pressure ?? '',
-                          feed_conductivity: v.feed_conductivity ?? '',
-                          product_conductivity: v.product_conductivity ?? '',
-                          product_flow: v.product_flow ?? '',
-                          drain_flow: v.drain_flow ?? '',
-                          feed_temp: v.feed_temp ?? '',
-                          operator: v.operator ?? '',
-                          notes: v.notes,
-                        };
-                        setDailyChecks((prev) => [row, ...prev]);
-                        dailyWaterForm.resetFields();
+                      onFinish={async (v) => {
+                        try {
+                          await devicesApi.createWaterDailyInspection({
+                            water_machine_id: v.water_machine_id,
+                            check_date: v.check_date
+                              ? dayjs(v.check_date).format('YYYY-MM-DD')
+                              : dayjs().format('YYYY-MM-DD'),
+                            hardness: v.hardness,
+                            total_chlorine: v.total_chlorine,
+                            tap_pressure: v.tap_pressure,
+                            sand_delta_p: v.sand_delta_p,
+                            resin_delta_p: v.resin_delta_p,
+                            carbon_delta_p: v.carbon_delta_p,
+                            ro_in_pressure: v.ro_in_pressure,
+                            ro_out_pressure: v.ro_out_pressure,
+                            feed_conductivity: v.feed_conductivity,
+                            product_conductivity: v.product_conductivity,
+                            product_flow: v.product_flow,
+                            drain_flow: v.drain_flow,
+                            feed_temp: v.feed_temp,
+                            operator_name: v.operator,
+                            notes: v.notes,
+                          });
+                          message.success('日常检测已保存');
+                          dailyWaterForm.resetFields();
+                          dailyWaterForm.setFieldsValue({ check_date: dayjs() });
+                          await loadWaterDailyInspections();
+                        } catch {
+                          /* request 已提示 */
+                        }
                       }}
                     >
                       <div className="grid-4" style={{ gap: 16 }}>
+                        <Form.Item label="关联水机（可选）" name="water_machine_id">
+                          <Select
+                            allowClear
+                            placeholder="选择水机"
+                            options={waterMachines.map((m) => ({ value: m.id, label: m.machine_no }))}
+                          />
+                        </Form.Item>
                         <Form.Item label="检测日期" name="check_date" initialValue={dayjs()}>
                           <DatePicker style={{ width: '100%' }} />
                         </Form.Item>
@@ -973,7 +1005,7 @@ export default function DevicesPage() {
                         </Form.Item>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <Button type="primary" htmlType="submit">
+                        <Button type="primary" htmlType="submit" disabled={!canInbound}>
                           保存当日记录
                         </Button>
                       </div>
@@ -981,12 +1013,19 @@ export default function DevicesPage() {
 
                     <Table
                       style={{ marginTop: 16 }}
-                      dataSource={dailyChecks}
+                      dataSource={dailyInspectionRows}
                       rowKey="id"
                       size="small"
+                      loading={dailyInspectionLoading}
                       pagination={{ pageSize: 10 }}
                       locale={{ emptyText: <Empty description="暂无日常检测记录" /> }}
                       columns={[
+                        {
+                          title: '水机',
+                          dataIndex: 'water_machine_no',
+                          width: 100,
+                          render: (v: string | null | undefined) => v || '—',
+                        },
                         { title: '日期', dataIndex: 'check_date' },
                         { title: '硬度', dataIndex: 'hardness' },
                         { title: '总氯', dataIndex: 'total_chlorine' },
@@ -999,12 +1038,38 @@ export default function DevicesPage() {
                         { title: '产水量', dataIndex: 'product_flow' },
                         { title: '排水量', dataIndex: 'drain_flow' },
                         { title: '进水温度', dataIndex: 'feed_temp' },
-                        { title: '记录人', dataIndex: 'operator' },
+                        {
+                          title: '记录人',
+                          dataIndex: 'operator_name',
+                          render: (v: string | null | undefined) => v || '—',
+                        },
                       ]}
                     />
                   </Card>
 
-                  <Card title="水质检测记录" style={{ border: '1px solid #DBEAFE', marginBottom: 16 }}>
+                  <Card
+                    title="水质检测记录"
+                    style={{ border: '1px solid #DBEAFE', marginBottom: 16 }}
+                    extra={
+                      canInbound && (
+                        <Button
+                          type="primary"
+                          size="small"
+                          onClick={() => {
+                            waterQualityForm.resetFields();
+                            waterQualityForm.setFieldsValue({
+                              test_date: dayjs(),
+                              metric_kind: 'bacteria',
+                              result: 'qualified',
+                            });
+                            setShowWaterQualityModal(true);
+                          }}
+                        >
+                          登记水质检测
+                        </Button>
+                      )
+                    }
+                  >
                     <Table
                       dataSource={waterQualityRows}
                       rowKey="id"
@@ -1013,6 +1078,12 @@ export default function DevicesPage() {
                       pagination={{ pageSize: 10 }}
                       columns={[
                         { title: '检测日期', dataIndex: 'test_date' },
+                        {
+                          title: '关联水机',
+                          dataIndex: 'water_machine_no',
+                          width: 110,
+                          render: (v: string | null | undefined) => v || '—',
+                        },
                         { title: '类型', dataIndex: 'test_type', render: (v: string | null) => v || '—' },
                         { title: '采样点', dataIndex: 'sample_point', render: (v: string | null) => v || '—' },
                         {
@@ -1028,8 +1099,10 @@ export default function DevicesPage() {
                         {
                           title: '结果',
                           dataIndex: 'result',
-                          render: (v: string | null | undefined) =>
-                            v && v !== 'qualified' ? <Tag color="red">不合格</Tag> : <Tag color="green">合格</Tag>,
+                          render: (v: string | null | undefined) => {
+                            if (v == null || v === '') return '—';
+                            return v !== 'qualified' ? <Tag color="red">不合格</Tag> : <Tag color="green">合格</Tag>;
+                          },
                         },
                         {
                           title: '检测人',
@@ -1091,8 +1164,13 @@ export default function DevicesPage() {
               <ul style={{ paddingLeft: 18 }}>
                 {drawerAlerts.map((a) => (
                   <li key={a.id} style={{ marginBottom: 8 }}>
-                    <Tag color={a.priority === 'high' || a.priority === 'critical' ? 'red' : 'orange'}>
-                      {a.priority || 'medium'}
+                    <Tag color={a.severity === 'emergency' || a.severity === 'critical' ? 'red' : a.severity === 'warning' ? 'orange' : 'blue'}>
+                      {{
+                        emergency: 'emergency',
+                        critical: 'critical',
+                        warning: 'warning',
+                        info: 'info',
+                      }[a.severity || 'warning']}
                     </Tag>{' '}
                     {a.title} — {dayjs(a.created_at).format('YYYY-MM-DD HH:mm')}
                   </li>
@@ -1130,7 +1208,7 @@ export default function DevicesPage() {
             try {
               await devicesApi.createMachineAlert(drawerMachine.id, {
                 alert_type: v.alert_type,
-                priority: v.priority,
+                severity: v.severity,
                 title: v.title,
                 message: v.message,
               });
@@ -1166,13 +1244,13 @@ export default function DevicesPage() {
               ]}
             />
           </Form.Item>
-          <Form.Item label="严重程度" name="priority" initialValue="medium">
+          <Form.Item label="严重程度" name="severity" initialValue="warning">
             <Select
               options={[
-                { value: 'low', label: '一般' },
-                { value: 'medium', label: '较重' },
-                { value: 'high', label: '严重' },
-                { value: 'critical', label: '危急' },
+                { value: 'info', label: '一般' },
+                { value: 'warning', label: '警告' },
+                { value: 'critical', label: '严重' },
+                { value: 'emergency', label: '危急' },
               ]}
             />
           </Form.Item>
@@ -1185,10 +1263,163 @@ export default function DevicesPage() {
         </Form>
       </Modal>
 
+      <Modal
+        title="登记水质检测"
+        open={showWaterQualityModal}
+        onOk={() => {
+          waterQualityForm.validateFields().then(async (v) => {
+            try {
+              const testDate = v.test_date
+                ? dayjs(v.test_date).format('YYYY-MM-DD')
+                : dayjs().format('YYYY-MM-DD');
+              await devicesApi.createWaterQuality({
+                test_date: testDate,
+                water_machine_id: v.water_machine_id,
+                sample_point: '产水点',
+                result: v.result,
+                ...(v.metric_kind === 'bacteria'
+                  ? { bacteria_count: v.metric_value }
+                  : { endotoxin_value: v.metric_value }),
+              });
+              message.success('水质检测已登记');
+              setShowWaterQualityModal(false);
+              waterQualityForm.resetFields();
+              await Promise.all([loadWaterMachines(), loadWaterQuality()]);
+            } catch {
+              /* request 已提示 */
+            }
+          });
+        }}
+        onCancel={() => {
+          setShowWaterQualityModal(false);
+          waterQualityForm.resetFields();
+        }}
+        okText="保存"
+        width={480}
+      >
+        <Form form={waterQualityForm} layout="vertical" size="middle">
+          <Form.Item label="关联水机" name="water_machine_id" rules={[{ required: true, message: '请选择水机' }]}>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择水机"
+              options={waterMachines.map((m) => ({ value: m.id, label: m.machine_no }))}
+            />
+          </Form.Item>
+          <Form.Item label="检测日期" name="test_date" rules={[{ required: true, message: '请选择日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="检测项目" name="metric_kind" initialValue="bacteria">
+            <Select
+              options={[
+                { value: 'bacteria', label: '细菌（cfu/mL）' },
+                { value: 'endotoxin', label: '内毒素（EU/mL）' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            label="检测值"
+            name="metric_value"
+            rules={[
+              { required: true, message: '请输入检测值' },
+              {
+                type: 'number',
+                min: 0,
+                message: '检测值须为非负数',
+              },
+            ]}
+          >
+            <InputNumber min={0} step={0.001} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="判定" name="result" rules={[{ required: true }]} initialValue="qualified">
+            <Select
+              options={[
+                { value: 'qualified', label: '合格' },
+                { value: 'unqualified', label: '不合格' },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="登记新水机"
+        open={showWaterMachineModal}
+        onOk={() => {
+          waterMachineForm.validateFields().then(async (v) => {
+            try {
+              await devicesApi.createWaterMachine({
+                machine_no: v.machine_no,
+                model: v.model,
+                brand: v.brand,
+                location: v.location,
+                status: v.status,
+                last_disinfection_at: v.last_disinfection_at
+                  ? dayjs(v.last_disinfection_at).format('YYYY-MM-DD')
+                  : undefined,
+                next_disinfection_due: v.next_disinfection_due
+                  ? dayjs(v.next_disinfection_due).format('YYYY-MM-DD')
+                  : undefined,
+                notes: v.notes,
+              });
+              message.success('水机已登记');
+              setShowWaterMachineModal(false);
+              waterMachineForm.resetFields();
+              loadWaterMachines();
+            } catch {
+              /* request 已提示 */
+            }
+          });
+        }}
+        onCancel={() => {
+          setShowWaterMachineModal(false);
+          waterMachineForm.resetFields();
+        }}
+        okText="保存"
+        width={520}
+      >
+        <Form form={waterMachineForm} layout="vertical" size="middle">
+          <Form.Item label="水机编号" name="machine_no" rules={[{ required: true, message: '必填' }]}>
+            <Input placeholder="如 RO-01、WM-02" />
+          </Form.Item>
+          <div className="grid-2" style={{ gap: 16 }}>
+            <Form.Item label="品牌" name="brand">
+              <Input />
+            </Form.Item>
+            <Form.Item label="型号" name="model">
+              <Input />
+            </Form.Item>
+          </div>
+          <Form.Item label="安装位置" name="location">
+            <Input placeholder="如：透析室水处理间" />
+          </Form.Item>
+          <Form.Item label="运行状态" name="status" initialValue="active">
+            <Select
+              options={[
+                { value: 'active', label: '运行中' },
+                { value: 'maintenance', label: '维护中' },
+                { value: 'fault', label: '故障' },
+                { value: 'retired', label: '停用' },
+              ]}
+            />
+          </Form.Item>
+          <div className="grid-2" style={{ gap: 16 }}>
+            <Form.Item label="上次消毒日期" name="last_disinfection_at">
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item label="下次消毒到期" name="next_disinfection_due">
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+          </div>
+          <Form.Item label="备注" name="notes">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
       <Drawer
         title={waterDrawerMachine ? `水机 ${waterDrawerMachine.machine_no}` : '水机详情'}
-        open={waterDrawerOpen}
-        width={480}
+        open={waterDrawerOpen}        width={480}
         onClose={() => {
           setWaterDrawerOpen(false);
           setWaterDrawerMachine(null);
@@ -1225,6 +1456,7 @@ export default function DevicesPage() {
                     maintenance_type: 'routine',
                     maintenance_date: dayjs(),
                   });
+                  setMaintTargetKind('water');
                   setShowMaintModal(true);
                   setMaintTargetId(waterDrawerMachine.id);
                 }}
@@ -1494,18 +1726,35 @@ export default function DevicesPage() {
           maintForm.validateFields().then(async (v) => {
             if (!maintTargetId) return;
             try {
-              await devicesApi.addMachineMaintenance(maintTargetId, {
+              const payload = {
                 maintenance_type: v.maintenance_type,
                 maintenance_date: dayjs(v.maintenance_date).format('YYYY-MM-DD'),
                 next_due: v.next_due ? dayjs(v.next_due).format('YYYY-MM-DD') : undefined,
                 content: v.content,
                 result: v.result,
                 notes: v.notes,
-              });
-              message.success('维护记录已保存');
+              };
+              if (maintTargetKind === 'water') {
+                await devicesApi.addWaterMachineMaintenance(maintTargetId, payload);
+              } else {
+                await devicesApi.addMachineMaintenance(maintTargetId, payload);
+              }
+              message.success(maintTargetKind === 'water' ? '水机维护记录已保存' : '维护记录已保存');
               setShowMaintModal(false);
               maintForm.resetFields();
+              setMaintTargetKind(null);
               loadAll();
+              if (maintTargetKind === 'water') {
+                loadWaterMachines();
+                if (waterDrawerMachine?.id === maintTargetId) {
+                  try {
+                    const res = await devicesApi.waterMachineMaintenance(maintTargetId);
+                    setWaterMaintRows(res.data.data ?? []);
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              }
             } catch {
               /* */
             }
@@ -1514,6 +1763,7 @@ export default function DevicesPage() {
         onCancel={() => {
           setShowMaintModal(false);
           maintForm.resetFields();
+          setMaintTargetKind(null);
         }}
         okText="保存"
         width={520}

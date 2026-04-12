@@ -7,13 +7,15 @@ import { useAuthStore } from '../stores/authStore';
 import type { SidebarMenuKey } from '../constants/sidebarModules';
 import type { AiAssistantFeaturePermissionKey } from '../constants/aiAssistantFeatures';
 import { hasAiAssistantFeature, isMenuKeyAllowed } from './menuAccess';
+import { canRoleAccessClinicalAi } from '../constants/sidebarModules';
 
 export const usePermission = () => {
   const role = useAuthStore((s) => s.user?.role);
   const menuPermissions = useAuthStore((s) => s.user?.menu_permissions);
 
   /** 临床 AI 与知识库/指南等：仅按管理员配置的 menu_permissions（与后端 menuPermission 中间件一致），不再绑定固定角色 */
-  const canUseAiModule = (key: SidebarMenuKey) => isMenuKeyAllowed(key, menuPermissions);
+  const canUseAiModule = (key: SidebarMenuKey) => isMenuKeyAllowed(key, menuPermissions, role);
+  const canManageAiKnowledge = canUseAiModule('/ai/knowledge') && canRoleAccessClinicalAi(role);
 
   return {
     canWrite:       !!role && ['admin', 'head_nurse', 'nurse', 'doctor'].includes(role),
@@ -27,13 +29,14 @@ export const usePermission = () => {
     canUseAiAssistant: canUseAiModule('/ai/assistant'),
     /** 与 users.menu_permissions 中 ai_feat:* 一致 */
     canUseAiAssistantFeature: (featureKey: AiAssistantFeaturePermissionKey) =>
-      hasAiAssistantFeature(menuPermissions, featureKey),
+      hasAiAssistantFeature(menuPermissions, featureKey, role),
     canUseAiGuidelines: canUseAiModule('/ai/guidelines'),
     canUseAiKnowledge: canUseAiModule('/ai/knowledge'),
+    canManageAiKnowledge,
     /** 质控月报 AI 解读：须侧栏「质控上报报表」或「AI 分析助手」之一（与后端 /ai/qc-monthly-insight 一致） */
     canUseQcMonthlyInsight:
-      isMenuKeyAllowed('/reports', menuPermissions) ||
-      isMenuKeyAllowed('/ai/assistant', menuPermissions),
+      isMenuKeyAllowed('/reports', menuPermissions, role) ||
+      isMenuKeyAllowed('/ai/assistant', menuPermissions, role),
     /** 与后端 CQI 写入一致：仅 admin、护士长（质控/ qc 只读） */
     canEditCqi:     !!role && ['admin', 'head_nurse'].includes(role),
     /** 质控月报提交：与 reports qc-upload/submit 一致 */

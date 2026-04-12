@@ -10,6 +10,7 @@ const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const { success, created, error, notFound } = require('../utils/response');
 const { expandDialysisScheduleCode } = require('../services/DialysisScheduleExpansionService');
+const { formatDate, parseBusinessDate } = require('../utils/dateUtils');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const isValidUuid = (value) => typeof value === 'string' && UUID_REGEX.test(value);
@@ -135,10 +136,11 @@ const toShiftKey = (shift) => SHIFT_LABEL[shift] || shift;
  * 计算一周的起始日期（周一）
  */
 const getWeekStart = (dateStr) => {
-  const d = new Date(dateStr);
+  const d = parseBusinessDate(dateStr);
+  if (!d) return '';
   const day = d.getDay() || 7; // 周日=0 → 7
   d.setDate(d.getDate() - (day - 1));
-  return d.toISOString().slice(0, 10);
+  return formatDate(d);
 };
 
 /**
@@ -485,12 +487,15 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
 router.get('/week', auth, async (req, res, next) => {
   try {
     const { start_date: queryStart } = req.query;
-    const todayStr = new Date().toISOString().slice(0, 10);
+    if (queryStart && !DATE_PARAM_RE.test(String(queryStart))) {
+      return error(res, 'start_date 须为 YYYY-MM-DD', 400);
+    }
+    const todayStr = formatDate(new Date());
     const weekStart = getWeekStart(queryStart || todayStr);
-    const start = new Date(weekStart);
+    const start = parseBusinessDate(weekStart);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
-    const weekEnd = end.toISOString().slice(0, 10);
+    const weekEnd = formatDate(end);
 
     const scheduleRows = await queryWeekPatientScheduleRows(weekStart, weekEnd);
 
@@ -523,9 +528,9 @@ router.get('/week', auth, async (req, res, next) => {
     const shifts = ['am', 'pm', 'eve'];
     const days = [];
     for (let i = 0; i < 7; i += 1) {
-      const d = new Date(weekStart);
+      const d = new Date(start);
       d.setDate(d.getDate() + i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = formatDate(d);
       const label = ['周一','周二','周三','周四','周五','周六','周日'][i];
       days.push({ date: dateStr, label });
     }
@@ -609,12 +614,15 @@ router.get('/week', auth, async (req, res, next) => {
 router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
     const { start_date: bodyStart } = req.body || {};
-    const todayStr = new Date().toISOString().slice(0, 10);
+    if (bodyStart && !DATE_PARAM_RE.test(String(bodyStart))) {
+      return error(res, 'start_date 须为 YYYY-MM-DD', 400);
+    }
+    const todayStr = formatDate(new Date());
     const weekStart = getWeekStart(bodyStart || todayStr);
-    const start = new Date(weekStart);
+    const start = parseBusinessDate(weekStart);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
-    const weekEnd = end.toISOString().slice(0, 10);
+    const weekEnd = formatDate(end);
 
     const patientRows = await fetchPatientsForGenerateWeek();
 

@@ -9,6 +9,7 @@ import { isPathAllowedByMenuPermissions } from '../utils/menuAccess';
 export default function RequireModuleAccess() {
   const location = useLocation();
   const menuPermissions = useAuthStore(s => s.user?.menu_permissions);
+  const role = useAuthStore(s => s.user?.role);
 
   const redirect = useMemo(() => {
     if (menuPermissions === null || menuPermissions === undefined) {
@@ -21,11 +22,11 @@ export default function RequireModuleAccess() {
       if (location.pathname === '/no-access') return null;
       return '/no-access';
     }
-    if (isPathAllowedByMenuPermissions(location.pathname, menuPermissions)) {
+    if (isPathAllowedByMenuPermissions(location.pathname, menuPermissions, role)) {
       return null;
     }
     return menuPermissions[0] ?? '/dashboard';
-  }, [location.pathname, menuPermissions]);
+  }, [location.pathname, menuPermissions, role]);
 
   if (redirect) {
     return <Navigate to={redirect} replace />;

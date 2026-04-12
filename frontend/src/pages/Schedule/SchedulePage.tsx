@@ -792,13 +792,14 @@ export default function SchedulePage() {
         }
         extra={
           canSchedule && (
-            <Space wrap>
+            <Space size={10} wrap>
               <Button onClick={() => setWeekPatientAdjustOpen(true)}>
                 本周患者调班
               </Button>
               <Button loading={generating} onClick={handleGenerateWeek}>
                 按档案生成本周
               </Button>
+              <span style={{ display: 'inline-block', width: 1, height: 16, background: 'var(--border)', verticalAlign: 'middle', margin: '0 2px' }} />
               <Button type="primary" onClick={handleOpenModal}>
                 ＋ 调整排班（护士）
               </Button>

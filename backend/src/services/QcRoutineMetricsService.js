@@ -3,12 +3,11 @@
  * 仅聚合查询，不落库；阈值与 labs 路由 LAB_TARGETS 一致。
  */
 const { pool } = require('../config/database');
+const { getMonthRange } = require('../utils/dateUtils');
 
 /** @param {number} year @param {number} month */
 function monthRange(year, month) {
-  const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
-  return { startDate, endDate };
+  return getMonthRange(year, month);
 }
 
 function buildMetric({ label, key, definition, target, numerator, denominator }) {

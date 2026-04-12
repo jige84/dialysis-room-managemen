@@ -8,6 +8,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
+const { rbac } = require('../middleware/rbac');
 const { requireMenuPermissionAny, requireAiAssistantFeature } = require('../middleware/menuPermission');
 const auditLog = require('../middleware/audit');
 const { success, error } = require('../utils/response');
@@ -162,6 +163,7 @@ router.post(
 // 医嘱用药建议（侧栏「AI 分析助手」权限；处方业务仍由前端与医嘱接口 RBAC 约束）
 router.post(
   '/medication-advice',
+  rbac(['admin', 'doctor']),
   requireAiAssistantFeature('ai_feat:medication'),
   async (req, res) => {
     const { patientId, summary } = req.body || {};
@@ -255,4 +257,3 @@ router.post(
 );
 
 module.exports = router;
-

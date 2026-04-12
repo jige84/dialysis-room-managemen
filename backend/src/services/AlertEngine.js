@@ -4,7 +4,36 @@
  * 主要功能：传染病复查到期、Kt/V、护患比等规则；由 scheduledTasks 每日触发 runAll。
  */
 const { pool } = require('../config/database');
-const { isWithinDays } = require('../utils/dateUtils');
+
+const ALERT_STATUS_ACTIVE = 'active';
+
+/**
+ * 统一 alerts 表写入模型：
+ * - alert_rule_id：同类预警去重键（例如化验项目编码、设备报警类型）
+ * - alert_type：业务类型（前后端统一）
+ * - severity：仅允许 migration 021 中定义的 4 个枚举值
+ */
+function buildAlertDraft({
+  patientId = null,
+  machineId = null,
+  alertRuleId,
+  alertType,
+  severity,
+  title,
+  message,
+  notifiedRoles = null,
+}) {
+  return {
+    patientId,
+    machineId,
+    alertRuleId,
+    alertType,
+    severity,
+    title,
+    message,
+    notifiedRoles,
+  };
+}
 
 class AlertEngine {
   async runAll() {
@@ -27,12 +56,12 @@ class AlertEngine {
     const CYCLE_DAYS = 180;
 
     const { rows: patients } = await pool.query(
-      `SELECT DISTINCT ON (p.id, is.test_type)
-         p.id, p.name, is.test_type, is.test_date
+      `SELECT DISTINCT ON (p.id, scr.test_type)
+         p.id, p.name, scr.test_type, scr.test_date
        FROM patients p
-       LEFT JOIN infection_screenings is ON is.patient_id = p.id
+       LEFT JOIN infection_screenings scr ON scr.patient_id = p.id
        WHERE p.status = 'active'
-       ORDER BY p.id, is.test_type, is.test_date DESC`
+       ORDER BY p.id, scr.test_type, scr.test_date DESC`
     );
 
     let count = 0;
@@ -42,26 +71,18 @@ class AlertEngine {
         : 9999;
 
       if (daysSince >= INFECTION_WARNING_DAYS) {
-        const dueDate = row.test_date
-          ? new Date(new Date(row.test_date).getTime() + CYCLE_DAYS * 86400000).toISOString().slice(0, 10)
-          : null;
-
         const exists = await this._alertExists(row.id, 'infection_screening_due', row.test_type);
         if (exists) continue;
 
-        await pool.query(
-          `INSERT INTO alerts (patient_id, alert_type, alert_subtype, priority, title, message, due_date)
-           VALUES ($1, 'infection_screening_due', $2, $3, $4, $5, $6)
-           ON CONFLICT (patient_id, alert_type, alert_subtype) WHERE status='pending' DO NOTHING`,
-          [
-            row.id,
-            row.test_type || '初筛',
-            daysSince >= INFECTION_OVERDUE_DAYS ? 'high' : 'medium',
-            `感染筛查到期：${row.name}`,
-            `患者 ${row.name} 的 ${row.test_type || '感染'} 筛查已${daysSince}天未复查，请安排复查`,
-            dueDate,
-          ]
-        );
+        const draft = buildAlertDraft({
+          patientId: row.id,
+          alertRuleId: row.test_type || 'initial_screening',
+          alertType: 'infection_screening_due',
+          severity: daysSince >= INFECTION_OVERDUE_DAYS ? 'critical' : 'warning',
+          title: `感染筛查到期：${row.name}`,
+          message: `患者 ${row.name} 的 ${row.test_type || '感染'} 筛查已${daysSince}天未复查，请安排复查`,
+        });
+        await this._insertAlert(draft);
         count++;
       }
     }
@@ -73,35 +94,33 @@ class AlertEngine {
    */
   async checkLowKtV() {
     const { rows } = await pool.query(
-      `SELECT patient_id, array_agg(spktv ORDER BY session_date DESC) as ktv_values
+      `SELECT patient_id, array_agg(ktv ORDER BY session_date DESC) as ktv_values
        FROM (
-         SELECT patient_id, spktv, session_date,
-                ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY session_date DESC) as rn
-         FROM dialysis_records
-         WHERE spktv IS NOT NULL
-       ) sub WHERE rn <= 2
-       GROUP BY patient_id
-       HAVING COUNT(*) = 2 AND EVERY(spktv < 1.2)`
+         SELECT patient_id, ktv, session_date,
+                 ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY session_date DESC) as rn
+          FROM dialysis_records
+         WHERE ktv IS NOT NULL
+        ) sub WHERE rn <= 2
+        GROUP BY patient_id
+        HAVING COUNT(*) = 2 AND EVERY(ktv < 1.2)`
     );
 
     let count = 0;
     for (const row of rows) {
-      const exists = await this._alertExists(row.patient_id, 'low_ktv', null);
+      const exists = await this._alertExists(row.patient_id, 'low_ktv', 'default');
       if (exists) continue;
 
       const { rows: pRows } = await pool.query('SELECT name FROM patients WHERE id=$1', [row.patient_id]);
       const pname = pRows[0]?.name || row.patient_id;
 
-      await pool.query(
-        `INSERT INTO alerts (patient_id, alert_type, priority, title, message)
-         VALUES ($1, 'low_ktv', 'medium', $2, $3)
-         ON CONFLICT (patient_id, alert_type, alert_subtype) WHERE status='pending' DO NOTHING`,
-        [
-          row.patient_id,
-          `Kt/V持续偏低：${pname}`,
-          `患者 ${pname} 最近两次Kt/V均 < 1.2（${row.ktv_values.join(', ')}），请评估透析充分性`
-        ]
-      );
+      await this._insertAlert(buildAlertDraft({
+        patientId: row.patient_id,
+        alertRuleId: 'default',
+        alertType: 'low_ktv',
+        severity: 'warning',
+        title: `Kt/V持续偏低：${pname}`,
+        message: `患者 ${pname} 最近两次Kt/V均 < 1.2（${row.ktv_values.join(', ')}），请评估透析充分性`,
+      }));
       count++;
     }
     return count;
@@ -134,17 +153,14 @@ class AlertEngine {
           const exists = await this._alertExists(row.patient_id, 'lab_review_due', testType);
           if (exists) continue;
 
-          await pool.query(
-            `INSERT INTO alerts (patient_id, alert_type, alert_subtype, priority, title, message)
-             VALUES ($1, 'lab_review_due', $2, 'low', $3, $4)
-             ON CONFLICT (patient_id, alert_type, alert_subtype) WHERE status='pending' DO NOTHING`,
-            [
-              row.patient_id,
-              testType,
-              `化验到期提醒：${row.name}`,
-              `患者 ${row.name} 的 ${testType.toUpperCase()} 已${daysSince}天未复查（周期${days}天）`
-            ]
-          );
+          await this._insertAlert(buildAlertDraft({
+            patientId: row.patient_id,
+            alertRuleId: testType,
+            alertType: 'lab_review_due',
+            severity: daysSince >= days ? 'critical' : 'warning',
+            title: `化验到期提醒：${row.name}`,
+            message: `患者 ${row.name} 的 ${testType.toUpperCase()} 已${daysSince}天未复查（周期${days}天）`,
+          }));
           count++;
         }
       }
@@ -161,16 +177,14 @@ class AlertEngine {
         const exists = await this._alertExists(row.id, 'lab_review_due', testType);
         if (exists) continue;
 
-        await pool.query(
-          `INSERT INTO alerts (patient_id, alert_type, alert_subtype, priority, title, message)
-           VALUES ($1, 'lab_review_due', $2, 'low', $3, $4)
-           ON CONFLICT (patient_id, alert_type, alert_subtype) WHERE status='pending' DO NOTHING`,
-          [
-            row.id, testType,
-            `化验到期提醒：${row.name}`,
-            `患者 ${row.name} 从未检测过 ${testType.toUpperCase()}，请安排检验`
-          ]
-        );
+        await this._insertAlert(buildAlertDraft({
+          patientId: row.id,
+          alertRuleId: testType,
+          alertType: 'lab_review_due',
+          severity: 'warning',
+          title: `化验到期提醒：${row.name}`,
+          message: `患者 ${row.name} 从未检测过 ${testType.toUpperCase()}，请安排检验`,
+        }));
         count++;
       }
     }
@@ -194,18 +208,17 @@ class AlertEngine {
 
     let count = 0;
     for (const row of rows) {
-      const exists = await this._alertExists(row.patient_id, 'cvc_high_risk', null);
+      const exists = await this._alertExists(row.patient_id, 'cvc_high_risk', 'default');
       if (exists) continue;
 
-      await pool.query(
-        `INSERT INTO alerts (patient_id, alert_type, priority, title, message)
-         VALUES ($1, 'cvc_high_risk', 'high', $2, $3)`,
-        [
-          row.patient_id,
-          `CVC高风险：${row.name}`,
-          `患者 ${row.name} CVC感染风险评分 ${row.total_score} 分（≥6分），请重点关注`
-        ]
-      );
+      await this._insertAlert(buildAlertDraft({
+        patientId: row.patient_id,
+        alertRuleId: 'default',
+        alertType: 'cvc_high_risk',
+        severity: 'critical',
+        title: `CVC高风险：${row.name}`,
+        message: `患者 ${row.name} CVC感染风险评分 ${row.total_score} 分（≥6分），请重点关注`,
+      }));
       count++;
     }
     return count;
@@ -217,10 +230,10 @@ class AlertEngine {
   async checkButtonholeMonitoring() {
     const { rows } = await pool.query(
       `SELECT va.patient_id, p.name,
-         MAX(im.monitor_date) as last_monitor_date
+         MAX(MAKE_DATE(im.monitor_year::int, im.monitor_month::int, 1)) AS last_monitor_date
        FROM vascular_accesses va
        JOIN patients p ON p.id = va.patient_id
-       LEFT JOIN infection_monitoring im ON im.access_id = va.id
+       LEFT JOIN infection_monitoring im ON im.vascular_access_id = va.id
        WHERE va.is_buttonhole = true AND va.is_active = true
        GROUP BY va.patient_id, p.name`
     );
@@ -232,18 +245,17 @@ class AlertEngine {
         : 9999;
 
       if (daysSince >= 7) {
-        const exists = await this._alertExists(row.patient_id, 'buttonhole_monitor', null);
+        const exists = await this._alertExists(row.patient_id, 'buttonhole_monitor', 'default');
         if (exists) continue;
 
-        await pool.query(
-          `INSERT INTO alerts (patient_id, alert_type, priority, title, message)
-           VALUES ($1, 'buttonhole_monitor', 'medium', $2, $3)`,
-          [
-            row.patient_id,
-            `扣眼穿刺监测提醒：${row.name}`,
-            `患者 ${row.name} 采用扣眼穿刺，${row.last_monitor_date ? daysSince + '天' : '从未'}记录周监测，请及时记录`
-          ]
-        );
+        await this._insertAlert(buildAlertDraft({
+          patientId: row.patient_id,
+          alertRuleId: 'default',
+          alertType: 'buttonhole_monitor',
+          severity: 'info',
+          title: `扣眼穿刺监测提醒：${row.name}`,
+          message: `患者 ${row.name} 采用扣眼穿刺，${row.last_monitor_date ? daysSince + '天' : '从未'}记录周监测，请及时记录`,
+        }));
         count++;
       }
     }
@@ -262,31 +274,59 @@ class AlertEngine {
     const { rows: pRows } = await pool.query('SELECT name FROM patients WHERE id=$1', [patientId]);
     const pname = pRows[0]?.name || patientId;
 
-    await pool.query(
-      `INSERT INTO alerts (patient_id, alert_type, priority, title, message)
-       VALUES ($1, 'ultrafiltration_exceed', 'high', $2, $3)
-       ON CONFLICT (patient_id, alert_type, alert_subtype) WHERE status='pending' DO NOTHING`,
-      [
-        patientId,
-        `超滤超标：${pname}`,
-        `超滤量 ${ufVolume}mL 超过干体重5%（实际 ${ufPct.toFixed(1)}%），请医生评估`
-      ]
-    );
+    const exists = await this._alertExists(patientId, 'ultrafiltration_exceed', 'default');
+    if (exists) return;
+
+    await this._insertAlert(buildAlertDraft({
+      patientId,
+      alertRuleId: 'default',
+      alertType: 'ultrafiltration_exceed',
+      severity: 'critical',
+      title: `超滤超标：${pname}`,
+      message: `超滤量 ${ufVolume}mL 超过干体重5%（实际 ${ufPct.toFixed(1)}%），请医生评估`,
+    }));
   }
 
   /**
    * 防重复预警检查
    */
-  async _alertExists(patientId, alertType, subtype) {
+  async _alertExists(patientId, alertType, alertRuleId) {
     const { rows } = await pool.query(
       `SELECT 1 FROM alerts
-       WHERE patient_id = $1 AND alert_type = $2
-         AND ($3::text IS NULL OR alert_subtype = $3)
-         AND status = 'pending'
-       LIMIT 1`,
-      [patientId, alertType, subtype]
+        WHERE patient_id = $1 AND alert_type = $2
+          AND alert_rule_id = $3
+          AND status = $4
+        LIMIT 1`,
+      [patientId, alertType, alertRuleId, ALERT_STATUS_ACTIVE]
     );
     return rows.length > 0;
+  }
+
+  async _insertAlert(draft) {
+    await pool.query(
+      `INSERT INTO alerts (
+         patient_id,
+         machine_id,
+         alert_rule_id,
+         alert_type,
+         severity,
+         title,
+         message,
+         status,
+         notified_roles
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        draft.patientId,
+        draft.machineId,
+        draft.alertRuleId,
+        draft.alertType,
+        draft.severity,
+        draft.title,
+        draft.message,
+        ALERT_STATUS_ACTIVE,
+        draft.notifiedRoles,
+      ],
+    );
   }
 }
 

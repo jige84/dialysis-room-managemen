@@ -12,6 +12,7 @@ const auditLog = require('../middleware/audit');
 const { success, created, error, notFound } = require('../utils/response');
 const logger = require('../utils/logger');
 const MedicationRuleService = require('../services/MedicationRuleService');
+const { formatDate } = require('../utils/dateUtils');
 
 /** PostgreSQL: undefined_column（常见于未执行 migrations/048_prescriptions_hdf_replacement.sql） */
 const PG_UNDEFINED_COLUMN = '42703';
@@ -405,7 +406,7 @@ router.patch('/:id/dry-weight', auth, rbac(['admin','doctor']),
       const { dry_weight, dry_weight_date, dry_weight_reason } = req.body;
       if (!dry_weight) return error(res, '干体重为必填项');
 
-      const dwd = dry_weight_date || new Date().toISOString().slice(0, 10);
+      const dwd = dry_weight_date || formatDate(new Date());
       const dwr =
         dry_weight_reason != null && String(dry_weight_reason).trim()
           ? String(dry_weight_reason).trim().slice(0, 2000)

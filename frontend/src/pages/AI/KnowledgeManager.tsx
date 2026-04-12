@@ -12,7 +12,7 @@ import { knowledgeApi, type KbDocumentRow } from '../../api/knowledge';
 const { Title, Text, Paragraph } = Typography;
 
 export default function KnowledgeManagerPage() {
-  const { canUseAiKnowledge } = usePermission();
+  const { canUseAiKnowledge, canManageAiKnowledge } = usePermission();
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<KbDocumentRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -114,7 +114,7 @@ export default function KnowledgeManagerPage() {
                 render: (_, r) => (
                   <Switch
                     checked={r.is_verified}
-                    disabled={!canUseAiKnowledge}
+                    disabled={!canManageAiKnowledge}
                     onChange={(c) => onVerify(r.id, c)}
                   />
                 ),

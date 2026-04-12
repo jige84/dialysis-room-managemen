@@ -13,6 +13,39 @@ const QcRoutineMetricsService = require('../services/QcRoutineMetricsService');
 const MonthlyWorkloadService = require('../services/MonthlyWorkloadService');
 const { success, error, notFound } = require('../utils/response');
 
+async function ensureQcReportDraft(year, month) {
+  const yy = parseInt(year, 10);
+  const mm = parseInt(month, 10);
+
+  let { rows } = await pool.query(
+    'SELECT * FROM qc_reports WHERE report_year = $1 AND report_month = $2',
+    [yy, mm],
+  );
+  if (rows.length > 0) return rows[0];
+
+  const generated = await ReportGenerator.generateQCUpload(yy, mm);
+  const insertRes = await pool.query(
+    `INSERT INTO qc_reports (
+       report_year, report_month,
+       total_patient_sessions, total_nurse_sessions, nurse_patient_ratio,
+       total_sessions, circuit_clotting_count, circuit_clotting_rate,
+       membrane_rupture_count, membrane_rupture_rate,
+       avf_sessions, puncture_injury_count, puncture_injury_rate,
+       cvc_catheter_days, crbsi_count, crbsi_rate, status
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft')
+     RETURNING *`,
+    [
+      yy, mm,
+      generated.total_patient_sessions, generated.total_nurse_sessions, generated.nurse_patient_ratio,
+      generated.total_sessions, generated.circuit_clotting_count, generated.circuit_clotting_rate,
+      generated.membrane_rupture_count, generated.membrane_rupture_rate,
+      generated.avf_sessions, generated.puncture_injury_count, generated.puncture_injury_rate,
+      generated.cvc_catheter_days, generated.crbsi_count, generated.crbsi_rate,
+    ],
+  );
+  return insertRes.rows[0] || null;
+}
+
 // GET /api/reports/qc-routine/:year/:month - 科室内部质控指标（实时聚合，不落库）
 router.get('/qc-routine/:year/:month', auth, async (req, res, next) => {
   try {
@@ -39,41 +72,27 @@ router.get('/monthly-workload/:year/:month', auth, async (req, res, next) => {
 router.get('/qc-upload/:year/:month', auth, async (req, res, next) => {
   try {
     const { year, month } = req.params;
-    const yy = parseInt(year);
-    const mm = parseInt(month);
+    const yy = parseInt(year, 10);
+    const mm = parseInt(month, 10);
+    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
 
-    // 查找或生成草稿
-    let { rows } = await pool.query(
+    const { rows } = await pool.query(
       'SELECT * FROM qc_reports WHERE report_year = $1 AND report_month = $2',
       [yy, mm]
     );
+    return success(res, rows[0] || null);
+  } catch (err) { next(err); }
+});
 
-    if (rows.length === 0) {
-      // 自动生成草稿
-      const generated = await ReportGenerator.generateQCUpload(yy, mm);
-      const insertRes = await pool.query(
-        `INSERT INTO qc_reports (
-           report_year, report_month,
-           total_patient_sessions, total_nurse_sessions, nurse_patient_ratio,
-           total_sessions, circuit_clotting_count, circuit_clotting_rate,
-           membrane_rupture_count, membrane_rupture_rate,
-           avf_sessions, puncture_injury_count, puncture_injury_rate,
-           cvc_catheter_days, crbsi_count, crbsi_rate, status
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft')
-         RETURNING *`,
-        [
-          yy, mm,
-          generated.total_patient_sessions, generated.total_nurse_sessions, generated.nurse_patient_ratio,
-          generated.total_sessions, generated.circuit_clotting_count, generated.circuit_clotting_rate,
-          generated.membrane_rupture_count, generated.membrane_rupture_rate,
-          generated.avf_sessions, generated.puncture_injury_count, generated.puncture_injury_rate,
-          generated.cvc_catheter_days, generated.crbsi_count, generated.crbsi_rate,
-        ]
-      );
-      rows = insertRes.rows;
-    }
-
-    return success(res, rows[0]);
+// POST /api/reports/qc-upload/:year/:month/init - 显式初始化月度质控草稿
+router.post('/qc-upload/:year/:month/init', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+  try {
+    const { year, month } = req.params;
+    const yy = parseInt(year, 10);
+    const mm = parseInt(month, 10);
+    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+    const row = await ensureQcReportDraft(yy, mm);
+    return success(res, row, '质控月报草稿已初始化');
   } catch (err) { next(err); }
 });
 

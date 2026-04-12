@@ -189,6 +189,7 @@ function AiResultView({ result }: { result: AiTextResult | null }) {
 export default function AIAssistantPage() {
   const { canUseAiAssistant, canPrescribe, canUseQcMonthlyInsight } = usePermission();
   const menuPermissions = useAuthStore(s => s.user?.menu_permissions);
+  const userRole = useAuthStore(s => s.user?.role);
   const [activeKey, setActiveKey] = useState<TabKey>('trend');
   const [patientOptions, setPatientOptions] = useState<SimplePatientOption[]>([]);
   const [loadingPatients, setLoadingPatients] = useState(false);
@@ -198,7 +199,7 @@ export default function AIAssistantPage() {
 
   const [form] = Form.useForm();
 
-  const tabAllowed = (k: TabKey) => hasAiAssistantFeature(menuPermissions, TAB_TO_FEAT[k]);
+  const tabAllowed = (k: TabKey) => hasAiAssistantFeature(menuPermissions, TAB_TO_FEAT[k], userRole);
 
   const tabItems = useMemo(() => {
     const base: { key: TabKey; label: string }[] = [
@@ -209,8 +210,8 @@ export default function AIAssistantPage() {
       { key: 'nlp', label: '自然语言查询' },
     ];
     if (canPrescribe) base.push({ key: 'med', label: '用药建议' });
-    return base.filter(it => hasAiAssistantFeature(menuPermissions, TAB_TO_FEAT[it.key]));
-  }, [menuPermissions, canPrescribe]);
+    return base.filter(it => hasAiAssistantFeature(menuPermissions, TAB_TO_FEAT[it.key], userRole));
+  }, [menuPermissions, canPrescribe, userRole]);
 
   const effectiveTabKey: TabKey =
     tabItems.length === 0
@@ -529,4 +530,3 @@ export default function AIAssistantPage() {
     </PageShell>
   );
 }
-

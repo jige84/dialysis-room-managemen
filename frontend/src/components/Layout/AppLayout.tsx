@@ -4,18 +4,17 @@
  * 主要功能：折叠侧栏；用户信息与退出；按路由显示页面标题；消息/预警入口（依实现）。
  */
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Badge, Dropdown, Tooltip } from 'antd';
+import { Badge, Dropdown, Tooltip, message } from 'antd';
 import { LogoutOutlined, SettingOutlined, BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { authApi } from '../../api/auth';
 import alertsApi from '../../api/alerts';
-import { message } from 'antd';
 import dayjs from 'dayjs';
 import { getPageTitle } from '../../utils/pageTitle';
 import { ROLE_LABELS } from '../../constants/roleLabels';
 import { usePermission } from '../../utils/permission';
-import { SIDEBAR_NAV_SECTIONS } from '../../constants/sidebarModules';
+import { SIDEBAR_NAV_SECTIONS, canRoleAccessClinicalAi, isClinicalAiMenuKey } from '../../constants/sidebarModules';
 import type { SidebarMenuKey, SidebarNavItem } from '../../constants/sidebarModules';
 
 const SIDER_WIDTH = 240;
@@ -23,6 +22,8 @@ const SIDER_COLLAPSED_WIDTH = 64;
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [pendingAlerts, setPendingAlerts] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
@@ -83,11 +84,48 @@ export default function AppLayout() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 960px)');
+    const syncViewport = (matches: boolean) => {
+      setIsMobileViewport(matches);
+      if (!matches) {
+        setMobileNavOpen(false);
+      }
+    };
+    syncViewport(media.matches);
+    const handler = (event: MediaQueryListEvent) => syncViewport(event.matches);
+    media.addEventListener('change', handler);
+    return () => media.removeEventListener('change', handler);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileViewport || !mobileNavOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileNavOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isMobileViewport, mobileNavOpen]);
+
+  useEffect(() => {
+    if (isMobileViewport) {
+      setMobileNavOpen(false);
+    }
+  }, [location.pathname, isMobileViewport]);
+
   const handleLogout = async () => {
     try { await authApi.logout(); } catch { /* 忽略网络错误 */ }
     logout();
+    setMobileNavOpen(false);
     navigate('/login');
     message.success('已安全退出');
+  };
+
+  const handleNavigate = (target: string) => {
+    navigate(target);
+    if (isMobileViewport) {
+      setMobileNavOpen(false);
+    }
   };
 
   const userMenu = {
@@ -120,6 +158,7 @@ export default function AppLayout() {
         .filter(item => {
           if (item.key === '/admin/users' && !canManageUsers) return false;
           if ('adminOnly' in item && item.adminOnly && !canManageMedicalSites) return false;
+          if (isClinicalAiMenuKey(item.key) && !canRoleAccessClinicalAi(user?.role)) return false;
           if (restrictMenu) {
             const k = item.key as SidebarMenuKey;
             if (k === '/dialysis/today') {
@@ -136,7 +175,7 @@ export default function AppLayout() {
           item.key === '/alerts' ? { ...item, badge: pendingAlerts } : item
         ),
     }));
-  }, [canManageUsers, canManageMedicalSites, pendingAlerts, menuPermissions]);
+  }, [canManageUsers, canManageMedicalSites, pendingAlerts, menuPermissions, user?.role]);
 
   const canSeeAlertsNav = useMemo(() => {
     if (menuPermissions === null || menuPermissions === undefined) return true;
@@ -148,9 +187,9 @@ export default function AppLayout() {
       {/* ── 侧边栏 ── */}
       <aside
         aria-label="系统主导航侧栏"
-        className={`hd-app-sidebar${collapsed ? ' is-collapsed' : ''}`}
+        className={`hd-app-sidebar${collapsed ? ' is-collapsed' : ''}${isMobileViewport ? ' is-mobile' : ''}${mobileNavOpen ? ' is-mobile-open' : ''}`}
         style={{
-          width: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH,
+          width: isMobileViewport ? SIDER_WIDTH : (collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH),
         }}
       >
         {/* 品牌标识 */}
@@ -182,14 +221,14 @@ export default function AppLayout() {
                     tabIndex={0}
                     className={`hd-nav-item${active ? ' active' : ''}`}
                     aria-current={active ? 'page' : undefined}
-                    onClick={() => navigate(navTarget)}
+                    onClick={() => handleNavigate(navTarget)}
                     onKeyDown={e => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        navigate(navTarget);
+                        handleNavigate(navTarget);
                       }
                     }}
-                    style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}
+                    style={!isMobileViewport && collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}
                   >
                     <span className="hd-nav-icon">{item.icon}</span>
                     {!collapsed && (
@@ -236,11 +275,19 @@ export default function AppLayout() {
           </Dropdown>
         </div>
       </aside>
+      {isMobileViewport && mobileNavOpen ? (
+        <button
+          type="button"
+          className="hd-mobile-backdrop"
+          aria-label="关闭导航"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      ) : null}
 
       {/* ── 右侧主区域 ── */}
       <div
         className="hd-app-main"
-        style={{ marginLeft: collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH }}
+        style={{ marginLeft: isMobileViewport ? 0 : (collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH) }}
       >
         {/* 顶部栏 */}
         <header className="hd-topbar">
@@ -248,26 +295,29 @@ export default function AppLayout() {
           <button
             type="button"
             className="hd-topbar-toggle hd-focus-ring"
-            aria-expanded={!collapsed}
+            aria-expanded={isMobileViewport ? mobileNavOpen : !collapsed}
             aria-controls="sidebar-nav"
-            aria-label={collapsed ? '展开侧边导航' : '收起侧边导航'}
-            onClick={() => setCollapsed(!collapsed)}
+            aria-label={isMobileViewport ? (mobileNavOpen ? '关闭侧边导航' : '打开侧边导航') : (collapsed ? '展开侧边导航' : '收起侧边导航')}
+            onClick={() => {
+              if (isMobileViewport) {
+                setMobileNavOpen(open => !open);
+                return;
+              }
+              setCollapsed(!collapsed);
+            }}
           >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            {isMobileViewport
+              ? (mobileNavOpen ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />)
+              : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
           </button>
 
           <div className="hd-topbar-context">
-            <div className="hd-topbar-context-label">善谷医院血液透析室</div>
             <h1 className="hd-topbar-title">{currentTitle}</h1>
           </div>
 
           <div className="hd-topbar-meta">
-            <span className="hd-topbar-role">
-              {ROLE_LABELS[user?.role || ''] || user?.role}
-            </span>
-
             <div className="hd-topbar-date">
-              {dayjs().format('YYYY年MM月DD日 dddd')}
+              {dayjs().format('MM月DD日 dddd')}
             </div>
 
             {canSeeAlertsNav ? (
@@ -288,13 +338,16 @@ export default function AppLayout() {
               </Badge>
             ) : null}
 
-            <button
-              type="button"
-              className="hd-topbar-logout"
-              onClick={handleLogout}
-            >
-              退出登录
-            </button>
+            <Tooltip title="退出登录" placement="bottom">
+              <button
+                type="button"
+                className="hd-topbar-logout hd-focus-ring"
+                aria-label="退出登录"
+                onClick={handleLogout}
+              >
+                <LogoutOutlined />
+              </button>
+            </Tooltip>
           </div>
         </header>
 

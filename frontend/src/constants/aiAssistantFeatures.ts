@@ -31,7 +31,7 @@ export const AI_ASSISTANT_FEATURES: ReadonlyArray<{
     key: 'ai_feat:nlp',
     tab: 'nlp',
     label: '自然语言查询',
-    hint: '含血管通路页的「AI 解读」',
+    hint: '面向工作台的自由问答入口',
   },
   { key: 'ai_feat:medication', tab: 'med', label: '用药建议' },
   {

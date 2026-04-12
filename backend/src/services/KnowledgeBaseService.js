@@ -6,6 +6,9 @@
 const crypto = require('crypto');
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');
+const { htmlToPlainText } = require('../utils/htmlToPlainText');
+const { assertPublicHttpUrl } = require('../utils/safeHttpUrl');
+const MedicalSiteService = require('./MedicalSiteService');
 
 /** 与前端、AiAnalysisService 约定的 AI 入库场景键（一级分类） */
 const AI_KB_SCENARIO = {
@@ -28,6 +31,10 @@ function isPermissionDenied(err) {
 
 function isUniqueViolation(err) {
   return Boolean(err && err.code === '23505');
+}
+
+function isUndefinedTable(err) {
+  return Boolean(err && err.code === '42P01');
 }
 
 /** 未执行 034 迁移时 ai_scenario 等列不存在 */
@@ -153,13 +160,118 @@ async function logUsage({
 }
 
 /**
- * 可选联网补全（占位：未配置搜索 API 时返回 null）
+ * 审计保存到知识库的用户同意
+ */
+async function recordSaveRequest({
+  contentHash,
+  title = null,
+  sourceTier = 1,
+  sourceUrl = null,
+  userId = null,
+  decision = 'approved',
+}) {
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO kb_save_requests (
+         content_hash, title, source_tier, source_url, requested_by,
+         user_decision, decided_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       RETURNING id`,
+      [contentHash, title, sourceTier, sourceUrl, userId, decision],
+    );
+    return rows[0]?.id || null;
+  } catch (err) {
+    if (isPermissionDenied(err) || isUndefinedTable(err)) {
+      logger.warn('[KnowledgeBaseService] kb_save_requests 不可用，已跳过保存审批审计');
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function attachSaveRequestKbEntry(requestId, kbEntryId) {
+  if (!requestId || !kbEntryId) return;
+  try {
+    await pool.query(
+      `UPDATE kb_save_requests SET kb_entry_id = $2 WHERE id = $1`,
+      [requestId, kbEntryId],
+    );
+  } catch (err) {
+    if (isPermissionDenied(err) || isUndefinedTable(err)) {
+      logger.warn('[KnowledgeBaseService] 无法回填 kb_save_requests.kb_entry_id');
+      return;
+    }
+    throw err;
+  }
+}
+
+function pickSnippetByQuery(text, queryText) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!source) return '';
+  const q = String(queryText || '').trim();
+  if (!q) return source.slice(0, 400);
+  const tokens = q
+    .split(/[\s,，;；、]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  const hit = tokens.find((t) => source.includes(t));
+  if (!hit) return source.slice(0, 400);
+  const idx = source.indexOf(hit);
+  const start = Math.max(0, idx - 120);
+  const end = Math.min(source.length, idx + 280);
+  return source.slice(start, end);
+}
+
+async function fetchWebExcerpt(url, queryText) {
+  const u = assertPublicHttpUrl(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(u.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'DialysisSystemKbRetriever/1.0',
+        Accept: 'text/html,text/plain,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    if (!res.ok) return null;
+    const body = await res.text();
+    const plain = htmlToPlainText(body).slice(0, 8000);
+    const snippet = pickSnippetByQuery(plain, queryText);
+    return snippet || null;
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      logger.warn('[KnowledgeBaseService] 外部资料抓取失败', { url: u.toString(), message: err.message });
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 可选联网补全：尝试从已启用专业网站抓取少量公开文本摘录
  * @returns {Promise<string|null>}
  */
 async function maybeFetchWebSummary(queryText) {
   if (!isWebSearchEnabled()) return null;
-  logger.info('[KnowledgeBaseService] WEB_SEARCH_ENABLED 但未配置外部搜索实现，跳过');
-  return null;
+  try {
+    const sites = await MedicalSiteService.listEnabledSitesForPrompt(3);
+    const lines = [];
+    for (const site of sites) {
+      const url = site.guidelines_url || site.search_url || site.base_url;
+      if (!url) continue;
+      const excerpt = await fetchWebExcerpt(url, queryText);
+      if (!excerpt) continue;
+      lines.push(`[${site.display_name}] ${excerpt}`);
+    }
+    return lines.length ? lines.join('\n') : null;
+  } catch (err) {
+    logger.warn('[KnowledgeBaseService] 外部检索补全失败', { message: err.message });
+    return null;
+  }
 }
 
 /**
@@ -271,6 +383,8 @@ module.exports = {
   buildSearchQueryForAnomaly,
   buildSearchQueryForScenario,
   logUsage,
+  recordSaveRequest,
+  attachSaveRequestKbEntry,
   maybeFetchWebSummary,
   recordSessionSummary,
   isWebSearchEnabled,

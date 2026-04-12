@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Select, Button, InputNumber, Input, Form, Divider, Table, Modal, message, Tag, Alert, TimePicker, Collapse, Tooltip } from 'antd';
 import dayjs from 'dayjs';
-import { HistoryOutlined, SaveOutlined, InfoCircleFilled, CheckCircleFilled } from '@ant-design/icons';
+import { HistoryOutlined, SaveOutlined, InfoCircleFilled, CheckCircleFilled, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import PageShell from '../../components/PageShell/PageShell';
 import { getDialyzerSelectOptions } from '../../constants/dialyzerConsumables';
@@ -45,8 +45,10 @@ import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantTo
 import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
 import { useAuthStore } from '../../stores/authStore';
 
-/** 今日排班名单侧栏宽度（窄栏 + 标签换行；与透析工作台 240px 同级） */
-const PRESCRIPTION_TODAY_SIDER_WIDTH = 228;
+/** 今日排班名单侧栏宽度（与透析工作台同级） */
+const PRESCRIPTION_TODAY_SIDER_WIDTH = 192;
+
+
 
 const FREQUENCY_PRESET_OPTIONS = [
   { value: 'weekly_2', label: '每周2次' },
@@ -335,11 +337,12 @@ function RxGrid({
   children: ReactNode;
   style?: React.CSSProperties;
 }) {
+  const minWidth = cols >= 4 ? 168 : cols === 3 ? 220 : 260;
   return (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${cols}, 1fr)`,
+        gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${minWidth}px), 1fr))`,
         gap,
         ...style,
       }}
@@ -518,6 +521,7 @@ export default function PrescriptionWorkspacePage() {
   const [saveSubmitting, setSaveSubmitting] = useState(false);
   const [postSyncMeta, setPostSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
   const [baselineDryWeight, setBaselineDryWeight] = useState<number | null>(null);
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
   const skipPersistRef = useRef(false);
   const baselineDryWeightRef = useRef<number | null>(null);
   const heparinCoreIURef = useRef(0);
@@ -1270,9 +1274,6 @@ export default function PrescriptionWorkspacePage() {
         <div>
           <div className="hd-page-intro__eyebrow">Prescription Workspace</div>
           <div className="hd-page-intro__title">透析处方工作台</div>
-          <div className="hd-page-intro__desc">
-            面向医生维护当次透析处方，强调患者上下文、处方摘要、今日排班联动与透后评估同步，不改变原有字段、接口和保存方式。
-          </div>
         </div>
         <div className="hd-page-intro__chips">
           <span className="hd-page-intro__chip">{dayjs().format('YYYY年MM月DD日 dddd')}</span>
@@ -1289,7 +1290,7 @@ export default function PrescriptionWorkspacePage() {
           value={selectedPatient || undefined}
           onChange={(v) => setSelectedPatient(v)}
           options={patientSelectOptions}
-          style={{ width: 380 }}
+          style={{ width: 'min(380px, 100%)' }}
           showSearch
           optionFilterProp="label"
         />
@@ -1306,13 +1307,48 @@ export default function PrescriptionWorkspacePage() {
 
       <div className="hd-workspace-frame">
         {scheduleTodayRows.length > 0 ? (
-          <aside className="hd-workspace-sidebar" style={{ flexBasis: PRESCRIPTION_TODAY_SIDER_WIDTH, width: PRESCRIPTION_TODAY_SIDER_WIDTH, maxWidth: PRESCRIPTION_TODAY_SIDER_WIDTH }}>
-            <div className="hd-workspace-sidebar__head">
-              <div className="hd-workspace-sidebar__title">今日排班 · 上机日</div>
-              <div className="hd-workspace-sidebar__desc">
-                与排班同步，点击患者卡片后直接进入处方编辑。
+          siderCollapsed ? (
+            /* ── 折叠态 ── */
+            <div
+              style={{
+                width: 32,
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                paddingTop: 14,
+                gap: 12,
+                background: 'rgba(255,255,255,0.96)',
+                borderRadius: 12,
+                border: '1px solid var(--border)',
+                boxShadow: 'var(--shadow-sm)',
+              }}
+            >
+              <Tooltip title="展开排班名单" placement="right">
+                <button type="button" onClick={() => setSiderCollapsed(false)} className="hd-workspace-collapse-toggle">
+                  <RightOutlined />
+                </button>
+              </Tooltip>
+              <div style={{ writingMode: 'vertical-rl', fontSize: 11, color: '#94a3b8', letterSpacing: 3, userSelect: 'none' }}>
+                今日排班
               </div>
             </div>
+          ) : (
+            /* ── 展开态 ── */
+            <aside className="hd-workspace-sidebar" style={{ flexBasis: PRESCRIPTION_TODAY_SIDER_WIDTH, width: PRESCRIPTION_TODAY_SIDER_WIDTH, maxWidth: PRESCRIPTION_TODAY_SIDER_WIDTH }}>
+              <div className="hd-workspace-sidebar__head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="hd-workspace-sidebar__title">今日排班 · 上机日</div>
+                  <div className="hd-workspace-sidebar__desc">
+                    与排班同步，点击患者卡片后直接进入处方编辑。
+                  </div>
+                </div>
+                <Tooltip title="收起名单" placement="right">
+                  <button type="button" onClick={() => setSiderCollapsed(true)} className="hd-workspace-collapse-toggle" style={{ marginTop: 2 }}>
+                    <LeftOutlined />
+                  </button>
+                </Tooltip>
+              </div>
             <div className="hd-workspace-sidebar__meta">
               <span style={{ fontWeight: 700, color: '#0f172a' }}>{scheduleTodayRows.length} 人</span>
               <span style={{ marginLeft: 8 }}>{dayjs().format('YYYY-MM-DD')}</span>
@@ -1473,7 +1509,8 @@ export default function PrescriptionWorkspacePage() {
                 ))}
               </div>
             </div>
-          </aside>
+            </aside>
+          )
         ) : null}
 
         <div className="hd-workspace-content">
@@ -2167,7 +2204,7 @@ export default function PrescriptionWorkspacePage() {
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <Form.Item label="医生签名" name="doctorSignature" style={{ marginBottom: 8 }}>
-                <Input placeholder="默认当前登录用户姓名，可修改" style={{ width: 220 }} />
+                <Input placeholder="默认当前登录用户姓名，可修改" style={{ width: 'min(220px, 100%)' }} />
               </Form.Item>
               <div
                 style={{
@@ -2175,7 +2212,7 @@ export default function PrescriptionWorkspacePage() {
                   lineHeight: '22px',
                   color: '#0D1B3E',
                   fontWeight: 500,
-                  width: 220,
+                  width: 'min(220px, 100%)',
                   marginLeft: 'auto',
                 }}
               >

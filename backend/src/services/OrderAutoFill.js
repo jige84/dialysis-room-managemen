@@ -4,6 +4,7 @@
  * 主要功能：数据库联查；过滤频次与日期；供透析路由减少前端多次请求。
  */
 const { pool } = require('../config/database');
+const { formatDate } = require('../utils/dateUtils');
 
 /** 与库内枚举、前端下拉一致；去首尾空白/大小写，避免 switch 落空导致透析用药不同步 */
 function normalizeOrderFrequency(raw) {
@@ -102,7 +103,7 @@ class OrderAutoFill {
    */
   async prepareForDialysis(patientId, sessionDate, options = {}) {
     const { orderTypes = null } = options;
-    const date = sessionDate || new Date().toISOString().slice(0, 10);
+    const date = sessionDate || formatDate(new Date());
 
     // 获取当前有效处方
     const { rows: rxRows } = await pool.query(

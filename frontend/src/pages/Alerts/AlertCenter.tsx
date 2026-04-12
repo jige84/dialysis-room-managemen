@@ -26,11 +26,20 @@ const STATUS_LABEL: Record<string, { label: string; color: string; bg: string }>
 };
 
 const CATEGORY_LABEL: Record<string, string> = {
-  lab_critical: '检验危急值', ktv_inadequate: 'Kt/V不达标',
-  infection_overdue: '传染病超期', infection_warning: '传染病即将到期',
-  vascular_assessment_due: '通路评估到期', uf_exceed: '超滤量超限',
-  nurse_ratio: '护患比超标', dry_weight_overdue: '干体重评估超期',
-  cvc_high_risk: 'CVC高危', buttonhole_care: '扣眼穿刺监测',
+  lab_critical: '检验危急值',
+  low_ktv: 'Kt/V持续偏低',
+  infection_screening_due: '感染筛查到期',
+  lab_review_due: '化验复查到期',
+  vascular_assessment_due: '通路评估到期',
+  ultrafiltration_exceed: '超滤量超限',
+  nurse_ratio: '护患比超标',
+  dry_weight_overdue: '干体重评估超期',
+  cvc_high_risk: 'CVC高危',
+  buttonhole_monitor: '扣眼穿刺监测',
+  cqi_quarterly: 'CQI季度提醒',
+  machine_alarm: '设备报警',
+  water_alarm: '水处理报警',
+  disinfection_alarm: '消毒相关报警',
 };
 
 export default function AlertCenterPage() {

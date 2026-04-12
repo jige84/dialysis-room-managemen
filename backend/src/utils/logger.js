@@ -9,13 +9,22 @@ const path = require('path');
 const logDir = path.join(__dirname, '../../logs');
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
 
+function formatDateOnly() {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 function formatDate() {
   return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 }
 
 function writeLog(level, message, data) {
   const entry = `[${formatDate()}] [${level}] ${message}${data ? ' ' + JSON.stringify(data) : ''}\n`;
-  const date = new Date().toISOString().slice(0, 10);
+  const date = formatDateOnly();
   const filePath = path.join(logDir, `${date}.log`);
   fs.appendFile(filePath, entry, () => {});
   if (level === 'ERROR') console.error(entry.trim());

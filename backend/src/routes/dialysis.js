@@ -15,6 +15,7 @@ const OrderAutoFill = require('../services/OrderAutoFill');
 const AlertEngine = require('../services/AlertEngine');
 const ConsumableStockService = require('../services/ConsumableStockService');
 const { success, created, paginated, error, notFound } = require('../utils/response');
+const { formatDate, getMonthRange } = require('../utils/dateUtils');
 
 /**
  * 低血压：收缩压 < 90，或较基线下降 > 20 mmHg（medical-domain-rules §5）
@@ -45,7 +46,7 @@ router.get('/prepare', auth, async (req, res, next) => {
 router.get('/stats/daily', auth, async (req, res, next) => {
   try {
     const { date } = req.query;
-    const targetDate = date || new Date().toISOString().slice(0, 10);
+    const targetDate = date || formatDate(new Date());
 
     const { rows } = await pool.query(`
       SELECT
@@ -71,8 +72,7 @@ router.get('/stats/monthly', auth, async (req, res, next) => {
     const { year, month } = req.query;
     if (!year || !month) return error(res, '请提供 year 和 month 参数');
 
-    const startDate = `${year}-${String(month).padStart(2,'0')}-01`;
-    const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
+    const { startDate, endDate } = getMonthRange(Number(year), Number(month));
 
     const { rows } = await pool.query(`
       SELECT

@@ -41,7 +41,7 @@ export interface AlertRow {
   id: string;
   machine_id?: string | null;
   alert_type: string;
-  priority?: string;
+  severity?: 'info' | 'warning' | 'critical' | 'emergency';
   title: string;
   message: string;
   status: string;
@@ -129,6 +129,31 @@ export interface WaterQualityRecord {
   result?: string | null;
   notes?: string | null;
   tested_by_name?: string | null;
+  water_machine_id?: string | null;
+  water_machine_no?: string | null;
+}
+
+export interface WaterDailyInspectionRow {
+  id: string;
+  water_machine_id: string | null;
+  water_machine_no?: string | null;
+  check_date: string;
+  hardness?: string | null;
+  total_chlorine?: string | null;
+  tap_pressure?: string | null;
+  sand_delta_p?: string | null;
+  resin_delta_p?: string | null;
+  carbon_delta_p?: string | null;
+  ro_in_pressure?: string | null;
+  ro_out_pressure?: string | null;
+  feed_conductivity?: string | null;
+  product_conductivity?: string | null;
+  product_flow?: string | null;
+  drain_flow?: string | null;
+  feed_temp?: string | null;
+  operator_name?: string | null;
+  notes?: string | null;
+  entered_by_name?: string | null;
 }
 
 export interface CreateMachinePayload {
@@ -168,7 +193,7 @@ export interface CreateConsumableStockPayload {
 
 export interface CreateMachineAlertPayload {
   alert_type?: string;
-  priority?: string;
+  severity?: 'info' | 'warning' | 'critical' | 'emergency';
   title: string;
   message: string;
 }
@@ -226,6 +251,17 @@ export const devicesApi = {
 
   waterMachines: () => request.get<ApiResponse<WaterMachineRow[]>>('/devices/water-machines'),
 
+  createWaterMachine: (data: {
+    machine_no: string;
+    model?: string;
+    brand?: string;
+    location?: string;
+    status?: string;
+    last_disinfection_at?: string;
+    next_disinfection_due?: string;
+    notes?: string;
+  }) => request.post<ApiResponse<WaterMachineRow>>('/devices/water-machines', data),
+
   waterMachineMaintenance: (waterMachineId: string) =>
     request.get<ApiResponse<WaterMaintenanceRow[]>>(`/devices/water-machines/${waterMachineId}/maintenance`),
 
@@ -245,8 +281,12 @@ export const devicesApi = {
       body,
     ),
 
-  waterQualityList: (params?: { start_date?: string; end_date?: string; page?: number }) =>
-    request.get<ApiResponse<WaterQualityRecord[]>>('/devices/water-quality', { params }),
+  waterQualityList: (params?: {
+    start_date?: string;
+    end_date?: string;
+    water_machine_id?: string;
+    page?: number;
+  }) => request.get<ApiResponse<WaterQualityRecord[]>>('/devices/water-quality', { params }),
 
   createWaterQuality: (data: {
     test_date: string;
@@ -259,5 +299,35 @@ export const devicesApi = {
     chlorine?: number;
     result?: string;
     notes?: string;
+    water_machine_id?: string;
   }) => request.post<ApiResponse<WaterQualityRecord>>('/devices/water-quality', data),
+
+  waterDailyInspections: (params?: {
+    start_date?: string;
+    end_date?: string;
+    water_machine_id?: string;
+    page?: number;
+    page_size?: number;
+  }) => request.get<ApiResponse<WaterDailyInspectionRow[]>>('/devices/water-daily-inspections', { params }),
+
+  createWaterDailyInspection: (data: {
+    water_machine_id?: string;
+    check_date: string;
+    hardness?: string;
+    total_chlorine?: string;
+    tap_pressure?: string;
+    sand_delta_p?: string;
+    resin_delta_p?: string;
+    carbon_delta_p?: string;
+    ro_in_pressure?: string;
+    ro_out_pressure?: string;
+    feed_conductivity?: string;
+    product_conductivity?: string;
+    product_flow?: string;
+    drain_flow?: string;
+    feed_temp?: string;
+    operator?: string;
+    operator_name?: string;
+    notes?: string;
+  }) => request.post<ApiResponse<WaterDailyInspectionRow>>('/devices/water-daily-inspections', data),
 };

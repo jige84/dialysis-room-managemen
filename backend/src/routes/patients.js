@@ -4,6 +4,7 @@
  * 主要功能：分页列表与详情；新建/更新/软删除；加密字段不落日志；导出权限按 RBAC。
  */
 const express = require('express');
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const router = express.Router();
@@ -15,11 +16,38 @@ const auditLog = require('../middleware/audit');
 const { encrypt, decrypt, maskIdCard, maskPhone } = require('../utils/encrypt');
 const { calcAge, formatDuration } = require('../utils/dateUtils');
 const { success, created, paginated, error, notFound } = require('../utils/response');
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const isValidUuid = (value) => typeof value === 'string' && UUID_REGEX.test(value);
+const { isValidUuid, resolveResponsibleNurseId } = require('../utils/responsibleNurseUtils');
+const PatientBulkImportService = require('../services/PatientBulkImportService');
+const PatientHistoryFolderImportService = require('../services/PatientHistoryFolderImportService');
 
 const consentUpload = createPatientConsentUploader();
+
+const patientImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const name = (file.originalname || '').toLowerCase();
+    const ok =
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      || name.endsWith('.xlsx');
+    cb(ok ? null : new Error('仅支持 .xlsx 格式'), ok);
+  },
+});
+
+const patientHistoryImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 50,
+  },
+  fileFilter: (_req, file, cb) => {
+    const name = (file.originalname || '').toLowerCase();
+    const ok =
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      || name.endsWith('.xlsx');
+    cb(ok ? null : new Error('仅支持 .xlsx 格式'), ok);
+  },
+});
 
 /** @param {string | null | undefined} relPath */
 function safeUnlinkStoredPath(relPath) {
@@ -43,24 +71,6 @@ function normalizeConsentPaths(paths) {
 /** @param {unknown} paths */
 function safeUnlinkStoredPaths(paths) {
   normalizeConsentPaths(paths).forEach((p) => safeUnlinkStoredPath(p));
-}
-
-/**
- * 校验责任护士：须为本科室已启用的 nurse / head_nurse
- * @returns {{ id: string | null, error: string | null }}
- */
-async function resolveResponsibleNurseId(pool, raw) {
-  if (raw === undefined || raw === null || raw === '') return { id: null, error: null };
-  if (!isValidUuid(String(raw))) return { id: null, error: '责任护士ID格式无效' };
-  const { rows } = await pool.query(
-    `SELECT id FROM users
-     WHERE id = $1 AND role IN ('nurse', 'head_nurse') AND is_active = true`,
-    [raw],
-  );
-  if (rows.length === 0) {
-    return { id: null, error: '责任护士须从本科室已启用的护士或护士长账号中选择' };
-  }
-  return { id: rows[0].id, error: null };
 }
 
 /** 与 prescriptions.anticoagulant CHECK 一致 */
@@ -124,7 +134,7 @@ router.get('/', auth, async (req, res, next) => {
     const list = rows.map(row => ({
       ...row,
       age: calcAge(row.dob),
-      dialysis_age: formatDuration(row.dialysis_start_date),
+      dialysis_age: row.dialysis_start_date ? formatDuration(row.dialysis_start_date) : '',
       phone_masked: maskPhone(decrypt(row.phone_encrypted)),
       phone_encrypted: undefined,
     }));
@@ -152,6 +162,94 @@ router.get('/stats', auth, async (req, res, next) => {
     return success(res, rows[0]);
   } catch (err) { next(err); }
 });
+
+// GET /api/patients/import/template — 下载标准导入表头（须早于 /:id）
+router.get('/import/template', auth, rbac(['admin', 'doctor']), async (req, res, next) => {
+  try {
+    const buf = await PatientBulkImportService.buildTemplateWorkbookBuffer();
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=patient_import_template.xlsx',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(buf);
+  } catch (err) { next(err); }
+});
+
+// POST /api/patients/import — XLSX 批量导入（query: dry_run=1 仅校验）
+router.post(
+  '/import',
+  auth,
+  rbac(['admin', 'doctor']),
+  (req, res, next) => {
+    patientImportUpload.single('file')(req, res, (err) => {
+      if (err) return error(res, err.message || '文件上传失败', 400);
+      next();
+    });
+  },
+  auditLog('patients', 'CREATE'),
+  async (req, res, next) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return error(res, '请上传 file 字段的 .xlsx 文件', 400);
+      }
+      const dryRun =
+        String(req.query.dry_run || '') === '1'
+        || String(req.query.dry_run || '').toLowerCase() === 'true';
+      const result = await PatientBulkImportService.runImport(pool, req.file.buffer, {
+        dryRun,
+        createdByUserId: req.user.id,
+      });
+      const firstId = result.imported.length ? result.imported[0].id : null;
+      return success(
+        res,
+        {
+          ...result,
+          id: dryRun ? null : firstId,
+        },
+        dryRun ? '预检完成（未写入数据库）' : '批量导入完成',
+      );
+    } catch (err) { next(err); }
+  },
+);
+
+// POST /api/patients/import/history-folder — 历史资料文件夹导入（query: dry_run=1 仅校验）
+router.post(
+  '/import/history-folder',
+  auth,
+  rbac(['admin', 'doctor']),
+  (req, res, next) => {
+    patientHistoryImportUpload.array('files', 50)(req, res, (err) => {
+      if (err) return error(res, err.message || '文件上传失败', 400);
+      next();
+    });
+  },
+  auditLog('patients', 'CREATE'),
+  async (req, res, next) => {
+    try {
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (files.length === 0) {
+        return error(res, '请上传 files 字段的 .xlsx 文件', 400);
+      }
+      const dryRun =
+        String(req.query.dry_run || '') === '1'
+        || String(req.query.dry_run || '').toLowerCase() === 'true';
+      const result = await PatientHistoryFolderImportService.runImport(pool, files, {
+        dryRun,
+        actorUserId: req.user.id,
+      });
+      return success(
+        res,
+        result,
+        dryRun ? '历史资料预检完成（未写入数据库）' : '历史资料导入完成',
+      );
+    } catch (err) { next(err); }
+  },
+);
 
 // GET /api/patients/:id/consent-dialysis-image/:index — 按序号取第 N 张（须在无 index 路由之前注册）
 router.get('/:id/consent-dialysis-image/:index', auth, async (req, res, next) => {
@@ -234,7 +332,9 @@ router.get('/:id', auth, async (req, res, next) => {
     // 解密并脱敏（管理员/护士长可看完整）
     const isPrivileged = ['admin', 'head_nurse'].includes(req.user.role);
     patient.age = calcAge(patient.dob);
-    patient.dialysis_age = formatDuration(patient.dialysis_start_date);
+    patient.dialysis_age = patient.dialysis_start_date
+      ? formatDuration(patient.dialysis_start_date)
+      : '';
     patient.phone = isPrivileged
       ? decrypt(patient.phone_encrypted)
       : maskPhone(decrypt(patient.phone_encrypted));
@@ -409,6 +509,7 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
     const {
       name, gender, dob, id_card, phone, family_contact, address,
       primary_diagnosis, present_illness, past_history, ckd_stage, comorbidities, dialysis_mode,
+      dialysis_start_date,
       consent_dialysis, consent_dialysis_date, consent_cvc, consent_cvc_date,
       dialysis_schedule_code, dialysis_schedule_notes,
       responsible_nurse_id,
@@ -438,6 +539,15 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
       respNurseId = rn.id;
       if (!respNurseId) return error(res, '请选择责任护士');
     }
+
+    const hasDialysisStartKey = Object.prototype.hasOwnProperty.call(req.body, 'dialysis_start_date');
+    const dialysisStartVal = hasDialysisStartKey
+      ? (
+          dialysis_start_date != null && String(dialysis_start_date).trim()
+            ? String(dialysis_start_date).trim().slice(0, 10)
+            : null
+        )
+      : null;
 
     const ex = existingPatient[0];
     const nextDialysisCode = hasDialysisCodeKey ? dialysisCodeVal : ex.dialysis_schedule_code;
@@ -497,24 +607,25 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
          ckd_stage = COALESCE($11, ckd_stage),
          comorbidities = COALESCE($12, comorbidities),
          dialysis_mode = COALESCE($13, dialysis_mode),
-         consent_dialysis = COALESCE($14, consent_dialysis),
+         dialysis_start_date = CASE WHEN $14::boolean THEN $15::date ELSE dialysis_start_date END,
+         consent_dialysis = COALESCE($16, consent_dialysis),
          consent_dialysis_date = CASE
-           WHEN $14 = false THEN NULL
-           WHEN $15::date IS NOT NULL THEN $15
-           ELSE consent_dialysis_date
-         END,
-         consent_cvc = COALESCE($16, consent_cvc),
-         consent_cvc_date = CASE
            WHEN $16 = false THEN NULL
            WHEN $17::date IS NOT NULL THEN $17
+           ELSE consent_dialysis_date
+         END,
+         consent_cvc = COALESCE($18, consent_cvc),
+         consent_cvc_date = CASE
+           WHEN $18 = false THEN NULL
+           WHEN $19::date IS NOT NULL THEN $19
            ELSE consent_cvc_date
          END,
-         dialysis_schedule_code = CASE WHEN $19::boolean THEN $18::varchar ELSE dialysis_schedule_code END,
-         dialysis_schedule_notes = CASE WHEN $21::boolean THEN $20::text ELSE dialysis_schedule_notes END,
-         responsible_nurse_id = CASE WHEN $23::boolean THEN $22::uuid ELSE responsible_nurse_id END,
-         dialysis_schedule_anchor_date = $24::date,
+         dialysis_schedule_code = CASE WHEN $21::boolean THEN $20::varchar ELSE dialysis_schedule_code END,
+         dialysis_schedule_notes = CASE WHEN $23::boolean THEN $22::text ELSE dialysis_schedule_notes END,
+         responsible_nurse_id = CASE WHEN $25::boolean THEN $24::uuid ELSE responsible_nurse_id END,
+         dialysis_schedule_anchor_date = $26::date,
          updated_at = NOW()
-       WHERE id = $25
+       WHERE id = $27
        RETURNING id, name, gender, status`,
       [
         name, gender, dob,
@@ -524,6 +635,8 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
         address, primary_diagnosis, present_illness || null, past_history || null, ckd_stage,
         comorbidities || null,
         dialysis_mode,
+        hasDialysisStartKey,
+        dialysisStartVal,
         consent_dialysis ?? null,
         consent_dialysis_date || null,
         consent_cvc ?? null,

@@ -5,6 +5,10 @@
 
 /** @typedef {'morning'|'afternoon'|'evening'} DbShift */
 
+function formatUtcDate(date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
 /**
  * ISO 周序号（1–53），与 ISO 8601 一致
  * @param {Date} d
@@ -47,7 +51,7 @@ function enumerateWeekDates(weekStartMonday) {
   for (let i = 0; i < 7; i += 1) {
     const cur = new Date(d);
     cur.setUTCDate(d.getUTCDate() + i);
-    out.push(cur.toISOString().slice(0, 10));
+    out.push(formatUtcDate(cur));
   }
   return out;
 }

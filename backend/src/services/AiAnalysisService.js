@@ -7,6 +7,7 @@
  *  - 所有响应统一附带合规免责声明，供前端展示
  */
 
+const crypto = require('crypto');
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');
 const { buildAnomalyEvidencePayload, isValidAnomalyType } = require('../utils/anomalyPayloads');
@@ -17,6 +18,8 @@ const {
 const KnowledgeBaseService = require('./KnowledgeBaseService');
 const MedicationRuleService = require('./MedicationRuleService');
 const MedicalSiteService = require('./MedicalSiteService');
+const NlpQueryService = require('./NlpQueryService');
+const { formatDate } = require('../utils/dateUtils');
 
 const { AI_KB_SCENARIO } = KnowledgeBaseService;
 
@@ -121,7 +124,7 @@ function formatKbAndSitesForSystem(kbSnippets, medicalSites) {
 
 /** 本地知识库标题日期后缀（不含患者标识） */
 function kbTitleDateSuffix() {
-  return new Date().toISOString().slice(0, 10);
+  return formatDate(new Date());
 }
 
 /**
@@ -193,6 +196,20 @@ async function persistAiKbIfRequested({
     return { kb_save: { skipped: true } };
   }
   const persistText = formatKbSnippetsForPersist(kbSnippets || []);
+  const auditHashSource =
+    persistText.trim() || `${scenario || ''}|${subcategory || ''}|${title || ''}|${kbQuery || ''}`;
+  let saveRequestId = null;
+  try {
+    saveRequestId = await KnowledgeBaseService.recordSaveRequest({
+      contentHash: crypto.createHash('sha256').update(auditHashSource).digest('hex'),
+      title,
+      sourceTier: 1,
+      userId,
+      decision: 'approved',
+    });
+  } catch (e) {
+    logger.warn('[AiAnalysisService] recordSaveRequest failed', { message: e.message });
+  }
   if (!persistText.trim()) {
     return {
       kb_save: {
@@ -215,6 +232,7 @@ async function persistAiKbIfRequested({
       userId,
     });
     if (r.duplicate) {
+      await KnowledgeBaseService.attachSaveRequestKbEntry(saveRequestId, r.documentId || null);
       return {
         kb_save: {
           skipped: false,
@@ -226,6 +244,7 @@ async function persistAiKbIfRequested({
       };
     }
     if (r.saved) {
+      await KnowledgeBaseService.attachSaveRequestKbEntry(saveRequestId, r.documentId || null);
       return {
         kb_save: {
           skipped: false,
@@ -733,11 +752,19 @@ class AiAnalysisService {
   async answerNlpQuery(query, context, opts = {}) {
     const saveToKb = Boolean(opts.saveToKb);
     const userId = opts.userId || null;
+    let resolvedContext = context;
+    let queryExecution = null;
+    if (!resolvedContext) {
+      const planned = await NlpQueryService.executeQuery(query);
+      resolvedContext = planned.context;
+      queryExecution = planned.meta;
+    }
     const { retrieval, kbSnippets, medicalSites } =
       await retrieveKbAndMedicalSites('nlp_query');
     const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
     const systemPrompt =
       '你是血液透析室的数据解读助手，会结合系统统计结果，用自然语言向医护人员解释情况。' +
+      '若上下文包含 query_execution，请先严格依据其中的查询范围、命中结果和统计摘要作答，不得编造额外数据。' +
       kbBlock;
     const userPrompt =
       '以下是医护人员的自然语言查询，请结合提供的结构化统计结果，用简洁的简体中文回答，并避免编造未在数据中出现的信息。\n\n查询：' +
@@ -745,7 +772,7 @@ class AiAnalysisService {
     const result = await callQwen({
       systemPrompt,
       userPrompt,
-      context,
+      context: resolvedContext,
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -756,7 +783,7 @@ class AiAnalysisService {
       kbSnippets,
       kbQuery: retrieval.kb_query,
     });
-    return { ...result, retrieval, ...kb };
+    return { ...result, retrieval, query_execution: queryExecution, ...kb };
   }
 
   /**
@@ -1187,4 +1214,3 @@ module.exports = Object.assign(aiAnalysisServiceSingleton, {
   formatKbSnippetsForPersist,
   buildKbSaveOverview,
 });
-

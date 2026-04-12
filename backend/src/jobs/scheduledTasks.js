@@ -67,14 +67,32 @@ function initScheduledTasks() {
   cron.schedule('0 9 * * 1', async () => {
     const month = new Date().getMonth() + 1;
     if ([1, 4, 7, 10].includes(month)) {
+      const year = new Date().getFullYear();
+      const quarter = Math.floor((month - 1) / 3) + 1;
+      const alertRuleId = `${year}-Q${quarter}`;
       logger.info('[定时任务] 提醒：本月为季度CQI总结月，请及时录入CQI分析报告');
       // 生成CQI季度提醒预警
       try {
+        const { rows: existsRows } = await pool.query(
+          `SELECT 1
+             FROM alerts
+            WHERE alert_type = 'cqi_quarterly'
+              AND alert_rule_id = $1
+              AND status = 'active'
+            LIMIT 1`,
+          [alertRuleId],
+        );
+        if (existsRows.length > 0) {
+          logger.info('[定时任务] 本季度 CQI 提醒已存在，跳过生成');
+          return;
+        }
         await pool.query(
-          `INSERT INTO alerts (alert_type, priority, title, message)
-           VALUES ('cqi_quarterly', 'low', 'CQI季度总结提醒',
-                   '本季度CQI分析会议请于本月内召开，请护士长安排并录入会议记录')
-           ON CONFLICT DO NOTHING`
+          `INSERT INTO alerts (
+             alert_rule_id, alert_type, severity, title, message, status
+           )
+           VALUES ($1, 'cqi_quarterly', 'info', 'CQI季度总结提醒',
+                   '本季度CQI分析会议请于本月内召开，请护士长安排并录入会议记录', 'active')`,
+          [alertRuleId],
         );
       } catch (err) {
         logger.error('[定时任务] CQI提醒生成失败：', err.message);

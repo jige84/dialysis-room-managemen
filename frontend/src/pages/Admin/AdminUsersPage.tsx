@@ -557,6 +557,7 @@ function MenuKeysEditor({ value = [], onChange, role }: MenuKeysEditorProps) {
   const allowed = menuKeysConfigurableForRole(role);
   const menuKeys = value;
   const setMenuKeys = (next: string[]) => onChange?.(next);
+  const canConfigureAiAssistant = allowed.includes('/ai/assistant');
 
   return (
     <div style={{ width: '100%' }}>
@@ -564,14 +565,20 @@ function MenuKeysEditor({ value = [], onChange, role }: MenuKeysEditorProps) {
         <div key={section.title} style={{ marginBottom: 12 }}>
           {section.title === 'AI 临床分析' && (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
-              指南 / 知识库 / 网站配置与助手子功能相互独立；血管通路「AI 解读」需勾选「自然语言查询」分项。
+              指南 / 知识库 / 网站配置与助手子功能相互独立；血管通路「AI 解读」需勾选「CVC 高危评分解读」分项。
             </Typography.Paragraph>
           )}
           <Typography.Text type="secondary">{section.title}</Typography.Text>
           <div style={{ marginTop: 8 }}>
             {section.title === 'AI 临床分析' ? (
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <AiAssistantControls menuKeys={menuKeys} onChange={setMenuKeys} />
+                {canConfigureAiAssistant ? (
+                  <AiAssistantControls menuKeys={menuKeys} onChange={setMenuKeys} />
+                ) : (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    当前角色不开放临床 AI 助手、指南阅读与知识库模块。
+                  </Typography.Text>
+                )}
                 <Space wrap size={[8, 8]}>
                   {section.items
                     .filter(item => item.key !== '/ai/assistant')

@@ -16,11 +16,47 @@ require('dotenv').config();
 
 // 登录失败计数（内存，生产环境应存Redis）
 const loginAttempts = new Map();
+const LOGIN_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.LOGIN_MAX_ATTEMPTS || '5', 10));
+const LOGIN_LOCK_MINUTES = Math.max(1, parseInt(process.env.LOGIN_LOCK_MINUTES || '30', 10));
+const LOGIN_CACHE_PREFIX = 'login_attempts:';
 
 const loginSchema = Joi.object({
   username: Joi.string().required().label('用户名'),
   password: Joi.string().required().label('密码'),
 });
+
+function loginAttemptKey(username) {
+  return `${LOGIN_CACHE_PREFIX}${String(username || '').trim().toLowerCase()}`;
+}
+
+async function getLoginAttemptRecord(username) {
+  const key = loginAttemptKey(username);
+  const cached = await cache.get(key);
+  if (cached && typeof cached === 'object') {
+    return {
+      count: Number(cached.count) || 0,
+      lockedUntil: Number(cached.lockedUntil) || 0,
+    };
+  }
+  return loginAttempts.get(key) || { count: 0, lockedUntil: 0 };
+}
+
+async function persistLoginAttemptRecord(username, record) {
+  const key = loginAttemptKey(username);
+  const ttlSeconds = Math.max(LOGIN_LOCK_MINUTES * 60, 30 * 60);
+  const saved = await cache.set(key, record, ttlSeconds);
+  if (saved) {
+    loginAttempts.delete(key);
+    return;
+  }
+  loginAttempts.set(key, record);
+}
+
+async function clearLoginAttemptRecord(username) {
+  const key = loginAttemptKey(username);
+  await cache.del(key);
+  loginAttempts.delete(key);
+}
 
 // POST /api/auth/login
 router.post('/login', async (req, res, next) => {
@@ -31,7 +67,7 @@ router.post('/login', async (req, res, next) => {
     const { username, password } = req.body;
 
     // 检查登录失败次数
-    const attempts = loginAttempts.get(username) || { count: 0, lockedUntil: 0 };
+    const attempts = await getLoginAttemptRecord(username);
     if (attempts.lockedUntil > Date.now()) {
       const mins = Math.ceil((attempts.lockedUntil - Date.now()) / 60000);
       return error(res, `账号已锁定，请 ${mins} 分钟后重试`, 429);
@@ -43,7 +79,10 @@ router.post('/login', async (req, res, next) => {
     );
 
     if (rows.length === 0) {
-      recordFailedAttempt(loginAttempts, username);
+      const failed = await recordFailedAttempt(username);
+      if (failed.lockedUntil > Date.now()) {
+        return error(res, `账号已锁定，请 ${LOGIN_LOCK_MINUTES} 分钟后重试`, 429);
+      }
       return unauthorized(res, '用户名或密码错误');
     }
 
@@ -55,13 +94,16 @@ router.post('/login', async (req, res, next) => {
 
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
-      recordFailedAttempt(loginAttempts, username);
-      const remaining = 5 - (loginAttempts.get(username)?.count || 0);
+      const failed = await recordFailedAttempt(username);
+      if (failed.lockedUntil > Date.now()) {
+        return error(res, `账号已锁定，请 ${LOGIN_LOCK_MINUTES} 分钟后重试`, 429);
+      }
+      const remaining = LOGIN_MAX_ATTEMPTS - (failed.count || 0);
       return unauthorized(res, `用户名或密码错误，还可尝试 ${Math.max(0, remaining)} 次`);
     }
 
     // 登录成功，清除失败计数
-    loginAttempts.delete(username);
+    await clearLoginAttemptRecord(username);
 
     // 更新最后登录时间
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
@@ -154,15 +196,16 @@ router.get('/me', auth, async (req, res, next) => {
   }
 });
 
-// 记录登录失败次数（5次锁定30分钟）
-function recordFailedAttempt(map, username) {
-  const record = map.get(username) || { count: 0, lockedUntil: 0 };
+// 记录登录失败次数（默认5次锁定30分钟；Redis 可用时多实例共享）
+async function recordFailedAttempt(username) {
+  const record = await getLoginAttemptRecord(username);
   record.count++;
-  if (record.count >= 5) {
-    record.lockedUntil = Date.now() + 30 * 60 * 1000;
+  if (record.count >= LOGIN_MAX_ATTEMPTS) {
+    record.lockedUntil = Date.now() + LOGIN_LOCK_MINUTES * 60 * 1000;
     record.count = 0;
   }
-  map.set(username, record);
+  await persistLoginAttemptRecord(username, record);
+  return record;
 }
 
 module.exports = router;

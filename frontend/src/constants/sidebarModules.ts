@@ -35,6 +35,14 @@ export const AI_CLINICAL_MENU_KEYS: readonly SidebarMenuKey[] = [
   '/ai/knowledge',
 ];
 
+export function canRoleAccessClinicalAi(role: string | null | undefined): boolean {
+  return !!role && ['admin', 'doctor', 'head_nurse'].includes(role);
+}
+
+export function isClinicalAiMenuKey(key: SidebarMenuKey | null): boolean {
+  return key !== null && AI_CLINICAL_MENU_KEYS.includes(key);
+}
+
 export type SidebarNavItem = {
   key: SidebarMenuKey;
   /** 与 key 不一致时的实际路由（如透析工作台挂载在 /dialysis） */
@@ -101,6 +109,11 @@ export const SIDEBAR_NAV_SECTIONS: SidebarNavSection[] = [
 /** 某角色可配置的模块 key（非管理员不可勾选仅管理员侧栏项） */
 export function menuKeysConfigurableForRole(role: string): SidebarMenuKey[] {
   const isAdmin = role === 'admin';
-  if (isAdmin) return [...ALL_SIDEBAR_MENU_KEYS];
-  return ALL_SIDEBAR_MENU_KEYS.filter(k => !ADMIN_ONLY_MENU_KEYS.includes(k));
+  let keys = isAdmin
+    ? [...ALL_SIDEBAR_MENU_KEYS]
+    : ALL_SIDEBAR_MENU_KEYS.filter(k => !ADMIN_ONLY_MENU_KEYS.includes(k));
+  if (!canRoleAccessClinicalAi(role)) {
+    keys = keys.filter(k => !AI_CLINICAL_MENU_KEYS.includes(k));
+  }
+  return keys;
 }

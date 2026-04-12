@@ -4,6 +4,7 @@
  * 主要功能：按年月聚合五项上报指标；写入或更新报表记录；供 reports 路由与定时任务调用。
  */
 const { pool } = require('../config/database');
+const { getMonthRange } = require('../utils/dateUtils');
 
 class ReportGenerator {
   /**
@@ -13,8 +14,7 @@ class ReportGenerator {
    * @returns {Promise<object>} 5项质控指标数据
    */
   async generateQCUpload(year, month) {
-    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-    const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
+    const { startDate, endDate } = getMonthRange(year, month);
 
     // ── 指标一：护患比（按日汇总：月透析总次数 ÷ 月护士人次累加，与质控上报口径一致）──
     const { rows: nurseAgg } = await pool.query(

@@ -4,6 +4,38 @@
  */
 import request, { type ApiResponse } from './request';
 
+function extractFilename(contentDisposition: string | undefined, fallback: string): string {
+  if (!contentDisposition) return fallback;
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  const plainMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return plainMatch?.[1] || fallback;
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+async function downloadQcFile(path: string, fallbackFilename: string) {
+  const response = await request.get<Blob>(path, { responseType: 'blob' });
+  const blob = response.data instanceof Blob ? response.data : new Blob([response.data]);
+  const filename = extractFilename(response.headers['content-disposition'], fallbackFilename);
+  triggerBrowserDownload(blob, filename);
+}
+
 /** GET /reports/qc-trend 单行（与 qc_reports 汇总字段一致） */
 export interface QcTrendRow {
   report_year: number;
@@ -102,7 +134,10 @@ const reportsApi = {
     request.get<ApiResponse<MonthlyWorkloadPayload>>(`/reports/monthly-workload/${year}/${month}`),
 
   getQCUpload: (year: number, month: number) =>
-    request.get<ApiResponse<QCReport>>(`/reports/qc-upload/${year}/${month}`),
+    request.get<ApiResponse<QCReport | null>>(`/reports/qc-upload/${year}/${month}`),
+
+  initQCUpload: (year: number, month: number) =>
+    request.post<ApiResponse<QCReport>>(`/reports/qc-upload/${year}/${month}/init`),
 
   submit: (year: number, month: number) =>
     request.post<ApiResponse<QCReport>>(`/reports/qc-upload/${year}/${month}/submit`),
@@ -114,10 +149,16 @@ const reportsApi = {
     request.patch<ApiResponse<QCReport>>(`/reports/qc-upload/${year}/${month}`, payload),
 
   exportExcel: (year: number, month: number) =>
-    `/api/reports/qc-upload/${year}/${month}/export`,
+    downloadQcFile(
+      `/reports/qc-upload/${year}/${month}/export`,
+      `quality_report_${year}_${String(month).padStart(2, '0')}.xlsx`,
+    ),
 
   exportPdf: (year: number, month: number) =>
-    `/api/reports/qc-upload/${year}/${month}/export-pdf`,
+    downloadQcFile(
+      `/reports/qc-upload/${year}/${month}/export-pdf`,
+      `qc_report_${year}_${String(month).padStart(2, '0')}.pdf`,
+    ),
 
   history: () =>
     request.get<ApiResponse<QCReport[]>>('/reports/qc-upload/history'),

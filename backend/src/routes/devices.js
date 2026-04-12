@@ -8,6 +8,200 @@ const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const { success, created, error, notFound } = require('../utils/response');
+const PG_UNDEFINED_COLUMN = '42703';
+const PG_FOREIGN_KEY_VIOLATION = '23503';
+/** PostgreSQL uuid 文本格式（参数化查询，仅校验格式防无效输入） */
+const PG_UUID_TEXT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuidText(value) {
+  return typeof value === 'string' && PG_UUID_TEXT_RE.test(value.trim());
+}
+
+function isWaterQualityUserColumnMissing(err) {
+  if (!err || err.code !== PG_UNDEFINED_COLUMN) return false;
+  const msg = String(err.message || '');
+  return msg.includes('entered_by') || msg.includes('tested_by');
+}
+
+function isWaterQualityWaterMachineColumnMissing(err) {
+  if (!err || err.code !== PG_UNDEFINED_COLUMN) return false;
+  return String(err.message || '').includes('water_machine_id');
+}
+
+async function queryWaterQualityList({ where, params, limit, offset }) {
+  const baseParams = [...params, limit, offset];
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
+
+  async function runWithUser(userColumn, withMachineJoin) {
+    const wmJoin = withMachineJoin
+      ? 'LEFT JOIN water_machines wm ON wq.water_machine_id = wm.id'
+      : '';
+    const wmSelect = withMachineJoin ? 'wm.machine_no AS water_machine_no' : 'NULL::text AS water_machine_no';
+    return pool.query(
+      `SELECT wq.*, u.real_name AS tested_by_name, ${wmSelect}
+       FROM water_quality_records wq
+       LEFT JOIN users u ON wq.${userColumn} = u.id
+       ${wmJoin}
+       ${where}
+       ORDER BY wq.test_date DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      baseParams,
+    );
+  }
+
+  async function runNoUser(withMachineJoin) {
+    const wmJoin = withMachineJoin
+      ? 'LEFT JOIN water_machines wm ON wq.water_machine_id = wm.id'
+      : '';
+    const wmSelect = withMachineJoin ? 'wm.machine_no AS water_machine_no' : 'NULL::text AS water_machine_no';
+    return pool.query(
+      `SELECT wq.*, NULL::text AS tested_by_name, ${wmSelect}
+       FROM water_quality_records wq
+       ${wmJoin}
+       ${where}
+       ORDER BY wq.test_date DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      baseParams,
+    );
+  }
+
+  async function tryUserColumn(userColumn) {
+    try {
+      return await runWithUser(userColumn, true);
+    } catch (err) {
+      if (err.code === PG_UNDEFINED_COLUMN && isWaterQualityWaterMachineColumnMissing(err)) {
+        return runWithUser(userColumn, false);
+      }
+      throw err;
+    }
+  }
+
+  async function tryNoUser() {
+    try {
+      return await runNoUser(true);
+    } catch (err) {
+      if (err.code === PG_UNDEFINED_COLUMN && isWaterQualityWaterMachineColumnMissing(err)) {
+        return runNoUser(false);
+      }
+      throw err;
+    }
+  }
+
+  try {
+    return await tryUserColumn('entered_by');
+  } catch (err) {
+    if (!isWaterQualityUserColumnMissing(err)) throw err;
+  }
+
+  try {
+    return await tryUserColumn('tested_by');
+  } catch (err) {
+    if (!isWaterQualityUserColumnMissing(err)) throw err;
+  }
+
+  return tryNoUser();
+}
+
+/**
+ * values: [test_date, test_type, sample_point, result_value, result_unit, result_text, is_qualified, notes, userId]
+ * waterMachineId: optional UUID string
+ */
+async function insertWaterQualityRecord(values, waterMachineId) {
+  const wm = waterMachineId || null;
+  const base8 = values.slice(0, 8);
+  const userId = values[8];
+
+  const insertEnteredByWithWm = () =>
+    pool.query(
+      `INSERT INTO water_quality_records
+         (test_date, test_type, sample_point, result_value, result_unit,
+          result_text, is_qualified, notes, entered_by, water_machine_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [...base8, userId, wm],
+    );
+
+  const insertEnteredBy = () =>
+    pool.query(
+      `INSERT INTO water_quality_records
+         (test_date, test_type, sample_point, result_value, result_unit,
+          result_text, is_qualified, notes, entered_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      values,
+    );
+
+  const insertTestedByWithWm = () =>
+    pool.query(
+      `INSERT INTO water_quality_records
+         (test_date, test_type, sample_point, result_value, result_unit,
+          result_text, is_qualified, notes, tested_by, water_machine_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [...base8, userId, wm],
+    );
+
+  const insertTestedBy = () =>
+    pool.query(
+      `INSERT INTO water_quality_records
+         (test_date, test_type, sample_point, result_value, result_unit,
+          result_text, is_qualified, notes, tested_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      values,
+    );
+
+  const insertWmOnly = () =>
+    pool.query(
+      `INSERT INTO water_quality_records
+         (test_date, test_type, sample_point, result_value, result_unit,
+          result_text, is_qualified, notes, water_machine_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [...base8, wm],
+    );
+
+  const insertBare = () =>
+    pool.query(
+      `INSERT INTO water_quality_records
+         (test_date, test_type, sample_point, result_value, result_unit,
+          result_text, is_qualified, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      base8,
+    );
+
+  try {
+    return await insertEnteredByWithWm();
+  } catch (err) {
+    if (!isWaterQualityWaterMachineColumnMissing(err)) {
+      if (!isWaterQualityUserColumnMissing(err)) throw err;
+    }
+  }
+
+  try {
+    return await insertEnteredBy();
+  } catch (err) {
+    if (!isWaterQualityUserColumnMissing(err)) throw err;
+  }
+
+  try {
+    return await insertTestedByWithWm();
+  } catch (err) {
+    if (!isWaterQualityWaterMachineColumnMissing(err)) {
+      if (!isWaterQualityUserColumnMissing(err)) throw err;
+    }
+  }
+
+  try {
+    return await insertTestedBy();
+  } catch (err) {
+    if (!isWaterQualityUserColumnMissing(err)) throw err;
+  }
+
+  try {
+    return await insertWmOnly();
+  } catch (err) {
+    if (!isWaterQualityWaterMachineColumnMissing(err)) throw err;
+  }
+
+  return insertBare();
+}
 
 // ── 透析机 ────────────────────────────────────────────────
 
@@ -153,15 +347,28 @@ router.get('/machines/:id/alerts', auth, async (req, res, next) => {
 
 router.post('/machines/:id/alerts', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
-    const { alert_type, priority, title, message } = req.body;
+    const { alert_type, priority, severity, title, message } = req.body;
     if (!title || !message) {
       return error(res, '标题与内容为必填项');
     }
+    const nextAlertType = alert_type || 'machine_alarm';
+    const severityMap = {
+      low: 'info',
+      medium: 'warning',
+      high: 'critical',
+      critical: 'emergency',
+      info: 'info',
+      warning: 'warning',
+      emergency: 'emergency',
+    };
+    const nextSeverity = severityMap[String(severity || priority || 'medium')] || 'warning';
     const { rows } = await pool.query(
-      `INSERT INTO alerts (machine_id, alert_type, priority, title, message, status, created_at)
-       VALUES ($1, COALESCE($2, 'machine_alarm'), COALESCE($3, 'medium'), $4, $5, 'pending', NOW())
+      `INSERT INTO alerts (
+         machine_id, alert_rule_id, alert_type, severity, title, message, status, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW())
        RETURNING *`,
-      [req.params.id, alert_type || null, priority || null, title, message]
+      [req.params.id, nextAlertType, nextAlertType, nextSeverity, title, message]
     );
     return created(res, rows[0], '设备异常报警已登记');
   } catch (err) { next(err); }
@@ -302,29 +509,55 @@ router.post('/maintenance', auth, rbac(['admin', 'head_nurse']), async (req, res
 
 router.get('/water-quality', auth, async (req, res, next) => {
   try {
-    const { start_date, end_date, page = 1, page_size = 20 } = req.query;
+    const { start_date, end_date, water_machine_id, page = 1, page_size = 20 } = req.query;
+    if (water_machine_id && !isUuidText(String(water_machine_id))) {
+      return error(res, 'water_machine_id 格式无效', 400);
+    }
     const offset = (parseInt(page, 10) - 1) * parseInt(page_size, 10);
     const conditions = [];
     const params = [];
     let idx = 1;
-    if (start_date) { conditions.push(`test_date >= $${idx++}`); params.push(start_date); }
-    if (end_date)   { conditions.push(`test_date <= $${idx++}`); params.push(end_date); }
+    if (start_date) { conditions.push(`wq.test_date >= $${idx++}`); params.push(start_date); }
+    if (end_date)   { conditions.push(`wq.test_date <= $${idx++}`); params.push(end_date); }
+    if (water_machine_id) { conditions.push(`wq.water_machine_id = $${idx++}`); params.push(String(water_machine_id).trim()); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const { rows } = await pool.query(
-      `SELECT wq.*, u.real_name AS tested_by_name
-       FROM water_quality_records wq
-       LEFT JOIN users u ON wq.tested_by = u.id
-       ${where}
-       ORDER BY wq.test_date DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      [...params, parseInt(page_size, 10), offset]
-    );
-    return success(res, rows);
+    const { rows } = await queryWaterQualityList({
+      where,
+      params,
+      limit: parseInt(page_size, 10),
+      offset,
+    });
+    const normalized = rows.map((row) => {
+      const value = row.result_value != null ? Number(row.result_value) : null;
+      const result =
+        typeof row.result_text === 'string' && row.result_text.trim()
+          ? row.result_text
+          : row.is_qualified === null || row.is_qualified === undefined
+            ? null
+            : row.is_qualified
+              ? 'qualified'
+              : 'unqualified';
+      return {
+        ...row,
+        result,
+        tested_by_name: row.tested_by_name || null,
+        bacteria_count: row.test_type && String(row.test_type).startsWith('bacteria_') ? value : null,
+        endotoxin_value: row.test_type && String(row.test_type).startsWith('endotoxin_') ? value : null,
+      };
+    });
+    return success(res, normalized);
   } catch (err) {
     // 若旧环境尚未创建 water_quality_records 表，则容忍并返回空数组
     if (err.code === '42P01') {
       return success(res, []);
+    }
+    // 未执行 055 迁移时 wq.water_machine_id 不存在
+    if (
+      err.code === PG_UNDEFINED_COLUMN
+      && (err.column === 'water_machine_id' || String(err.message || '').includes('water_machine_id'))
+    ) {
+      return error(res, '请先执行数据库迁移（含 water_quality_records.water_machine_id）', 503);
     }
     next(err);
   }
@@ -336,19 +569,216 @@ router.post('/water-quality', auth, rbac(['admin', 'head_nurse', 'nurse']), asyn
       test_date, test_type, sample_point,
       bacteria_count, endotoxin_value, conductivity,
       hardness, chlorine, result, notes,
+      water_machine_id: waterMachineIdBody,
     } = req.body;
     if (!test_date) return error(res, '检测日期为必填项');
 
+    const wmIdTrimmed = waterMachineIdBody ? String(waterMachineIdBody).trim() : '';
+    if (waterMachineIdBody) {
+      if (!isUuidText(wmIdTrimmed)) return error(res, 'water_machine_id 格式无效', 400);
+      const { rows: wmExists } = await pool.query('SELECT 1 FROM water_machines WHERE id = $1::uuid LIMIT 1', [wmIdTrimmed]);
+      if (wmExists.length === 0) return error(res, '关联的水机不存在', 400);
+    }
+
+    const resolvedType = test_type
+      || (bacteria_count !== undefined && bacteria_count !== null ? 'bacteria_water' : null)
+      || (endotoxin_value !== undefined && endotoxin_value !== null ? 'endotoxin_water' : null);
+    if (!resolvedType) {
+      return error(res, 'test_type 必填，或至少提供 bacteria_count / endotoxin_value 之一', 400);
+    }
+
+    const numericValue = bacteria_count ?? endotoxin_value ?? null;
+    const resultText = result || [conductivity, hardness, chlorine].filter((v) => v !== undefined && v !== null && v !== '').join(' / ') || null;
+    const resultUnit = bacteria_count != null ? 'CFU/mL' : endotoxin_value != null ? 'EU/mL' : null;
+    const isQualified = result === 'qualified'
+      ? true
+      : result === 'unqualified'
+        ? false
+        : null;
+
+    const { rows } = await insertWaterQualityRecord([
+      test_date,
+      resolvedType,
+      sample_point || '产水点',
+      numericValue,
+      resultUnit,
+      resultText,
+      isQualified,
+      notes,
+      req.user.id,
+    ], wmIdTrimmed || null);
+    const row = rows[0];
+
+    let resultCode = null;
+    if (result === 'qualified' || result === 'unqualified') {
+      resultCode = result;
+    } else if (isQualified === true) {
+      resultCode = 'qualified';
+    } else if (isQualified === false) {
+      resultCode = 'unqualified';
+    }
+
+    if (wmIdTrimmed && resultCode) {
+      try {
+        await pool.query(
+          `UPDATE water_machines
+           SET last_water_test_date = $1::date,
+               last_water_test_result = $2,
+               updated_at = NOW()
+           WHERE id = $3::uuid
+             AND ($1::date >= COALESCE(last_water_test_date, '1900-01-01'::date))`,
+          [test_date, resultCode, wmIdTrimmed],
+        );
+      } catch (wmErr) {
+        if (wmErr.code !== '42P01') throw wmErr;
+      }
+    }
+
+    let waterMachineNo = null;
+    const wmIdForResponse = row.water_machine_id || wmIdTrimmed || null;
+    if (wmIdForResponse) {
+      try {
+        const { rows: wmRows } = await pool.query(
+          'SELECT machine_no FROM water_machines WHERE id = $1',
+          [wmIdForResponse],
+        );
+        waterMachineNo = wmRows[0]?.machine_no ?? null;
+      } catch (wmErr) {
+        if (wmErr.code !== '42P01') throw wmErr;
+      }
+    }
+
+    return created(res, {
+      ...row,
+      result: row.result_text || result || null,
+      tested_by_name: null,
+      water_machine_no: waterMachineNo,
+      bacteria_count: String(row.test_type).startsWith('bacteria_') && row.result_value != null ? Number(row.result_value) : null,
+      endotoxin_value: String(row.test_type).startsWith('endotoxin_') && row.result_value != null ? Number(row.result_value) : null,
+    }, '水质检测记录已保存');
+  } catch (err) {
+    if (err.code === PG_FOREIGN_KEY_VIOLATION) {
+      return error(res, '关联的水机不存在或数据不一致', 400);
+    }
+    next(err);
+  }
+});
+
+// ── 水处理日常检测记录（硬度、压差、电导等）────────────────
+
+router.get('/water-daily-inspections', auth, async (req, res, next) => {
+  try {
+    const { start_date, end_date, water_machine_id, page = 1, page_size = 30 } = req.query;
+    if (water_machine_id && !isUuidText(String(water_machine_id))) {
+      return error(res, 'water_machine_id 格式无效', 400);
+    }
+    const offset = (parseInt(page, 10) - 1) * parseInt(page_size, 10);
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+    if (start_date) { conditions.push(`w.check_date >= $${idx++}`); params.push(start_date); }
+    if (end_date) { conditions.push(`w.check_date <= $${idx++}`); params.push(end_date); }
+    if (water_machine_id) { conditions.push(`w.water_machine_id = $${idx++}`); params.push(String(water_machine_id).trim()); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
     const { rows } = await pool.query(
-      `INSERT INTO water_quality_records
-         (test_date, test_type, sample_point, bacteria_count, endotoxin_value,
-          conductivity, hardness, chlorine, result, notes, tested_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [test_date, test_type || 'routine', sample_point, bacteria_count,
-        endotoxin_value, conductivity, hardness, chlorine, result, notes, req.user.id]
+      `SELECT w.*, wm.machine_no AS water_machine_no, u.real_name AS entered_by_name
+       FROM water_daily_inspections w
+       LEFT JOIN water_machines wm ON w.water_machine_id = wm.id
+       LEFT JOIN users u ON w.entered_by = u.id
+       ${where}
+       ORDER BY w.check_date DESC, w.created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, parseInt(page_size, 10), offset],
     );
-    return created(res, rows[0], '水质检测记录已保存');
-  } catch (err) { next(err); }
+    return success(res, rows);
+  } catch (err) {
+    if (err.code === '42P01') {
+      return success(res, []);
+    }
+    next(err);
+  }
+});
+
+router.post('/water-daily-inspections', auth, rbac(['admin', 'head_nurse', 'nurse']), async (req, res, next) => {
+  try {
+    const {
+      water_machine_id: wmId,
+      check_date,
+      hardness, total_chlorine, tap_pressure,
+      sand_delta_p, resin_delta_p, carbon_delta_p,
+      ro_in_pressure, ro_out_pressure,
+      feed_conductivity, product_conductivity,
+      product_flow, drain_flow, feed_temp,
+      operator, operator_name,
+      notes,
+    } = req.body;
+    if (!check_date) return error(res, '检测日期为必填项');
+
+    const wmIdResolved = wmId ? String(wmId).trim() : '';
+    if (wmId) {
+      if (!isUuidText(wmIdResolved)) return error(res, 'water_machine_id 格式无效', 400);
+      const { rows: wmExists } = await pool.query('SELECT 1 FROM water_machines WHERE id = $1::uuid LIMIT 1', [wmIdResolved]);
+      if (wmExists.length === 0) return error(res, '关联的水机不存在', 400);
+    }
+
+    const opName = operator_name || operator || null;
+
+    const { rows } = await pool.query(
+      `INSERT INTO water_daily_inspections (
+        water_machine_id, check_date,
+        hardness, total_chlorine, tap_pressure,
+        sand_delta_p, resin_delta_p, carbon_delta_p,
+        ro_in_pressure, ro_out_pressure,
+        feed_conductivity, product_conductivity,
+        product_flow, drain_flow, feed_temp,
+        operator_name, notes, entered_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      RETURNING *`,
+      [
+        wmIdResolved || null,
+        check_date,
+        hardness || null,
+        total_chlorine || null,
+        tap_pressure || null,
+        sand_delta_p || null,
+        resin_delta_p || null,
+        carbon_delta_p || null,
+        ro_in_pressure || null,
+        ro_out_pressure || null,
+        feed_conductivity || null,
+        product_conductivity || null,
+        product_flow || null,
+        drain_flow || null,
+        feed_temp || null,
+        opName,
+        notes || null,
+        req.user.id,
+      ],
+    );
+    const row = rows[0];
+    let waterMachineNo = null;
+    if (row.water_machine_id) {
+      const { rows: wmRows } = await pool.query(
+        'SELECT machine_no FROM water_machines WHERE id = $1',
+        [row.water_machine_id],
+      );
+      waterMachineNo = wmRows[0]?.machine_no ?? null;
+    }
+    return created(res, {
+      ...row,
+      water_machine_no: waterMachineNo,
+      entered_by_name: null,
+    }, '日常检测记录已保存');
+  } catch (err) {
+    if (err.code === '42P01') {
+      return error(res, '请先执行数据库迁移以创建 water_daily_inspections 表', 503);
+    }
+    if (err.code === PG_FOREIGN_KEY_VIOLATION) {
+      return error(res, '关联的水机不存在或数据不一致', 400);
+    }
+    next(err);
+  }
 });
 
 // ── 耗材库存 ──────────────────────────────────────────────

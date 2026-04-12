@@ -9,6 +9,7 @@ const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const auditLog = require('../middleware/audit');
 const { success, created, error, notFound } = require('../utils/response');
+const { formatDate } = require('../utils/dateUtils');
 
 const CQI_READ_ROLES = ['admin', 'doctor', 'head_nurse', 'nurse', 'quality'];
 
@@ -198,7 +199,7 @@ router.post('/', auth, rbac(CQI_WRITE_ROLES),
           title,
           problem_found || '',
           measures || '',
-          start_date || new Date().toISOString().slice(0, 10),
+          start_date || formatDate(new Date()),
           target_description,
           target_value,
           target_unit,

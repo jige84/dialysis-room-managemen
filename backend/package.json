@@ -9,7 +9,9 @@
     "migrate": "node src/utils/runMigrations.js",
     "seed": "node src/utils/runSeeds.js",
     "test:schedule": "node scripts/test-dialysis-schedule-expansion.js && node scripts/test-schedule-db-check.js",
-    "test:profile-sync": "node scripts/test-patient-prescription-profile-sync.js"
+    "test:profile-sync": "node scripts/test-patient-prescription-profile-sync.js",
+    "test:smoke-readiness": "node scripts/smoke-online-readiness.js",
+    "import:patients": "node scripts/import-patients-from-xlsx.js"
   },
   "keywords": [
     "hemodialysis",

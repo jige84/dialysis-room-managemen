@@ -6,6 +6,7 @@
 const express = require('express');
 const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
+const { rbac } = require('../middleware/rbac');
 const { requireMenuPermission } = require('../middleware/menuPermission');
 const { success, error, notFound } = require('../utils/response');
 
@@ -13,6 +14,7 @@ const router = express.Router();
 
 /** 侧栏「知识库管理」白名单（users.menu_permissions 含 /ai/knowledge） */
 const kbRead = [auth, requireMenuPermission('/ai/knowledge')];
+const kbWrite = [auth, rbac(['admin', 'head_nurse', 'doctor']), requireMenuPermission('/ai/knowledge')];
 
 // --- 文档列表（分页 + 可选来源类型） ---
 router.get('/documents', ...kbRead, async (req, res) => {
@@ -78,7 +80,7 @@ router.get('/documents/:id', ...kbRead, async (req, res) => {
 });
 
 // --- 更新校验状态 / 发布状态（部分字段 PATCH） ---
-router.patch('/documents/:id', ...kbRead, async (req, res) => {
+router.patch('/documents/:id', ...kbWrite, async (req, res) => {
   try {
     const { id } = req.params;
     const { is_verified, status } = req.body || {};

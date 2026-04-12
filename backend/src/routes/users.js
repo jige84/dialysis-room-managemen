@@ -47,6 +47,12 @@ const ALLOWED_MENU_KEYS = new Set([
 ]);
 
 const ADMIN_ONLY_MENU_KEYS = new Set(['/admin/users', '/ai/sites']);
+const CLINICAL_AI_MENU_KEYS = new Set(['/ai/assistant', '/ai/guidelines', '/ai/knowledge']);
+const AI_FEATURE_PREFIX = 'ai_feat:';
+
+function canRoleAccessClinicalAi(role) {
+  return ['admin', 'doctor', 'head_nurse'].includes(role);
+}
 
 /**
  * @param {string} role
@@ -56,9 +62,14 @@ const ADMIN_ONLY_MENU_KEYS = new Set(['/admin/users', '/ai/sites']);
 function normalizeMenuPermissions(role, raw) {
   if (raw === null || raw === undefined) return null;
   if (!Array.isArray(raw)) return null;
-  const filtered = raw.filter((k) => typeof k === 'string' && ALLOWED_MENU_KEYS.has(k));
+  let filtered = raw.filter((k) => typeof k === 'string' && ALLOWED_MENU_KEYS.has(k));
   if (role !== 'admin') {
-    return filtered.filter((k) => !ADMIN_ONLY_MENU_KEYS.has(k));
+    filtered = filtered.filter((k) => !ADMIN_ONLY_MENU_KEYS.has(k));
+  }
+  if (!canRoleAccessClinicalAi(role)) {
+    filtered = filtered.filter(
+      (k) => !CLINICAL_AI_MENU_KEYS.has(k) && !String(k).startsWith(AI_FEATURE_PREFIX),
+    );
   }
   return filtered;
 }

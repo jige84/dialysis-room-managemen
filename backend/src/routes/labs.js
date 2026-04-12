@@ -9,6 +9,7 @@ const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const { success, created, paginated, error, notFound } = require('../utils/response');
+const { addDaysToDate, formatDate, getMonthRange } = require('../utils/dateUtils');
 
 // 检验项目目标范围配置（透析患者）
 const LAB_TARGETS = {
@@ -161,9 +162,10 @@ router.get('/recent', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'qua
     if (!Number.isFinite(pageSize) || pageSize <= 0) return error(res, 'page_size 参数无效', 400);
 
     const endDate = new Date();
-    const startDate = new Date(endDate.getTime() - days * 86400000);
-    const startStr = startDate.toISOString().slice(0, 10);
-    const endStr = endDate.toISOString().slice(0, 10);
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = formatDate(startDate);
+    const endStr = formatDate(endDate);
 
     const offset = (page - 1) * pageSize;
 
@@ -201,9 +203,7 @@ router.get('/recent', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'qua
       };
 
       const cycleDays = LAB_REVIEW_CYCLE_DAYS[r.test_type] ?? DEFAULT_REVIEW_CYCLE_DAYS;
-      const defaultDue = new Date(new Date(r.test_date).getTime() + cycleDays * 86400000)
-        .toISOString()
-        .slice(0, 10);
+      const defaultDue = addDaysToDate(r.test_date, cycleDays);
 
       // 优先使用医生“设定复查日期”的 due_date（当前通过 message 内标记存储）。
       const dueFromAlert = extractDueDateFromMessage(r.recheck_alert_message);
@@ -225,12 +225,15 @@ router.get('/review-due-soon', auth, rbac(['admin', 'doctor', 'nurse', 'head_nur
     if (!Number.isFinite(days) || days <= 0) return error(res, 'days 参数无效', 400);
 
     const now = new Date();
-    const lower = new Date(now.getTime() - days * 86400000);
-    const upper = new Date(now.getTime() + days * 86400000);
+    const lower = new Date(now);
+    lower.setDate(lower.getDate() - days);
+    const upper = new Date(now);
+    upper.setDate(upper.getDate() + days);
 
     const maxCycleDays = Math.max(...Object.values(LAB_REVIEW_CYCLE_DAYS), DEFAULT_REVIEW_CYCLE_DAYS);
-    const startDate = new Date(now.getTime() - (maxCycleDays + days) * 86400000);
-    const startStr = startDate.toISOString().slice(0, 10);
+    const startDate = new Date(now);
+    startDate.setDate(startDate.getDate() - (maxCycleDays + days));
+    const startStr = formatDate(startDate);
 
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (lr.patient_id, lr.test_type)
@@ -250,14 +253,15 @@ router.get('/review-due-soon', auth, rbac(['admin', 'doctor', 'nurse', 'head_nur
     const list = [];
     for (const row of rows) {
       const cycleDays = LAB_REVIEW_CYCLE_DAYS[row.test_type] ?? DEFAULT_REVIEW_CYCLE_DAYS;
-      const due = new Date(new Date(row.test_date).getTime() + cycleDays * 86400000);
+      const dueStr = addDaysToDate(row.test_date, cycleDays);
+      const due = new Date(`${dueStr}T00:00:00`);
       if (due >= lower && due <= upper) {
         list.push({
           patient_id: row.patient_id,
           patient_name: row.patient_name,
           test_type: row.test_type,
-          test_date: String(row.test_date).slice(0, 10),
-          due_date: due.toISOString().slice(0, 10),
+          test_date: formatDate(row.test_date),
+          due_date: dueStr,
         });
       }
     }
@@ -277,10 +281,10 @@ router.get('/month-completion', auth, rbac(['admin', 'doctor', 'nurse', 'head_nu
     if (!Number.isFinite(year) || year < 2000 || year > 2100) return error(res, 'year 参数无效', 400);
     if (!Number.isFinite(month) || month < 1 || month > 12) return error(res, 'month 参数无效', 400);
 
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 1);
-    const startStr = start.toISOString().slice(0, 10);
-    const endStr = end.toISOString().slice(0, 10);
+    const { startDate: startStr } = getMonthRange(year, month);
+    const endStr = month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, '0')}-01`;
 
     const totalRes = await pool.query(`SELECT COUNT(*)::int as total FROM patients WHERE status = 'active'`);
     const total = parseInt(totalRes.rows[0].total, 10);
@@ -334,7 +338,7 @@ router.patch('/recheck', auth, rbac(['admin', 'doctor']), async (req, res, next)
 
     const due = new Date(due_date);
     if (Number.isNaN(due.getTime())) return error(res, 'due_date 格式无效（需为 YYYY-MM-DD）', 400);
-    const dueStr = due.toISOString().slice(0, 10);
+    const dueStr = formatDate(due);
 
     const { rows: pRows } = await pool.query('SELECT name FROM patients WHERE id=$1', [patient_id]);
     const pname = pRows[0]?.name || patient_id;
@@ -494,7 +498,7 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
         [
           req.params.patientId, test_type, value,
           unit || target.unit || '',
-          test_date || new Date().toISOString().slice(0, 10),
+          test_date || formatDate(new Date()),
           target.low || null, target.high || null,
           target.low || null, target.high || null,
           is_abnormal, is_critical, is_above_target,

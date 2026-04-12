@@ -3,6 +3,7 @@
  */
 import type { SidebarMenuKey } from '../constants/sidebarModules';
 import { ALL_SIDEBAR_MENU_KEYS } from '../constants/sidebarModules';
+import { canRoleAccessClinicalAi, isClinicalAiMenuKey } from '../constants/sidebarModules';
 import type { AiAssistantFeaturePermissionKey } from '../constants/aiAssistantFeatures';
 import { AI_FEAT_PREFIX } from '../constants/aiAssistantFeatures';
 
@@ -55,9 +56,11 @@ export function pathToMenuKey(pathname: string): SidebarMenuKey | null {
 /** menu_permissions 为 null/undefined 时不额外限制；空数组表示不可访问任何模块（由路由层先处理） */
 export function isMenuKeyAllowed(
   key: SidebarMenuKey | null,
-  menuPermissions: string[] | null | undefined
+  menuPermissions: string[] | null | undefined,
+  role?: string | null
 ): boolean {
   const mp = normalizeMenuPermissions(menuPermissions);
+  if (isClinicalAiMenuKey(key) && !canRoleAccessClinicalAi(role)) return false;
   if (mp === null || mp === undefined) return true;
   if (mp.length === 0) return false;
   if (key === null) return true;
@@ -66,7 +69,8 @@ export function isMenuKeyAllowed(
 
 export function isPathAllowedByMenuPermissions(
   pathname: string,
-  menuPermissions: string[] | null | undefined
+  menuPermissions: string[] | null | undefined,
+  role?: string | null
 ): boolean {
   const mp = normalizeMenuPermissions(menuPermissions);
   if (mp === null || mp === undefined) return true;
@@ -75,7 +79,7 @@ export function isPathAllowedByMenuPermissions(
     return mp.includes('/dialysis/today') || mp.includes('/dialysis/entry');
   }
   const key = pathToMenuKey(pathname);
-  return isMenuKeyAllowed(key, menuPermissions);
+  return isMenuKeyAllowed(key, menuPermissions, role);
 }
 
 /**
@@ -83,9 +87,11 @@ export function isPathAllowedByMenuPermissions(
  */
 export function hasAiAssistantFeature(
   menuPermissions: string[] | null | undefined,
-  featureKey: AiAssistantFeaturePermissionKey
+  featureKey: AiAssistantFeaturePermissionKey,
+  role?: string | null
 ): boolean {
-  if (!isMenuKeyAllowed('/ai/assistant', menuPermissions)) return false;
+  if (!canRoleAccessClinicalAi(role)) return false;
+  if (!isMenuKeyAllowed('/ai/assistant', menuPermissions, role)) return false;
   const mp = normalizeMenuPermissions(menuPermissions);
   if (mp === null || mp === undefined) return true;
   const granular = mp.filter(k => k.startsWith(AI_FEAT_PREFIX));

@@ -1042,10 +1042,11 @@ function SectionBody({ children, style }: { children: React.ReactNode; style?: R
 function Grid({ cols = 4, gap = 14, children, style }: {
   cols?: number; gap?: number; children: React.ReactNode; style?: React.CSSProperties;
 }) {
+  const minWidth = cols >= 4 ? 168 : cols === 3 ? 220 : 260;
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: `repeat(${cols}, 1fr)`,
+      gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${minWidth}px), 1fr))`,
       gap,
       ...style,
     }}>{children}</div>
@@ -2105,9 +2106,6 @@ export default function DialysisEntryPage() {
         <div>
           <div className="hd-page-intro__eyebrow">Session Record</div>
           <div className="hd-page-intro__title">透析记录录入</div>
-          <div className="hd-page-intro__desc">
-            聚焦当次透析的处方带入、通路评估、生命体征、并发症与透后记录，维持护士端连续录入节奏，不改变原有功能与保存逻辑。
-          </div>
         </div>
         <div className="hd-page-intro__chips">
           <span className="hd-page-intro__chip">{sessionDate.format('YYYY年MM月DD日 dddd')}</span>

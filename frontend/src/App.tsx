@@ -23,6 +23,7 @@ const DashboardPage = lazy(() => import('./pages/Dashboard'));
 const PatientListPage = lazy(() => import('./pages/Patients/PatientList'));
 const PatientDetailPage = lazy(() => import('./pages/Patients/PatientDetail'));
 const PatientCreatePage = lazy(() => import('./pages/Patients/PatientCreate'));
+const PatientImportPage = lazy(() => import('./pages/Patients/PatientImport'));
 const DialysisEntryPage = lazy(() => import('./pages/Dialysis/DialysisEntry'));
 const DialysisWorkspace = lazy(() => import('./pages/Dialysis/DialysisWorkspace'));
 const PrescriptionWorkspacePage = lazy(() => import('./pages/Prescription/PrescriptionWorkspace'));
@@ -97,14 +98,29 @@ export default function App() {
           headerBg: '#F5F8FA',
           headerColor: '#4F6372',
           borderColor: '#D7E0E7',
+          cellPaddingBlock: 10,
+          cellPaddingInline: 14,
         },
         Card: {
           colorBorderSecondary: '#D7E0E7',
+          paddingLG: 16,
         },
         Tabs: {
           inkBarColor: '#2A667F',
           itemActiveColor: '#2A667F',
           itemSelectedColor: '#2A667F',
+        },
+        Button: {
+          borderRadius: 8,
+        },
+        Select: {
+          borderRadius: 8,
+        },
+        Input: {
+          borderRadius: 8,
+        },
+        DatePicker: {
+          borderRadius: 8,
         },
       },
     }}>
@@ -123,6 +139,7 @@ export default function App() {
                 <Route index element={<Navigate to="/dashboard" replace />} />
                 <Route path="dashboard"       element={<DashboardPage />} />
                 <Route path="patients/new"    element={<PatientCreatePage />} />
+                <Route path="patients/import" element={<PatientImportPage />} />
                 <Route path="patients"        element={<PatientListPage />} />
                 <Route path="patients/:id"    element={<PatientDetailPage />} />
                 <Route path="dialysis" element={<DialysisWorkspace />}>

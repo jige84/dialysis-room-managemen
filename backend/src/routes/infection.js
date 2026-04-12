@@ -9,6 +9,7 @@ const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
 const { success, created, error, notFound } = require('../utils/response');
+const { formatDate } = require('../utils/dateUtils');
 
 /**
  * 请求体中的别名 → 数据库 infection_screenings.test_type（见 migrations/013）
@@ -110,7 +111,7 @@ router.post('/screenings/:patientId', auth, async (req, res, next) => {
           req.params.patientId,
           tt,
           result,
-          test_date || screen_date || new Date().toISOString().slice(0, 10),
+          test_date || screen_date || formatDate(new Date()),
           notes,
           req.user.id,
           result === 'positive',

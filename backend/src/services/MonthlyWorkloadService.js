@@ -2,12 +2,11 @@
  * 月度工作量报表（需求 3.8.1）— 从透析记录聚合，不落库。
  */
 const { pool } = require('../config/database');
+const { getMonthRange } = require('../utils/dateUtils');
 
 /** @param {number} year @param {number} month */
 function monthRange(year, month) {
-  const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
-  return { startDate, endDate };
+  return getMonthRange(year, month);
 }
 
 class MonthlyWorkloadService {

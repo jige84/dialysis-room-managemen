@@ -26,13 +26,19 @@ export function alertTypeToAnomaly(alertType: string): AnomalyType {
   const m: Record<string, AnomalyType> = {
     lab_critical: 'lab_critical_alert',
     ktv_inadequate: 'ktv_inadequate_alert',
+    low_ktv: 'ktv_inadequate_alert',
     infection_overdue: 'infection_overdue',
     infection_warning: 'infection_warning',
+    infection_screening_due: 'infection_warning',
     vascular_assessment_due: 'vascular_assessment_due',
     uf_exceed: 'uf_exceed',
+    ultrafiltration_exceed: 'uf_exceed',
     nurse_ratio: 'nurse_ratio',
     dry_weight_overdue: 'dry_weight_overdue',
     cvc_high_risk: 'cvc_high_risk',
+    buttonhole_monitor: 'default',
+    lab_review_due: 'default',
+    cqi_quarterly: 'default',
   };
   return m[alertType] ?? 'default';
 }

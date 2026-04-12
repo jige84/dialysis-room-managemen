@@ -1,147 +1,275 @@
 /**
- * AI 相关前后端联调冒烟：需后端已启动、数据库可用、已执行种子用户（见 seedUsers.js）。
- * 用法（在 backend 目录）：node scripts/test-ai-smoke.js
- * 环境：API_BASE=http://localhost:3080/api（默认）、登录 renjige / Shangu@2026
+ * AI API 冒烟：账号可配置、按登录后真实角色判断预期，避免因测试账号漂移产生假失败。
  *
- * 覆盖：
- * - /api/knowledge/*、/api/guidelines/*、/api/medical-sites/*
- * - /api/ai/* 参数校验与权限（不触发完整通义调用，避免耗时与费用）
+ * 用法（在 backend 目录）：
+ *   node scripts/test-ai-smoke.js
+ *
+ * 常用环境变量：
+ *   API_BASE=http://localhost:3080/api
+ *   SMOKE_PASSWORD=Shangu@2026
+ *   SMOKE_ADMIN_USER=renjige
+ *   SMOKE_ADMIN_PASSWORD=...
+ *   SMOKE_DENY_USER=nurse01
+ *   SMOKE_DENY_PASSWORD=...
+ *   SMOKE_REPORT_USER=doctor01
+ *   SMOKE_REPORT_PASSWORD=...
+ *
+ * 说明：
+ * - `SMOKE_ADMIN_*` 为必填级别账号；登录失败直接终止。
+ * - `SMOKE_DENY_*` 用于验证“临床 AI 被拒绝”的负向权限；若账号缺失或实际角色可用临床 AI，则自动跳过。
+ * - `SMOKE_REPORT_*` 用于验证 `/ai/qc-monthly-insight`；若未配置或无权限，则自动回退到 admin，仍无法访问时跳过。
  */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const BASE = (process.env.API_BASE || 'http://localhost:3080/api').replace(/\/$/, '');
+const SHARED_PASSWORD = process.env.SMOKE_PASSWORD || 'Shangu@2026';
 
-async function login(username, password) {
-  const r = await fetch(`${BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    throw new Error(`登录失败 ${r.status}: ${j.message || JSON.stringify(j)}`);
-  }
-  const token = j.data?.token;
-  if (!token) throw new Error('响应无 token');
-  return token;
+function normalizeMenuPermissions(raw) {
+  if (raw === null || raw === undefined) return raw;
+  if (!Array.isArray(raw)) return null;
+  return raw.filter((k) => typeof k === 'string').map((k) => k.trim());
+}
+
+function canRoleAccessClinicalAi(role) {
+  return ['admin', 'doctor', 'head_nurse'].includes(role);
+}
+
+function isKeyAllowed(menuPermissions, requiredKey) {
+  const normalized = normalizeMenuPermissions(menuPermissions);
+  if (normalized === null || normalized === undefined) return true;
+  if (normalized.length === 0) return false;
+  return normalized.includes(requiredKey);
+}
+
+function canUseQcMonthlyInsight(user) {
+  if (!user) return false;
+  return (
+    isKeyAllowed(user.menu_permissions, '/reports') ||
+    (canRoleAccessClinicalAi(user.role) && isKeyAllowed(user.menu_permissions, '/ai/assistant'))
+  );
 }
 
 function authHeaders(token) {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
-async function expectStatus(name, p, expected) {
-  const r = await p;
-  const ok = expected.includes(r.status);
-  if (!ok) {
-    const t = await r.text();
-    throw new Error(`${name}: 期望 HTTP ${expected.join('|')}，实际 ${r.status} ${t.slice(0, 200)}`);
+async function readTextSafe(response) {
+  return response.text().catch(() => '');
+}
+
+async function loginAccount(label, username, password, { required = false } = {}) {
+  if (!username) {
+    if (required) throw new Error(`${label} 账号未配置`);
+    return { ok: false, label, username: null, skipReason: '未配置用户名' };
   }
-  return r;
+
+  const response = await fetch(`${BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload.message || `HTTP ${response.status}`;
+    if (required) {
+      throw new Error(`${label} 登录失败 ${response.status}: ${message}`);
+    }
+    return { ok: false, label, username, skipReason: `登录失败 ${response.status}: ${message}` };
+  }
+
+  const token = payload.data?.token;
+  const user = payload.data?.user;
+  if (!token || !user) {
+    if (required) throw new Error(`${label} 登录成功但响应缺少 token/user`);
+    return { ok: false, label, username, skipReason: '响应缺少 token/user' };
+  }
+
+  return {
+    ok: true,
+    label,
+    username,
+    token,
+    user,
+  };
+}
+
+async function expectStatus(name, requestFactory, expected) {
+  const response = await requestFactory();
+  if (expected.includes(response.status)) {
+    console.log(`PASS ${name} -> ${response.status}`);
+    return response;
+  }
+  const text = await readTextSafe(response);
+  throw new Error(`${name}: 期望 HTTP ${expected.join('|')}，实际 ${response.status} ${text.slice(0, 300)}`);
+}
+
+function skipTest(name, reason) {
+  console.log(`SKIP ${name} -> ${reason}`);
 }
 
 async function main() {
-  const adminPass = process.env.SMOKE_ADMIN_PASSWORD || 'Shangu@2026';
-  const adminUser = process.env.SMOKE_ADMIN_USER || 'renjige';
+  const adminAccount = await loginAccount(
+    'admin',
+    process.env.SMOKE_ADMIN_USER || 'renjige',
+    process.env.SMOKE_ADMIN_PASSWORD || SHARED_PASSWORD,
+    { required: true },
+  );
+
+  const denyAccount = await loginAccount(
+    'deny',
+    process.env.SMOKE_DENY_USER || process.env.SMOKE_NURSE_USER || 'nurse01',
+    process.env.SMOKE_DENY_PASSWORD || process.env.SMOKE_NURSE_PASSWORD || SHARED_PASSWORD,
+  );
+
+  const reportAccountPrimary = await loginAccount(
+    'report',
+    process.env.SMOKE_REPORT_USER || process.env.SMOKE_QC_USER || '',
+    process.env.SMOKE_REPORT_PASSWORD || process.env.SMOKE_QC_PASSWORD || SHARED_PASSWORD,
+  );
+
+  const reportAccount =
+    reportAccountPrimary.ok && canUseQcMonthlyInsight(reportAccountPrimary.user)
+      ? reportAccountPrimary
+      : canUseQcMonthlyInsight(adminAccount.user)
+        ? adminAccount
+        : null;
 
   console.log('API_BASE=', BASE);
-  const adminToken = await login(adminUser, adminPass);
+  console.log(
+    `admin=${adminAccount.user.username}/${adminAccount.user.role}; ` +
+      `deny=${denyAccount.ok ? `${denyAccount.user.username}/${denyAccount.user.role}` : denyAccount.skipReason}; ` +
+      `report=${
+        reportAccount
+          ? `${reportAccount.user.username}/${reportAccount.user.role}`
+          : reportAccountPrimary.ok
+            ? `${reportAccountPrimary.user.username}/${reportAccountPrimary.user.role}（无权限，已跳过）`
+            : reportAccountPrimary.skipReason
+      }`,
+  );
 
-  // 未带 Token
   await expectStatus(
     'GET /knowledge/documents 未认证',
-    fetch(`${BASE}/knowledge/documents`),
+    () => fetch(`${BASE}/knowledge/documents`),
     [401, 403],
   );
 
-  // 知识库
   await expectStatus(
-    'GET /knowledge/documents',
-    fetch(`${BASE}/knowledge/documents?page=1&pageSize=5`, { headers: authHeaders(adminToken) }),
+    'GET /knowledge/documents (admin)',
+    () => fetch(`${BASE}/knowledge/documents?page=1&pageSize=5`, { headers: authHeaders(adminAccount.token) }),
     [200],
   );
 
-  // 指南
   await expectStatus(
-    'GET /guidelines',
-    fetch(`${BASE}/guidelines?page=1&pageSize=5`, { headers: authHeaders(adminToken) }),
+    'GET /guidelines (admin)',
+    () => fetch(`${BASE}/guidelines?page=1&pageSize=5`, { headers: authHeaders(adminAccount.token) }),
     [200],
   );
 
-  // 专业网站（医护可读）
   await expectStatus(
-    'GET /medical-sites',
-    fetch(`${BASE}/medical-sites`, { headers: authHeaders(adminToken) }),
+    'GET /medical-sites (admin)',
+    () => fetch(`${BASE}/medical-sites`, { headers: authHeaders(adminAccount.token) }),
     [200],
   );
 
-  // AI：缺参 400（不调用模型）
   await expectStatus(
     'POST /ai/patient-trend 缺 patientId',
-    fetch(`${BASE}/ai/patient-trend`, {
-      method: 'POST',
-      headers: authHeaders(adminToken),
-      body: JSON.stringify({}),
-    }),
+    () =>
+      fetch(`${BASE}/ai/patient-trend`, {
+        method: 'POST',
+        headers: authHeaders(adminAccount.token),
+        body: JSON.stringify({}),
+      }),
     [400],
   );
 
   await expectStatus(
     'POST /ai/labs-analysis 缺 patientId',
-    fetch(`${BASE}/ai/labs-analysis`, {
-      method: 'POST',
-      headers: authHeaders(adminToken),
-      body: JSON.stringify({}),
-    }),
+    () =>
+      fetch(`${BASE}/ai/labs-analysis`, {
+        method: 'POST',
+        headers: authHeaders(adminAccount.token),
+        body: JSON.stringify({}),
+      }),
     [400],
   );
 
   await expectStatus(
     'POST /ai/qc-monthly-insight 缺 year/month',
-    fetch(`${BASE}/ai/qc-monthly-insight`, {
-      method: 'POST',
-      headers: authHeaders(adminToken),
-      body: JSON.stringify({}),
-    }),
+    () =>
+      fetch(`${BASE}/ai/qc-monthly-insight`, {
+        method: 'POST',
+        headers: authHeaders(adminAccount.token),
+        body: JSON.stringify({}),
+      }),
     [400],
   );
 
   await expectStatus(
     'POST /ai/anomaly-analysis 缺参数',
-    fetch(`${BASE}/ai/anomaly-analysis`, {
-      method: 'POST',
-      headers: authHeaders(adminToken),
-      body: JSON.stringify({ patientId: 'x' }),
-    }),
+    () =>
+      fetch(`${BASE}/ai/anomaly-analysis`, {
+        method: 'POST',
+        headers: authHeaders(adminAccount.token),
+        body: JSON.stringify({ patientId: 'x' }),
+      }),
     [400],
   );
 
-  // 用药建议：护士长应 403
-  const headToken = await login(process.env.SMOKE_HEAD_USER || 'yangchen', adminPass);
-  await expectStatus(
-    'POST /ai/medication-advice head_nurse 应拒绝',
-    fetch(`${BASE}/ai/medication-advice`, {
-      method: 'POST',
-      headers: authHeaders(headToken),
-      body: JSON.stringify({ patientId: '00000000-0000-0000-0000-000000000001' }),
-    }),
-    [403],
-  );
+  if (!denyAccount.ok) {
+    skipTest('临床 AI 负向权限', denyAccount.skipReason);
+  } else if (canRoleAccessClinicalAi(denyAccount.user.role)) {
+    skipTest(
+      '临床 AI 负向权限',
+      `账号 ${denyAccount.user.username} 实际角色为 ${denyAccount.user.role}，属于临床 AI 允许角色`,
+    );
+  } else {
+    await expectStatus(
+      `GET /knowledge/documents (${denyAccount.user.username} 应拒绝)`,
+      () => fetch(`${BASE}/knowledge/documents?page=1&pageSize=1`, { headers: authHeaders(denyAccount.token) }),
+      [403],
+    );
 
-  // 质控月报解读：质控账号可访问接口（不要求有月报数据，可能 500/503 若服务或数据问题）
-  const qcToken = await login(process.env.SMOKE_QC_USER || 'qc01', adminPass);
-  const qcRes = await fetch(`${BASE}/ai/qc-monthly-insight`, {
-    method: 'POST',
-    headers: authHeaders(qcToken),
-    body: JSON.stringify({ year: 2024, month: 1, historyMonths: 1, userQuestion: '' }),
-  });
-  if (![200, 500, 503].includes(qcRes.status)) {
-    const t = await qcRes.text();
-    throw new Error(`POST /ai/qc-monthly-insight quality 角色: 意外状态 ${qcRes.status} ${t.slice(0, 300)}`);
+    await expectStatus(
+      `POST /ai/medication-advice (${denyAccount.user.username} 应拒绝)`,
+      () =>
+        fetch(`${BASE}/ai/medication-advice`, {
+          method: 'POST',
+          headers: authHeaders(denyAccount.token),
+          body: JSON.stringify({ patientId: '00000000-0000-0000-0000-000000000001' }),
+        }),
+      [403],
+    );
+
+    await expectStatus(
+      `POST /ai/nlp-query (${denyAccount.user.username} 应拒绝)`,
+      () =>
+        fetch(`${BASE}/ai/nlp-query`, {
+          method: 'POST',
+          headers: authHeaders(denyAccount.token),
+          body: JSON.stringify({ query: '王五最近三个月Kt/V趋势' }),
+        }),
+      [403],
+    );
   }
-  console.log(
-    `POST /ai/qc-monthly-insight (quality) → ${qcRes.status}（200=成功；500/503=数据或 AI 配置问题，权限链路正常）`,
-  );
+
+  if (!reportAccount) {
+    skipTest('POST /ai/qc-monthly-insight 正向权限', '未找到可访问月度质控 AI 解读的测试账号');
+  } else {
+    const qcResponse = await expectStatus(
+      `POST /ai/qc-monthly-insight (${reportAccount.user.username})`,
+      () =>
+        fetch(`${BASE}/ai/qc-monthly-insight`, {
+          method: 'POST',
+          headers: authHeaders(reportAccount.token),
+          body: JSON.stringify({ year: 2024, month: 1, historyMonths: 1, userQuestion: '' }),
+        }),
+      [200, 400, 500, 503],
+    );
+    console.log(
+      `INFO /ai/qc-monthly-insight -> ${qcResponse.status} ` +
+        '(200=成功；400=月报不存在；500/503=数据或 AI 配置问题；权限链路正常)',
+    );
+  }
 
   console.log('\n✅ AI 相关 API 冒烟通过（参数校验 + RBAC + 列表类接口）。');
   console.log(

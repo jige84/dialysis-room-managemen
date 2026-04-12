@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Card, Input, Select, Button, Table, Space, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { SearchOutlined, PlusOutlined, ExportOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, ExportOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import PageShell from '../../components/PageShell/PageShell';
 import { PageLoading, PageErrorResult } from '../../components/PageStates/PageStates';
@@ -308,13 +308,18 @@ export default function PatientListPage() {
         </div>
         <div className="hd-filter-bar__right">
           {canCreatePatient ? (
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => navigate('/patients/new')}
-            >
-              新建患者档案
-            </Button>
+            <Space size="middle">
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => navigate('/patients/new')}
+              >
+                新建患者档案
+              </Button>
+              <Button icon={<CloudUploadOutlined />} onClick={() => navigate('/patients/import')}>
+                批量导入
+              </Button>
+            </Space>
           ) : (
             <Tooltip title="仅管理员与医生可新建患者档案">
               <Button type="primary" icon={<PlusOutlined />} disabled>

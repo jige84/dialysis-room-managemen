@@ -38,6 +38,18 @@ const guidelinesRouter    = require('./routes/guidelines');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+
+function parseCorsOrigins(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const configuredCorsOrigins = parseCorsOrigins(
+  process.env.CORS_ORIGINS || process.env.APP_ORIGIN || '',
+);
 
 // ── 安全响应头（OWASP / nodebestpractices §6.6）────────────
 app.use(helmet({
@@ -56,9 +68,13 @@ app.use(helmet({
 
 // ── CORS ────────────────────────────────────────────────────
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['http://localhost', 'https://your-domain.com']
-    : '*',
+  origin: isProduction
+    ? (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (configuredCorsOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('CORS origin not allowed'));
+      }
+    : true,
   credentials: true,
 }));
 
@@ -105,7 +121,7 @@ app.use(morgan('combined', {
 }));
 
 // ── 静态文件（生产模式下服务前端构建产物）────────────────────
-if (process.env.NODE_ENV === 'production') {
+if (isProduction) {
   const staticPath = path.join(__dirname, '../../frontend/dist');
   app.use(express.static(staticPath));
 }
@@ -136,7 +152,7 @@ app.use('/api/medical-sites', medicalSitesRouter);
 app.use('/api/guidelines',   guidelinesRouter);
 
 // ── SPA回退（生产模式）───────────────────────────────────────
-if (process.env.NODE_ENV === 'production') {
+if (isProduction) {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../../frontend/dist/index.html'));
   });
@@ -151,7 +167,7 @@ async function startServer() {
   console.log('═══════════════════════════════════');
 
   const dbOk = await testConnection();
-  if (!dbOk && process.env.NODE_ENV === 'production') {
+  if (!dbOk && isProduction) {
     console.error('❌ 数据库连接失败，生产环境不允许启动');
     process.exit(1);
   }
@@ -160,6 +176,13 @@ async function startServer() {
     console.log(`✅ 服务已启动：http://localhost:${PORT}`);
     console.log(`📋 环境：${process.env.NODE_ENV || 'development'}`);
     console.log(`🔑 JWT过期时间：${process.env.JWT_EXPIRES_IN || '8h'}`);
+    if (isProduction) {
+      if (configuredCorsOrigins.length === 0) {
+        console.warn('⚠️  生产环境未配置 CORS_ORIGINS，将只允许无 Origin 请求通过');
+      } else {
+        console.log(`🌐 CORS 白名单：${configuredCorsOrigins.join(', ')}`);
+      }
+    }
     if (!dbOk) {
       console.warn('⚠️  数据库暂未连接，请检查PostgreSQL配置');
     }

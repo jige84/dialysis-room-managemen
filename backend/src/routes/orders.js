@@ -12,6 +12,7 @@ const auditLog = require('../middleware/audit');
 const OrderAutoFill = require('../services/OrderAutoFill');
 const OrderGuidanceService = require('../services/OrderGuidanceService');
 const { success, created, paginated, error, notFound } = require('../utils/response');
+const { formatDate } = require('../utils/dateUtils');
 
 // ── 静态路由（必须在通配符路由之前）────────────────────────
 
@@ -37,7 +38,7 @@ router.post('/execute', auth, rbac(['admin','head_nurse','nurse']),
          RETURNING id, execution_date, status`,
         [
           order_id, orderRows[0].patient_id, dialysis_id || null,
-          execution_date || new Date().toISOString().slice(0, 10),
+          execution_date || formatDate(new Date()),
           req.user.id, status, actual_dose, notes
         ]
       );

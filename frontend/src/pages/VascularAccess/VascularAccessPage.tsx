@@ -321,25 +321,12 @@ export default function VascularAccessPage() {
   // ---------------------------------------------------------------------------
 
   const handleCvcAiExplain = () => {
-    if (!canUseAiAssistantFeature('ai_feat:nlp') || !latestRisk) return;
+    if (!canUseAiAssistantFeature('ai_feat:cvc') || !latestRisk) return;
     setAiModalOpen(true);
     setAiLoading(true);
     void aiApi
-      .postNlpQuery({
-        query: '请解读下面这个 CVC 感染高危评分结果，并给出护理观察要点和护理建议（不要给出具体处方或具体剂量）。',
-        context: {
-          total_score: latestRisk.total_score,
-          risk_grade:  latestRisk.risk_grade,
-          risk_label:  RISK_GRADE_LABELS[latestRisk.risk_grade],
-          factors: {
-            diabetes_mellitus:      latestRisk.diabetes_mellitus,
-            immunosuppressed:       latestRisk.immunosuppressed,
-            recent_hospitalization: latestRisk.recent_hospitalization,
-            catheter_days_over90:   latestRisk.catheter_days_over90,
-            previous_crbsi:         latestRisk.previous_crbsi,
-            poor_hygiene:           latestRisk.poor_hygiene,
-          },
-        },
+      .postCvcExplanation({
+        assessmentId: latestRisk.id,
       })
       .then(res => setAiResult(res.data.data))
       .catch(() => message.error('AI 解读失败，请稍后重试'))
@@ -604,7 +591,7 @@ export default function VascularAccessPage() {
                         style={{ border: '1px solid #DBEAFE' }}
                         styles={{ header: { background: '#FAFCFF', borderBottom: '1px solid #DBEAFE' } }}
                         extra={
-                          canUseAiAssistantFeature('ai_feat:nlp')
+                          canUseAiAssistantFeature('ai_feat:cvc')
                             ? <Button size="small" onClick={handleCvcAiExplain}>AI 解读</Button>
                             : null
                         }

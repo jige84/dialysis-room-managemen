@@ -6,6 +6,8 @@
 const { pool } = require('../config/database');
 const { forbidden } = require('../utils/response');
 
+const CLINICAL_AI_MENU_KEYS = new Set(['/ai/assistant', '/ai/guidelines', '/ai/knowledge']);
+
 /**
  * @param {unknown} raw
  * @returns {string[] | null | undefined}
@@ -52,12 +54,21 @@ function isAnyKeyAllowed(mp, keys) {
 
 const AI_FEAT_PREFIX = 'ai_feat:';
 
+function canRoleAccessClinicalAi(role) {
+  return ['admin', 'doctor', 'head_nurse'].includes(role);
+}
+
+function isClinicalAiMenuKey(menuKey) {
+  return CLINICAL_AI_MENU_KEYS.has(menuKey);
+}
+
 /**
  * AI 分析助手子功能：须先有 /ai/assistant；若无任一 ai_feat:* → 视为可使用全部子功能。
  * @param {string[] | null | undefined} mp
  * @param {string} featureKey 如 ai_feat:patient_trend
  */
-function hasAiAssistantFeature(mp, featureKey) {
+function hasAiAssistantFeature(mp, featureKey, role = null) {
+  if (role && !canRoleAccessClinicalAi(role)) return false;
   const normalized = normalizeMenuPermissions(mp);
   if (normalized === null || normalized === undefined) return true;
   if (normalized.length === 0) return false;
@@ -77,7 +88,7 @@ function requireAiAssistantFeature(featureKey) {
     }
     try {
       const mp = await fetchMenuPermissionsByUserId(req.user.id);
-      if (!hasAiAssistantFeature(mp, featureKey)) {
+      if (!hasAiAssistantFeature(mp, featureKey, req.user.role)) {
         return forbidden(
           res,
           '您未被授权使用此 AI 子功能，请联系管理员在「用户管理」中勾选对应分析项',
@@ -97,6 +108,9 @@ function requireMenuPermission(menuKey) {
   return async (req, res, next) => {
     if (!req.user?.id) {
       return forbidden(res, '未认证');
+    }
+    if (isClinicalAiMenuKey(menuKey) && !canRoleAccessClinicalAi(req.user.role)) {
+      return forbidden(res, '当前角色不允许使用临床 AI 模块');
     }
     try {
       const mp = await fetchMenuPermissionsByUserId(req.user.id);
@@ -122,8 +136,15 @@ function requireMenuPermissionAny(menuKeys) {
       return forbidden(res, '未认证');
     }
     try {
+      const eligibleKeys = menuKeys.filter((key) => {
+        if (!isClinicalAiMenuKey(key)) return true;
+        return canRoleAccessClinicalAi(req.user.role);
+      });
+      if (eligibleKeys.length === 0) {
+        return forbidden(res, '当前角色不允许使用临床 AI 模块');
+      }
       const mp = await fetchMenuPermissionsByUserId(req.user.id);
-      if (!isAnyKeyAllowed(mp, menuKeys)) {
+      if (!isAnyKeyAllowed(mp, eligibleKeys)) {
         return forbidden(
           res,
           '您未被授权使用此功能，请联系管理员在「用户管理」中勾选对应侧栏模块',
@@ -141,6 +162,7 @@ module.exports = {
   requireMenuPermissionAny,
   requireAiAssistantFeature,
   hasAiAssistantFeature,
+  canRoleAccessClinicalAi,
   fetchMenuPermissionsByUserId,
   normalizeMenuPermissions,
 };

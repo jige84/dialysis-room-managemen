@@ -12,6 +12,7 @@ const auditLog = require('../middleware/audit');
 const restrictNurseEditTime = require('../middleware/nurseTimeRestriction');
 const CVCRiskScoring = require('../services/CVCRiskScoring');
 const { success, created, error, notFound } = require('../utils/response');
+const { formatDate } = require('../utils/dateUtils');
 
 /** 将 6 因素布尔列组装为 factors 对象，供 GET /cvc-risk 与前端逐项展示 */
 function mapCvcRiskFactorsRow(row) {
@@ -211,7 +212,7 @@ router.patch(
                 updated_at = NOW()
           WHERE id = $1
           RETURNING id, access_type, is_active, deactivated_date`,
-        [req.params.id, reason, abandon_date || new Date().toISOString().slice(0, 10)]
+        [req.params.id, reason, abandon_date || formatDate(new Date())]
       );
       if (rows.length === 0) return notFound(res, '通路记录不存在');
       return success(res, rows[0], '通路已标记废用');

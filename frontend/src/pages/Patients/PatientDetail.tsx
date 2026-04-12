@@ -170,8 +170,8 @@ type EditFormValues = {
   name: string;
   gender: 'M' | 'F';
   dob: Dayjs;
-  dialysis_start_date: Dayjs;
-  primary_diagnosis: string;
+  dialysis_start_date?: Dayjs | null;
+  primary_diagnosis?: string;
   present_illness?: string;
   past_history?: string;
   ckd_stage?: number | null;
@@ -916,8 +916,8 @@ export default function PatientDetailPage() {
       name: p.name,
       gender: p.gender,
       dob: parseApiDateOnlyForPicker(p.dob),
-      dialysis_start_date: parseApiDateOnlyForPicker(p.dialysis_start_date),
-      primary_diagnosis: p.primary_diagnosis,
+      dialysis_start_date: parseApiDateOnlyNullable(p.dialysis_start_date),
+      primary_diagnosis: p.primary_diagnosis || undefined,
       present_illness: p.present_illness || undefined,
       past_history: p.past_history || undefined,
       ckd_stage: p.ckd_stage ?? null,
@@ -983,7 +983,10 @@ export default function PatientDetailPage() {
         name: values.name.trim(),
         gender: values.gender,
         dob: values.dob.format('YYYY-MM-DD'),
-        primary_diagnosis: values.primary_diagnosis.trim(),
+        dialysis_start_date: values.dialysis_start_date
+          ? values.dialysis_start_date.format('YYYY-MM-DD')
+          : null,
+        primary_diagnosis: values.primary_diagnosis?.trim() || undefined,
         present_illness: values.present_illness?.trim() || undefined,
         past_history: values.past_history?.trim() || undefined,
         ckd_stage: values.ckd_stage ?? undefined,
@@ -1131,7 +1134,7 @@ export default function PatientDetailPage() {
   }
 
   const st = HEADER_STATUS[p.status] || HEADER_STATUS.active;
-  const subtitle = `${formatGender(p.gender)} · ${p.age ?? '—'}岁 · ID: ${p.id} · ${p.primary_diagnosis}${p.ckd_stage ? ` · CKD ${p.ckd_stage} 期` : ''} · 透析龄 ${p.dialysis_age ?? '—'}`;
+  const subtitle = `${formatGender(p.gender)} · ${p.age ?? '—'}岁 · ID: ${p.id} · ${p.primary_diagnosis || '待补全'}${p.ckd_stage ? ` · CKD ${p.ckd_stage} 期` : ''} · 透析龄 ${p.dialysis_age ?? '—'}`;
 
   return (
     <PageShell fullWidth>
@@ -1272,7 +1275,7 @@ export default function PatientDetailPage() {
               <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
             </Form.Item>
             <Form.Item name="dialysis_start_date" label="开始透析日期">
-              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" disabled />
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
             </Form.Item>
             <Form.Item
               name="machine_station"
@@ -1286,7 +1289,6 @@ export default function PatientDetailPage() {
               name="primary_diagnosis"
               label="主要诊断"
               style={{ gridColumn: 'span 2' }}
-              rules={[{ required: true, message: '请输入主要诊断' }]}
             >
               <Input maxLength={100} />
             </Form.Item>

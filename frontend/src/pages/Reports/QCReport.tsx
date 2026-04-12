@@ -103,6 +103,9 @@ export default function QCReportPage() {
   const [savingSupplement, setSavingSupplement] = useState(false);
   const [showDirectorConfirm, setShowDirectorConfirm] = useState(false);
   const [confirmingDirector, setConfirmingDirector] = useState(false);
+  const [initializingDraft, setInitializingDraft] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   const fetchReport = useCallback(async () => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -123,6 +126,10 @@ export default function QCReportPage() {
             : null,
         );
         setQcNotes(row.notes ?? '');
+      } else {
+        setSpotRatio(null);
+        setSundayRatio(null);
+        setQcNotes('');
       }
     } catch {
       message.error('加载质控报表失败');
@@ -131,6 +138,20 @@ export default function QCReportPage() {
       setLoading(false);
     }
   }, [selectedMonth]);
+
+  const handleInitDraft = async () => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    setInitializingDraft(true);
+    try {
+      await reportsApi.initQCUpload(y, m);
+      message.success('质控月报草稿已初始化');
+      await fetchReport();
+    } catch {
+      message.error('初始化草稿失败');
+    } finally {
+      setInitializingDraft(false);
+    }
+  };
 
   const fetchRoutine = useCallback(async () => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -179,16 +200,28 @@ export default function QCReportPage() {
     }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!report) return;
-    const url = reportsApi.exportExcel(report.report_year, report.report_month);
-    window.open(url, '_blank');
+    setExportingExcel(true);
+    try {
+      await reportsApi.exportExcel(report.report_year, report.report_month);
+    } catch {
+      message.error('导出 Excel 失败');
+    } finally {
+      setExportingExcel(false);
+    }
   };
 
-  const handleExportPdf = () => {
+  const handleExportPdf = async () => {
     if (!report) return;
-    const url = reportsApi.exportPdf(report.report_year, report.report_month);
-    window.open(url, '_blank');
+    setExportingPdf(true);
+    try {
+      await reportsApi.exportPdf(report.report_year, report.report_month);
+    } catch {
+      message.error('导出 PDF 失败');
+    } finally {
+      setExportingPdf(false);
+    }
   };
 
   const handleSaveSupplement = async () => {
@@ -391,10 +424,10 @@ export default function QCReportPage() {
                 >
                   刷新
                 </Button>
-                <Button icon={<FileExcelOutlined />} onClick={handleExport} disabled={!r}>
+                <Button icon={<FileExcelOutlined />} onClick={() => void handleExport()} disabled={!r} loading={exportingExcel}>
                   导出 Excel
                 </Button>
-                <Button icon={<FilePdfOutlined />} onClick={handleExportPdf} disabled={!r}>
+                <Button icon={<FilePdfOutlined />} onClick={() => void handleExportPdf()} disabled={!r} loading={exportingPdf}>
                   导出 PDF
                 </Button>
                 {canUseQcMonthlyInsight && (
@@ -487,7 +520,16 @@ export default function QCReportPage() {
         <Spin spinning={loading}>
           {!r && !loading ? (
             <Card style={{ borderRadius: token.borderRadiusLG }}>
-              <Empty description="暂无数据" />
+              <Empty
+                description="本月尚未初始化质控月报"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              >
+                {canSubmitMonthlyQc && (
+                  <Button type="primary" loading={initializingDraft} onClick={() => void handleInitDraft()}>
+                    初始化草稿
+                  </Button>
+                )}
+              </Empty>
             </Card>
           ) : (
             r && (

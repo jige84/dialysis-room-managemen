@@ -11,9 +11,9 @@ export interface Patient {
   gender: 'M' | 'F';
   dob: string;
   age?: number;
-  primary_diagnosis: string;
-  dialysis_start_date: string;
-  dialysis_age?: string;
+  primary_diagnosis?: string | null;
+  dialysis_start_date?: string | null;
+  dialysis_age?: string | null;
   status: 'active' | 'suspended' | 'transferred' | 'transplanted' | 'deceased';
   isolation_zone: 'normal' | 'hbv' | 'hcv' | 'observation' | 'last_shift';
   comorbidities?: string[];
@@ -200,7 +200,104 @@ export interface CreatePatientPayload {
   responsible_nurse_id: string;
 }
 
-export type UpdatePatientPayload = Partial<CreatePatientPayload>;
+export type UpdatePatientPayload =
+  Partial<Omit<CreatePatientPayload, 'dialysis_start_date' | 'primary_diagnosis'>>
+  & {
+    dialysis_start_date?: string | null;
+    primary_diagnosis?: string | null;
+  };
+
+/** POST /patients/import 返回结构 */
+export interface PatientImportRowError {
+  rowIndex: number;
+  name?: string;
+  errors: string[];
+}
+
+export interface PatientImportSkippedDuplicate {
+  rowIndex: number;
+  name: string;
+}
+
+export interface PatientImportResult {
+  total_data_rows: number;
+  dry_run: boolean;
+  imported_count: number;
+  skipped_duplicate_count: number;
+  imported: { rowIndex: number; id: string; name: string }[];
+  skipped_duplicates: PatientImportSkippedDuplicate[];
+  row_errors: PatientImportRowError[];
+  id: string | null;
+}
+
+export interface PatientHistoryImportPatientRow {
+  action: 'created' | 'updated';
+  draft_id: string;
+  id: string;
+  name: string;
+  matched_by: string;
+  sources: string[];
+}
+
+export interface PatientHistoryImportLabRow {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  test_type: string;
+  value: number;
+  unit: string;
+  test_date: string;
+  source_file: string;
+}
+
+export interface PatientHistoryImportOrderRow {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  drug_name: string;
+  order_type: string;
+  frequency: string;
+  valid_from: string;
+  source_file: string;
+}
+
+export interface PatientHistoryImportIssueRow {
+  category: string;
+  fileName: string;
+  rowIndex: number | null;
+  patientName: string | null;
+  reason: string;
+}
+
+export interface PatientHistoryUnsupportedFile {
+  fileName: string;
+  reason: string;
+}
+
+export interface PatientHistoryImportResult {
+  dry_run: boolean;
+  files_count: number;
+  patients_created: number;
+  patients_updated: number;
+  labs_created: number;
+  orders_created: number;
+  patients: PatientHistoryImportPatientRow[];
+  labs: PatientHistoryImportLabRow[];
+  orders: PatientHistoryImportOrderRow[];
+  unresolved_items: PatientHistoryImportIssueRow[];
+  unsupported_files: PatientHistoryUnsupportedFile[];
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
 
 export const patientsApi = {
   list: (params: PatientQuery = {}) =>
@@ -241,4 +338,34 @@ export const patientsApi = {
     request.get<ApiResponse<PagedData<Patient>>>('/patients', {
       params: { page: 1, page_size: 10, keyword },
     }),
+
+  /** GET blob：标准导入表头（含示例行，导入前请删除示例） */
+  downloadImportTemplate: async () => {
+    const response = await request.get<Blob>('/patients/import/template', { responseType: 'blob' });
+    const blob =
+      response.data instanceof Blob ? response.data : new Blob([response.data as BlobPart]);
+    triggerBlobDownload(blob, 'patient_import_template.xlsx');
+  },
+
+  importFromXlsx: (file: File, dryRun: boolean) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request.post<ApiResponse<PatientImportResult>>(
+      `/patients/import?dry_run=${dryRun ? '1' : '0'}`,
+      fd,
+      { timeout: 120000 },
+    );
+  },
+
+  importHistoryFolder: (files: File[], dryRun: boolean) => {
+    const fd = new FormData();
+    files.forEach((file) => {
+      fd.append('files', file);
+    });
+    return request.post<ApiResponse<PatientHistoryImportResult>>(
+      `/patients/import/history-folder?dry_run=${dryRun ? '1' : '0'}`,
+      fd,
+      { timeout: 180000 },
+    );
+  },
 };
