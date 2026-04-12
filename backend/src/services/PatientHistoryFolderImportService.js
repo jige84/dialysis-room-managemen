@@ -6,7 +6,7 @@
 const ExcelJS = require('exceljs');
 const { encrypt, decrypt } = require('../utils/encrypt');
 
-const MAX_FILES = 50;
+const MAX_FILES = 300;
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
 const LAB_FIELD_MAP = [
@@ -207,6 +207,13 @@ function classifyFile(fileName, workbook) {
   if (row1Text.includes('spKt/V') || row1Text.includes('透前尿素氮C0')) return 'labs';
   if (row1Text.includes('用药品种') && row1Text.includes('是否持续使用')) return 'orders';
   return 'unknown';
+}
+
+async function detectHistoryFileType(file) {
+  if (!file || !file.buffer) return 'unknown';
+  const fileName = file.originalname || `file-${Date.now()}.xlsx`;
+  const workbook = await loadWorkbookFromBuffer(file);
+  return classifyFile(fileName, workbook);
 }
 
 class DraftStore {
@@ -762,6 +769,22 @@ function buildFamilyContactJson(value) {
   return Object.keys(obj).length ? obj : null;
 }
 
+function wouldUpdatePatientFromDraft(existingPatient, draft) {
+  const existingFamily = buildFamilyContactJson(existingPatient.family_contact);
+  const nextFamily = buildFamilyContactJson(draft.family_contact);
+  return Boolean(
+    (!existingPatient.id_card_plain && draft.id_card)
+    || (!existingPatient.phone_plain && draft.phone)
+    || (!existingPatient.address && draft.address)
+    || (!existingPatient.primary_diagnosis && draft.primary_diagnosis)
+    || (!existingPatient.present_illness && draft.present_illness)
+    || (!existingPatient.past_history && draft.past_history)
+    || (!existingPatient.dialysis_start_date && draft.dialysis_start_date)
+    || (!existingPatient.responsible_nurse_id && draft.responsible_nurse_id)
+    || (!existingFamily && nextFamily)
+  );
+}
+
 async function createPatientDraftRecord(client, draft, actorUserId) {
   const familyContact = buildFamilyContactJson(draft.family_contact);
   const { rows } = await client.query(
@@ -795,6 +818,8 @@ async function createPatientDraftRecord(client, draft, actorUserId) {
 }
 
 async function updatePatientFromDraft(client, existingPatient, draft) {
+  if (!wouldUpdatePatientFromDraft(existingPatient, draft)) return false;
+
   const sets = [];
   const params = [];
   let index = 1;
@@ -900,8 +925,8 @@ async function ensurePatientBindings(client, store, existingPatients, users, act
     if (existing.matches.length === 1) {
       const matched = existing.matches[0];
       bindings.set(draft.draftId, { patient_id: matched.id, patient_name: matched.name });
-      const updated = await updatePatientFromDraft(client, matched, draft);
-      if (updated) {
+      if (wouldUpdatePatientFromDraft(matched, draft)) {
+        await updatePatientFromDraft(client, matched, draft);
         patientsUpdated += 1;
         patientResults.push({
           action: 'updated',
@@ -912,16 +937,6 @@ async function ensurePatientBindings(client, store, existingPatients, users, act
           sources: Array.from(draft.sourceFiles),
         });
       }
-      continue;
-    }
-    if (!draft.gender || !draft.dob) {
-      unresolvedItems.push({
-        category: 'patient_create_missing_demographics',
-        fileName: Array.from(draft.sourceFiles)[0] || 'unknown',
-        rowIndex: null,
-        patientName: draft.name,
-        reason: '缺少性别或出生日期，无法创建患者草稿档案',
-      });
       continue;
     }
     const created = await createPatientDraftRecord(client, draft, actorUserId);
@@ -1058,8 +1073,17 @@ async function insertOrderEntry(client, actorUserId, binding, entry, doctorsByNa
   return rows[0];
 }
 
-async function runImport(pool, files, options) {
-  const { dryRun = false, actorUserId } = options || {};
+function pushReferenceUnresolved(unresolvedItems, category, entry, reason) {
+  unresolvedItems.push({
+    category,
+    fileName: entry.fileName,
+    rowIndex: entry.rowIndex,
+    patientName: entry.patientName,
+    reason,
+  });
+}
+
+async function buildImportPlan(client, files) {
   const parsed = await parseFiles(files);
   const draftStore = new DraftStore();
   parsed.patientDraftInputs.forEach((input) => {
@@ -1067,214 +1091,254 @@ async function runImport(pool, files, options) {
   });
   mergeNurseAssignments(draftStore, parsed.nurseAssignments, parsed.unresolvedItems);
 
-  const client = await pool.connect();
-  try {
-    const existingPatients = await loadExistingPatients(client);
-    const users = await loadUsersForImport(client);
+  const existingPatients = await loadExistingPatients(client);
+  const users = await loadUsersForImport(client);
+  const bindingPlans = new Map();
+  const patientPreview = [];
+  let createdPreview = 0;
+  let updatedPreview = 0;
 
-    if (dryRun) {
-      const bindingsPreview = new Map();
-      const patientPreview = [];
-      let createdPreview = 0;
-      let updatedPreview = 0;
+  for (const draft of draftStore.drafts) {
+    if (!draft.name) {
+      parsed.unresolvedItems.push({
+        category: 'patient_draft',
+        fileName: Array.from(draft.sourceFiles)[0] || 'unknown',
+        rowIndex: null,
+        patientName: null,
+        reason: '患者草稿缺少姓名，无法导入',
+      });
+      continue;
+    }
 
-      for (const draft of draftStore.drafts) {
-        draft.responsible_nurse_id = resolveResponsibleNurseIdForDraft(draft, users.nursesByName, parsed.unresolvedItems);
-        const existing = findExistingPatientMatches(draft, existingPatients);
-        if (existing.matches.length > 1) {
-          parsed.unresolvedItems.push({
-            category: 'patient_match_ambiguous',
-            fileName: Array.from(draft.sourceFiles)[0] || 'unknown',
-            rowIndex: null,
-            patientName: draft.name,
-            reason: `患者匹配不唯一（策略 ${existing.strategy}）`,
-          });
-          continue;
-        }
-        if (existing.matches.length === 1) {
-          const matched = existing.matches[0];
-          bindingsPreview.set(draft.draftId, { patient_id: matched.id, patient_name: matched.name });
-          const wouldUpdate = (
-            (!matched.id_card_plain && draft.id_card)
-            || (!matched.phone_plain && draft.phone)
-            || (!matched.address && draft.address)
-            || (!matched.primary_diagnosis && draft.primary_diagnosis)
-            || (!matched.present_illness && draft.present_illness)
-            || (!matched.past_history && draft.past_history)
-            || (!matched.dialysis_start_date && draft.dialysis_start_date)
-            || (!matched.responsible_nurse_id && draft.responsible_nurse_id)
-            || (!buildFamilyContactJson(matched.family_contact) && buildFamilyContactJson(draft.family_contact))
-          );
-          if (wouldUpdate) {
-            updatedPreview += 1;
-            patientPreview.push({
-              action: 'updated',
-              draft_id: draft.draftId,
-              id: matched.id,
-              name: matched.name,
-              matched_by: existing.strategy,
-              sources: Array.from(draft.sourceFiles),
-            });
-          }
-          continue;
-        }
-        if (!draft.name || !draft.gender || !draft.dob) {
-          parsed.unresolvedItems.push({
-            category: 'patient_create_missing_demographics',
-            fileName: Array.from(draft.sourceFiles)[0] || 'unknown',
-            rowIndex: null,
-            patientName: draft.name,
-            reason: '缺少性别或出生日期，无法创建患者草稿档案',
-          });
-          continue;
-        }
-        const fakeId = `(preview:${draft.draftId})`;
-        bindingsPreview.set(draft.draftId, { patient_id: fakeId, patient_name: draft.name });
-        createdPreview += 1;
+    draft.responsible_nurse_id = resolveResponsibleNurseIdForDraft(draft, users.nursesByName, parsed.unresolvedItems);
+    const existing = findExistingPatientMatches(draft, existingPatients);
+    if (existing.matches.length > 1) {
+      parsed.unresolvedItems.push({
+        category: 'patient_match_ambiguous',
+        fileName: Array.from(draft.sourceFiles)[0] || 'unknown',
+        rowIndex: null,
+        patientName: draft.name,
+        reason: `患者匹配不唯一（策略 ${existing.strategy}）`,
+      });
+      continue;
+    }
+
+    if (existing.matches.length === 1) {
+      const matched = existing.matches[0];
+      const shouldUpdate = wouldUpdatePatientFromDraft(matched, draft);
+      bindingPlans.set(draft.draftId, {
+        kind: 'existing',
+        draft,
+        existingPatient: matched,
+        binding: { patient_id: matched.id, patient_name: matched.name },
+        matchedBy: existing.strategy,
+        shouldUpdate,
+      });
+      if (shouldUpdate) {
+        updatedPreview += 1;
         patientPreview.push({
-          action: 'created',
+          action: 'updated',
           draft_id: draft.draftId,
-          id: fakeId,
-          name: draft.name,
-          matched_by: 'new_draft',
+          id: matched.id,
+          name: matched.name,
+          matched_by: existing.strategy,
           sources: Array.from(draft.sourceFiles),
         });
       }
-
-      const labs = [];
-      parsed.labEntries.forEach((entry) => {
-        const draft = locateDraftForReference(draftStore, entry);
-        const binding = draft ? bindingsPreview.get(draft.draftId) : null;
-        if (!binding) {
-          parsed.unresolvedItems.push({
-            category: 'lab_patient',
-            fileName: entry.fileName,
-            rowIndex: entry.rowIndex,
-            patientName: entry.patientName,
-            reason: '化验记录未能匹配到患者档案，已留待人工处理',
-          });
-          return;
-        }
-        labs.push({
-          id: `(preview:${entry.test_type}:${entry.rowIndex})`,
-          patient_id: binding.patient_id,
-          patient_name: binding.patient_name,
-          test_type: entry.test_type,
-          value: entry.value,
-          unit: entry.unit,
-          test_date: entry.test_date,
-          source_file: entry.fileName,
-        });
-      });
-
-      const orders = [];
-      parsed.orderEntries.forEach((entry) => {
-        const draft = locateDraftForReference(draftStore, entry);
-        const binding = draft ? bindingsPreview.get(draft.draftId) : null;
-        if (!binding) {
-          parsed.unresolvedItems.push({
-            category: 'order_patient',
-            fileName: entry.fileName,
-            rowIndex: entry.rowIndex,
-            patientName: entry.patientName,
-            reason: '医嘱记录未能匹配到患者档案，已留待人工处理',
-          });
-          return;
-        }
-        orders.push({
-          id: `(preview:${entry.rowIndex})`,
-          patient_id: binding.patient_id,
-          patient_name: binding.patient_name,
-          drug_name: entry.drug_name,
-          order_type: entry.order_type,
-          frequency: entry.frequency,
-          valid_from: entry.valid_from || formatDateOnly(new Date()),
-          source_file: entry.fileName,
-        });
-      });
-
-      return {
-        dry_run: true,
-        files_count: files.length,
-        patients_created: createdPreview,
-        patients_updated: updatedPreview,
-        labs_created: labs.length,
-        orders_created: orders.length,
-        patients: patientPreview,
-        labs,
-        orders,
-        unresolved_items: parsed.unresolvedItems,
-        unsupported_files: parsed.unsupportedFiles,
-      };
+      continue;
     }
+
+    const fakeId = `(preview:${draft.draftId})`;
+    bindingPlans.set(draft.draftId, {
+      kind: 'new',
+      draft,
+      binding: { patient_id: fakeId, patient_name: draft.name },
+      matchedBy: 'new_draft',
+      shouldUpdate: false,
+    });
+    createdPreview += 1;
+    patientPreview.push({
+      action: 'created',
+      draft_id: draft.draftId,
+      id: fakeId,
+      name: draft.name,
+      matched_by: 'new_draft',
+      sources: Array.from(draft.sourceFiles),
+    });
+  }
+
+  const labPlans = [];
+  parsed.labEntries.forEach((entry) => {
+    const draft = locateDraftForReference(draftStore, entry);
+    const bindingPlan = draft ? bindingPlans.get(draft.draftId) : null;
+    if (!draft || !bindingPlan) {
+      pushReferenceUnresolved(parsed.unresolvedItems, 'lab_patient', entry, '化验记录未能匹配到患者档案，已留待人工处理');
+      return;
+    }
+    labPlans.push({
+      draftId: draft.draftId,
+      entry,
+      previewBinding: bindingPlan.binding,
+    });
+  });
+
+  const orderPlans = [];
+  parsed.orderEntries.forEach((entry) => {
+    const draft = locateDraftForReference(draftStore, entry);
+    const bindingPlan = draft ? bindingPlans.get(draft.draftId) : null;
+    if (!draft || !bindingPlan) {
+      pushReferenceUnresolved(parsed.unresolvedItems, 'order_patient', entry, '医嘱记录未能匹配到患者档案，已留待人工处理');
+      return;
+    }
+    orderPlans.push({
+      draftId: draft.draftId,
+      entry,
+      previewBinding: bindingPlan.binding,
+    });
+  });
+
+  return {
+    files,
+    parsed,
+    draftStore,
+    users,
+    bindingPlans,
+    patientPreview,
+    createdPreview,
+    updatedPreview,
+    labPlans,
+    orderPlans,
+  };
+}
+
+function buildPreviewResult(plan) {
+  const labs = plan.labPlans.map(({ entry, previewBinding }) => ({
+    id: `(preview:${entry.test_type}:${entry.rowIndex})`,
+    patient_id: previewBinding.patient_id,
+    patient_name: previewBinding.patient_name,
+    test_type: entry.test_type,
+    value: entry.value,
+    unit: entry.unit,
+    test_date: entry.test_date,
+    source_file: entry.fileName,
+  }));
+
+  const orders = plan.orderPlans.map(({ entry, previewBinding }) => ({
+    id: `(preview:${entry.rowIndex})`,
+    patient_id: previewBinding.patient_id,
+    patient_name: previewBinding.patient_name,
+    drug_name: entry.drug_name,
+    order_type: entry.order_type,
+    frequency: entry.frequency,
+    valid_from: entry.valid_from || formatDateOnly(new Date()),
+    source_file: entry.fileName,
+  }));
+
+  return {
+    dry_run: true,
+    files_count: plan.files.length,
+    patients_created: plan.createdPreview,
+    patients_updated: plan.updatedPreview,
+    labs_created: labs.length,
+    orders_created: orders.length,
+    patients: plan.patientPreview,
+    labs,
+    orders,
+    unresolved_items: plan.parsed.unresolvedItems,
+    unsupported_files: plan.parsed.unsupportedFiles,
+  };
+}
+
+async function applyImportPlan(client, plan, actorUserId) {
+  const bindings = new Map();
+  const patientResults = [];
+  let patientsCreated = 0;
+  let patientsUpdated = 0;
+
+  for (const draft of plan.draftStore.drafts) {
+    const bindingPlan = plan.bindingPlans.get(draft.draftId);
+    if (!bindingPlan) continue;
+
+    if (bindingPlan.kind === 'existing') {
+      bindings.set(draft.draftId, bindingPlan.binding);
+      if (bindingPlan.shouldUpdate) {
+        await updatePatientFromDraft(client, bindingPlan.existingPatient, draft);
+        patientsUpdated += 1;
+        patientResults.push({
+          action: 'updated',
+          draft_id: draft.draftId,
+          id: bindingPlan.binding.patient_id,
+          name: bindingPlan.binding.patient_name,
+          matched_by: bindingPlan.matchedBy,
+          sources: Array.from(draft.sourceFiles),
+        });
+      }
+      continue;
+    }
+
+    const created = await createPatientDraftRecord(client, draft, actorUserId);
+    const binding = { patient_id: created.id, patient_name: created.name };
+    bindings.set(draft.draftId, binding);
+    patientsCreated += 1;
+    patientResults.push({
+      action: 'created',
+      draft_id: draft.draftId,
+      id: created.id,
+      name: created.name,
+      matched_by: 'new_draft',
+      sources: Array.from(draft.sourceFiles),
+    });
+  }
+
+  const labs = [];
+  for (const { draftId, entry } of plan.labPlans) {
+    const binding = bindings.get(draftId);
+    if (!binding) continue;
+    if (await labExists(client, binding.patient_id, entry.test_type, entry.test_date, entry.value)) continue;
+    const inserted = await insertLabEntry(client, actorUserId, binding, entry);
+    labs.push({ ...inserted, patient_name: binding.patient_name, source_file: entry.fileName });
+  }
+
+  const orders = [];
+  for (const { draftId, entry } of plan.orderPlans) {
+    const binding = bindings.get(draftId);
+    if (!binding) continue;
+    if (await orderExists(client, binding.patient_id, entry)) continue;
+    const inserted = await insertOrderEntry(client, actorUserId, binding, entry, plan.users.doctorsByName, plan.parsed.unresolvedItems);
+    orders.push({
+      ...inserted,
+      patient_name: binding.patient_name,
+      valid_from: entry.valid_from || formatDateOnly(new Date()),
+      source_file: entry.fileName,
+    });
+  }
+
+  return {
+    dry_run: false,
+    files_count: plan.files.length,
+    patients_created: patientsCreated,
+    patients_updated: patientsUpdated,
+    labs_created: labs.length,
+    orders_created: orders.length,
+    patients: patientResults,
+    labs,
+    orders,
+    unresolved_items: plan.parsed.unresolvedItems,
+    unsupported_files: plan.parsed.unsupportedFiles,
+  };
+}
+
+async function runImport(pool, files, options) {
+  const { dryRun = false, actorUserId } = options || {};
+  const client = await pool.connect();
+  try {
+    const plan = await buildImportPlan(client, files);
+    if (dryRun) return buildPreviewResult(plan);
 
     await client.query('BEGIN');
-    const bindingResult = await ensurePatientBindings(
-      client,
-      draftStore,
-      existingPatients,
-      users,
-      actorUserId,
-      parsed.unresolvedItems,
-    );
-
-    const labs = [];
-    for (const entry of parsed.labEntries) {
-      const draft = locateDraftForReference(draftStore, entry);
-      const binding = draft ? bindingResult.bindings.get(draft.draftId) : null;
-      if (!binding) {
-        parsed.unresolvedItems.push({
-          category: 'lab_patient',
-          fileName: entry.fileName,
-          rowIndex: entry.rowIndex,
-          patientName: entry.patientName,
-          reason: '化验记录未能匹配到患者档案，已留待人工处理',
-        });
-        continue;
-      }
-      if (await labExists(client, binding.patient_id, entry.test_type, entry.test_date, entry.value)) continue;
-      const inserted = await insertLabEntry(client, actorUserId, binding, entry);
-      labs.push({ ...inserted, patient_name: binding.patient_name, source_file: entry.fileName });
-    }
-
-    const orders = [];
-    for (const entry of parsed.orderEntries) {
-      const draft = locateDraftForReference(draftStore, entry);
-      const binding = draft ? bindingResult.bindings.get(draft.draftId) : null;
-      if (!binding) {
-        parsed.unresolvedItems.push({
-          category: 'order_patient',
-          fileName: entry.fileName,
-          rowIndex: entry.rowIndex,
-          patientName: entry.patientName,
-          reason: '医嘱记录未能匹配到患者档案，已留待人工处理',
-        });
-        continue;
-      }
-      if (await orderExists(client, binding.patient_id, entry)) continue;
-      const inserted = await insertOrderEntry(client, actorUserId, binding, entry, users.doctorsByName, parsed.unresolvedItems);
-      orders.push({
-        ...inserted,
-        patient_name: binding.patient_name,
-        valid_from: entry.valid_from || formatDateOnly(new Date()),
-        source_file: entry.fileName,
-      });
-    }
-
+    const result = await applyImportPlan(client, plan, actorUserId);
     await client.query('COMMIT');
-    return {
-      dry_run: false,
-      files_count: files.length,
-      patients_created: bindingResult.patientsCreated,
-      patients_updated: bindingResult.patientsUpdated,
-      labs_created: labs.length,
-      orders_created: orders.length,
-      patients: bindingResult.patientResults,
-      labs,
-      orders,
-      unresolved_items: parsed.unresolvedItems,
-      unsupported_files: parsed.unsupportedFiles,
-    };
+    return result;
   } catch (err) {
     try {
       await client.query('ROLLBACK');
@@ -1290,4 +1354,6 @@ async function runImport(pool, files, options) {
 module.exports = {
   runImport,
   parseFiles,
+  detectHistoryFileType,
+  buildImportPlan,
 };

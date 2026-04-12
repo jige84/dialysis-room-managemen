@@ -49,8 +49,10 @@ function consentStoredImageCount(patient: PatientDetailRecord | null | undefined
   return Array.isArray(paths) ? paths.length : 0;
 }
 
-function formatGender(g: string): string {
-  return g === 'F' ? '女' : '男';
+function formatGender(g: string | null | undefined): string {
+  if (g === 'F') return '女';
+  if (g === 'M') return '男';
+  return '待补全';
 }
 
 function formatFamilyContact(fc: unknown): string {
@@ -168,8 +170,8 @@ type TabBasicProps = {
 
 type EditFormValues = {
   name: string;
-  gender: 'M' | 'F';
-  dob: Dayjs;
+  gender?: 'M' | 'F';
+  dob?: Dayjs | null;
   dialysis_start_date?: Dayjs | null;
   primary_diagnosis?: string;
   present_illness?: string;
@@ -262,7 +264,7 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
     ['姓名', patient.name],
     ['性别 / 年龄', `${formatGender(patient.gender)} / ${patient.age ?? '—'}岁（${dobStr}）`],
     ['身份证号', patient.id_card || '—'],
-    ['主要诊断', patient.primary_diagnosis],
+    ['主要诊断', patient.primary_diagnosis || '待补全'],
     ['CKD 分期', patient.ckd_stage ? `${patient.ckd_stage} 期` : '—'],
     ['合并症', patient.comorbidities?.length ? patient.comorbidities.join('、') : '—'],
     ['约定机位', patient.machine_station?.trim() || '—'],
@@ -914,8 +916,8 @@ export default function PatientDetailPage() {
     if (!p) return;
     editForm.setFieldsValue({
       name: p.name,
-      gender: p.gender,
-      dob: parseApiDateOnlyForPicker(p.dob),
+      gender: p.gender || undefined,
+      dob: parseApiDateOnlyNullable(p.dob),
       dialysis_start_date: parseApiDateOnlyNullable(p.dialysis_start_date),
       primary_diagnosis: p.primary_diagnosis || undefined,
       present_illness: p.present_illness || undefined,
@@ -981,8 +983,8 @@ export default function PatientDetailPage() {
         Boolean(values.dialysis_schedule_adjust) || values.dialysis_schedule_code === 'other';
       const updatePayload = {
         name: values.name.trim(),
-        gender: values.gender,
-        dob: values.dob.format('YYYY-MM-DD'),
+        gender: values.gender || undefined,
+        dob: values.dob ? values.dob.format('YYYY-MM-DD') : undefined,
         dialysis_start_date: values.dialysis_start_date
           ? values.dialysis_start_date.format('YYYY-MM-DD')
           : null,
@@ -1152,7 +1154,7 @@ export default function PatientDetailPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-16">
             <div
-              className={`hd-avatar ${p.gender === 'F' ? 'hd-avatar-f' : 'hd-avatar-m'}`}
+              className={`hd-avatar ${p.gender === 'F' ? 'hd-avatar-f' : p.gender === 'M' ? 'hd-avatar-m' : ''}`}
               style={{ width: 52, height: 52, fontSize: 20, borderRadius: 12 }}
             >
               {p.name.charAt(0)}
@@ -1262,16 +1264,15 @@ export default function PatientDetailPage() {
         <Form<EditFormValues>
           form={editForm}
           layout="vertical"
-          initialValues={{ gender: 'M' }}
         >
           <div className="grid-2" style={{ gap: '0 16px' }}>
             <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
               <Input maxLength={50} />
             </Form.Item>
-            <Form.Item name="gender" label="性别" rules={[{ required: true, message: '请选择性别' }]}>
-              <Select options={[{ value: 'M', label: '男' }, { value: 'F', label: '女' }]} />
+            <Form.Item name="gender" label="性别">
+              <Select allowClear options={[{ value: 'M', label: '男' }, { value: 'F', label: '女' }]} />
             </Form.Item>
-            <Form.Item name="dob" label="出生日期" rules={[{ required: true, message: '请选择出生日期' }]}>
+            <Form.Item name="dob" label="出生日期">
               <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
             </Form.Item>
             <Form.Item name="dialysis_start_date" label="开始透析日期">

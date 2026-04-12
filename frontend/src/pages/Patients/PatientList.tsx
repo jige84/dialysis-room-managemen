@@ -20,7 +20,7 @@ type PatientRow = {
   id: string;
   avatar: string;
   name: string;
-  gender: '男' | '女';
+  gender: '男' | '女' | '待补全';
   age: number | null;
   diagnosis: string;
   access: string;
@@ -54,9 +54,9 @@ function toPatientRow(p: Patient): PatientRow {
     id: p.id,
     avatar: p.name?.slice(0, 1) || '患',
     name: p.name,
-    gender: p.gender === 'F' ? '女' : '男',
+    gender: p.gender === 'F' ? '女' : p.gender === 'M' ? '男' : '待补全',
     age: Number.isFinite(p.age) ? Number(p.age) : null,
-    diagnosis: p.primary_diagnosis || '—',
+    diagnosis: p.primary_diagnosis || '待补全',
     access,
     accessDetail: p.access_location || '—',
     zone,
@@ -142,7 +142,9 @@ export default function PatientListPage() {
       key: 'patient',
       render: (_, r) => (
         <div className="flex items-center gap-8">
-          <div className={`hd-avatar ${r.gender === '女' ? 'hd-avatar-f' : 'hd-avatar-m'}`}>
+          <div
+            className={`hd-avatar ${r.gender === '女' ? 'hd-avatar-f' : r.gender === '男' ? 'hd-avatar-m' : ''}`}
+          >
             {r.avatar}
           </div>
           <div>

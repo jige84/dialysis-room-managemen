@@ -19,8 +19,18 @@ const { success, created, paginated, error, notFound } = require('../utils/respo
 const { isValidUuid, resolveResponsibleNurseId } = require('../utils/responsibleNurseUtils');
 const PatientBulkImportService = require('../services/PatientBulkImportService');
 const PatientHistoryFolderImportService = require('../services/PatientHistoryFolderImportService');
+const PatientImportAutoService = require('../services/PatientImportAutoService');
 
 const consentUpload = createPatientConsentUploader();
+const MAX_HISTORY_IMPORT_FILES = 300;
+
+function mapImportUploadError(err, fallbackMessage) {
+  if (!err) return fallbackMessage;
+  if (err.code === 'LIMIT_FILE_COUNT') return `单次最多上传 ${MAX_HISTORY_IMPORT_FILES} 个 Excel 文件`;
+  if (err.code === 'LIMIT_FILE_SIZE') return '单个文件不能超过 5MB';
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') return '上传字段不正确，请使用 files 字段上传 Excel 文件';
+  return err.message || fallbackMessage;
+}
 
 const patientImportUpload = multer({
   storage: multer.memoryStorage(),
@@ -38,7 +48,7 @@ const patientHistoryImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 5 * 1024 * 1024,
-    files: 50,
+    files: MAX_HISTORY_IMPORT_FILES,
   },
   fileFilter: (_req, file, cb) => {
     const name = (file.originalname || '').toLowerCase();
@@ -217,14 +227,48 @@ router.post(
   },
 );
 
+// POST /api/patients/import/auto — 自动识别单文件/多文件/文件夹导入
+router.post(
+  '/import/auto',
+  auth,
+  rbac(['admin', 'doctor']),
+  (req, res, next) => {
+    patientHistoryImportUpload.array('files', MAX_HISTORY_IMPORT_FILES)(req, res, (err) => {
+      if (err) return error(res, mapImportUploadError(err, '文件上传失败'), 400);
+      next();
+    });
+  },
+  auditLog('patients', 'CREATE'),
+  async (req, res, next) => {
+    try {
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (files.length === 0) {
+        return error(res, '请上传 files 字段的 .xlsx 文件', 400);
+      }
+      const dryRun =
+        String(req.query.dry_run || '') === '1'
+        || String(req.query.dry_run || '').toLowerCase() === 'true';
+      const result = await PatientImportAutoService.runImport(pool, files, {
+        dryRun,
+        actorUserId: req.user.id,
+      });
+      const message =
+        result.mode === 'bulk_template'
+          ? (dryRun ? '标准模板预检完成（未写入数据库）' : '标准模板导入完成')
+          : (dryRun ? '历史资料预检完成（未写入数据库）' : '历史资料导入完成');
+      return success(res, result, message);
+    } catch (err) { next(err); }
+  },
+);
+
 // POST /api/patients/import/history-folder — 历史资料文件夹导入（query: dry_run=1 仅校验）
 router.post(
   '/import/history-folder',
   auth,
   rbac(['admin', 'doctor']),
   (req, res, next) => {
-    patientHistoryImportUpload.array('files', 50)(req, res, (err) => {
-      if (err) return error(res, err.message || '文件上传失败', 400);
+    patientHistoryImportUpload.array('files', MAX_HISTORY_IMPORT_FILES)(req, res, (err) => {
+      if (err) return error(res, mapImportUploadError(err, '文件上传失败'), 400);
       next();
     });
   },

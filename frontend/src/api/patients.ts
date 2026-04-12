@@ -8,9 +8,9 @@ import request, { type ApiResponse, type PagedData } from './request';
 export interface Patient {
   id: string;
   name: string;
-  gender: 'M' | 'F';
-  dob: string;
-  age?: number;
+  gender?: 'M' | 'F' | null;
+  dob?: string | null;
+  age?: number | null;
   primary_diagnosis?: string | null;
   dialysis_start_date?: string | null;
   dialysis_age?: string | null;
@@ -288,6 +288,28 @@ export interface PatientHistoryImportResult {
   unsupported_files: PatientHistoryUnsupportedFile[];
 }
 
+export interface PatientAutoImportAffectedPatient {
+  id: string;
+  name: string;
+  action: 'created' | 'updated' | 'preview';
+}
+
+export interface PatientAutoImportResult {
+  mode: 'bulk_template' | 'history_batch';
+  dry_run: boolean;
+  files_count: number;
+  detected_file_types: string[];
+  patients_created: number;
+  patients_updated: number;
+  labs_created: number;
+  orders_created: number;
+  row_errors: PatientImportRowError[];
+  unresolved_items: PatientHistoryImportIssueRow[];
+  unsupported_files: PatientHistoryUnsupportedFile[];
+  affected_patients: PatientAutoImportAffectedPatient[];
+  skipped_duplicates: PatientImportSkippedDuplicate[];
+}
+
 function triggerBlobDownload(blob: Blob, filename: string) {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -364,6 +386,18 @@ export const patientsApi = {
     });
     return request.post<ApiResponse<PatientHistoryImportResult>>(
       `/patients/import/history-folder?dry_run=${dryRun ? '1' : '0'}`,
+      fd,
+      { timeout: 180000 },
+    );
+  },
+
+  importAuto: (files: File[], dryRun: boolean) => {
+    const fd = new FormData();
+    files.forEach((file) => {
+      fd.append('files', file);
+    });
+    return request.post<ApiResponse<PatientAutoImportResult>>(
+      `/patients/import/auto?dry_run=${dryRun ? '1' : '0'}`,
       fd,
       { timeout: 180000 },
     );

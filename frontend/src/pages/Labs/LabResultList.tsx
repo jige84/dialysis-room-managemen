@@ -381,6 +381,7 @@ export default function LabResultListPage() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('全部类别');
   const [statusFilter, setStatusFilter] = useState('');
+  const [recordScope, setRecordScope] = useState<'recent7' | 'all'>('recent7');
   const [showModal, setShowModal] = useState(false);
   const [showOcr, setShowOcr] = useState(false);
   const [viewMode, setViewMode] = useState<'grouped' | 'table'>('grouped');
@@ -420,22 +421,30 @@ export default function LabResultListPage() {
     void loadPatients();
   }, [loadPatients]);
 
-  useEffect(() => {
-    // 近一周化验结果只需加载一次；后续由前端筛选搜索/状态/类别
-    const loadRecentLabs = async () => {
-      setLoading(true);
-      try {
-        const res = await labsApi.listRecent({ days: 7, page: 1, page_size: 1000 });
-        const rows = res.data?.data;
-        if (Array.isArray(rows)) setList(rows);
-      } catch {
-        message.error('加载近一周检验结果失败');
-      } finally {
-        setLoading(false);
+  const loadLabRecords = useCallback(async (scope: 'recent7' | 'all') => {
+    setLoading(true);
+    try {
+      if (scope === 'all') {
+        const res = await labsApi.listGlobal({ page: 1, page_size: 1000 });
+        const rows = res.data?.data?.list;
+        setList(Array.isArray(rows) ? rows : []);
+        return;
       }
-    };
-    void loadRecentLabs();
+
+      const res = await labsApi.listRecent({ days: 7, page: 1, page_size: 1000 });
+      const rows = res.data?.data;
+      setList(Array.isArray(rows) ? rows : []);
+    } catch {
+      message.error(scope === 'all' ? '加载历史检验结果失败' : '加载近7天检验结果失败');
+      setList([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadLabRecords(recordScope);
+  }, [loadLabRecords, recordScope]);
 
   const loadDueSoonMeta = useCallback(async () => {
     setDueSoonLoading(true);
@@ -504,15 +513,13 @@ export default function LabResultListPage() {
       setRecheckOpen(false);
       setRecheckTarget(null);
 
-      const res = await labsApi.listRecent({ days: 7, page: 1, page_size: 1000 });
-      const rows = res.data?.data;
-      if (Array.isArray(rows)) setList(rows);
+      await loadLabRecords(recordScope);
     } catch {
       message.error('设置复查时间失败');
     } finally {
       setRecheckSaving(false);
     }
-  }, [recheckDate, recheckTarget]);
+  }, [loadLabRecords, recordScope, recheckDate, recheckTarget]);
 
   useEffect(() => {
     if (!showModal) return;
@@ -668,9 +675,7 @@ export default function LabResultListPage() {
       message.success(`已保存 ${filled.length} 条检验结果`);
       setShowModal(false);
       form.resetFields();
-      const res = await labsApi.listRecent({ days: 7, page: 1, page_size: 1000 });
-      const rows = res.data?.data;
-      if (Array.isArray(rows)) setList(rows);
+      await loadLabRecords(recordScope);
     } catch {
       message.error('保存失败');
     } finally {
@@ -853,6 +858,15 @@ export default function LabResultListPage() {
             { value: 'critical', label: '危急值' },
           ]}
         />
+        <Select
+          value={recordScope}
+          onChange={(value) => setRecordScope(value)}
+          style={{ width: 160 }}
+          options={[
+            { value: 'recent7', label: '近7天记录' },
+            { value: 'all', label: '全部历史' },
+          ]}
+        />
         <div style={{ marginLeft: 'auto' }}>
           <Segmented
             value={viewMode}
@@ -891,7 +905,7 @@ export default function LabResultListPage() {
 
       <div ref={recordsRef}>
         <Card
-          title="检验记录"
+          title={recordScope === 'all' ? '检验记录（全部历史）' : '检验记录（近7天）'}
           style={{ border: '1px solid #DBEAFE' }}
           styles={{ body: { padding: viewMode === 'grouped' ? 16 : 0 } }}
         >
@@ -899,7 +913,7 @@ export default function LabResultListPage() {
           {viewMode === 'grouped' ? (
             <>
               {groupedPatients.length === 0 ? (
-                <PageEmpty description="无符合条件的检验记录" />
+                <PageEmpty description={recordScope === 'all' ? '暂无符合条件的历史检验记录' : '暂无符合条件的近7天检验记录'} />
               ) : (
                 <Collapse
                   bordered
@@ -974,7 +988,7 @@ export default function LabResultListPage() {
                 rowKey={(r) => r.id}
                 columns={columnsFull}
                 size="small"
-                locale={{ emptyText: <PageEmpty description="无符合条件的检验记录" /> }}
+                locale={{ emptyText: <PageEmpty description={recordScope === 'all' ? '暂无符合条件的历史检验记录' : '暂无符合条件的近7天检验记录'} /> }}
                 pagination={false}
                 rowClassName={(r) => {
                   const ui = rowToUiStatus(r);
@@ -1247,9 +1261,7 @@ export default function LabResultListPage() {
         onSaved={async () => {
           setShowOcr(false);
           message.success('化验单识别结果已保存');
-          const res = await labsApi.listRecent({ days: 7, page: 1, page_size: 1000 });
-          const rows = res.data?.data;
-          if (Array.isArray(rows)) setList(rows);
+          await loadLabRecords(recordScope);
         }}
       />
     </PageShell>
