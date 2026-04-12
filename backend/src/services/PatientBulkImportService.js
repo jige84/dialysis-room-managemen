@@ -455,6 +455,21 @@ async function parseSpreadsheet(buffer) {
 }
 
 /**
+ * 判断工作簿是否为标准模板导入格式。
+ * 规则保持轻量：至少包含患者模板的核心字段，且不是历史资料的散表。
+ * @param {Buffer} buffer
+ * @returns {Promise<boolean>}
+ */
+async function detectTemplateWorkbook(buffer) {
+  const { headerMap } = await parseSpreadsheet(buffer);
+  const keys = new Set(Array.from(headerMap.values()));
+  const required = ['name', 'gender', 'dob', 'dialysis_start_date', 'primary_diagnosis'];
+  const hasRequired = required.every((key) => keys.has(key));
+  const hasResponsibleNurse = keys.has('responsible_nurse_id') || keys.has('responsible_nurse_name');
+  return hasRequired && hasResponsibleNurse;
+}
+
+/**
  * @param {import('pg').Pool} pool
  * @param {string} name
  * @param {string} dob
@@ -678,5 +693,6 @@ module.exports = {
   runImport,
   buildTemplateWorkbookBuffer,
   parseSpreadsheet,
+  detectTemplateWorkbook,
   MAX_ROWS,
 };

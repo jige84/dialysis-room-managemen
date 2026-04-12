@@ -1,6 +1,6 @@
 /**
  * 患者导入页
- * 主要作用：保留单表 XLSX 导入，并新增历史资料文件夹导入。
+ * 主要作用：统一导入入口，同时支持标准模板单文件、多个历史文件与整个历史资料文件夹。
  */
 import { useMemo, useState } from 'react';
 import { Alert, Button, Card, Space, Table, Typography, Upload, message } from 'antd';
@@ -11,6 +11,7 @@ import {
   CloudUploadOutlined,
   DownloadOutlined,
   ExperimentOutlined,
+  FileAddOutlined,
   FolderOpenOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -18,44 +19,54 @@ import PageShell from '../../components/PageShell/PageShell';
 import { useAuthStore } from '../../stores/authStore';
 import {
   patientsApi,
+  type PatientAutoImportAffectedPatient,
+  type PatientAutoImportResult,
   type PatientHistoryImportIssueRow,
-  type PatientHistoryImportLabRow,
-  type PatientHistoryImportOrderRow,
-  type PatientHistoryImportPatientRow,
-  type PatientHistoryImportResult,
-  type PatientImportResult,
+  type PatientHistoryUnsupportedFile,
   type PatientImportRowError,
   type PatientImportSkippedDuplicate,
 } from '../../api/patients';
 
+function isExcelFile(file: UploadFile): boolean {
+  const name = String(file.name || '').toLowerCase();
+  return name.endsWith('.xlsx');
+}
+
+function modeLabel(mode: PatientAutoImportResult['mode']): string {
+  return mode === 'bulk_template' ? '标准模板导入' : '历史资料导入';
+}
+
+function actionLabel(action: PatientAutoImportAffectedPatient['action'], dryRun: boolean): string {
+  if (action === 'updated') return '补全';
+  if (action === 'preview') return '预检';
+  return dryRun ? '预览新增' : '新建';
+}
+
 export default function PatientImportPage() {
   const navigate = useNavigate();
   const canImport = useAuthStore((s) => s.hasRole(['admin', 'doctor']));
+  const [selectedFiles, setSelectedFiles] = useState<UploadFile[]>([]);
   const [loadingDry, setLoadingDry] = useState(false);
   const [loadingCommit, setLoadingCommit] = useState(false);
-  const [singleResult, setSingleResult] = useState<PatientImportResult | null>(null);
-  const [historyFiles, setHistoryFiles] = useState<UploadFile[]>([]);
-  const [historyLoadingDry, setHistoryLoadingDry] = useState(false);
-  const [historyLoadingCommit, setHistoryLoadingCommit] = useState(false);
-  const [historyResult, setHistoryResult] = useState<PatientHistoryImportResult | null>(null);
+  const [importResult, setImportResult] = useState<PatientAutoImportResult | null>(null);
 
-  const errColumns: ColumnsType<PatientImportRowError> = [
-    { title: 'Excel行号', dataIndex: 'rowIndex', width: 100 },
-    { title: '姓名', dataIndex: 'name', width: 120, render: (value: string | undefined) => value || '—' },
-    { title: '错误', dataIndex: 'errors', render: (errs: string[]) => (errs || []).join('；') },
-  ];
-  const okColumns: ColumnsType<{ rowIndex: number; id: string; name: string }> = [
-    { title: '行号', dataIndex: 'rowIndex', width: 80 },
-    { title: '患者ID', dataIndex: 'id', ellipsis: true },
-    { title: '姓名', dataIndex: 'name', width: 140 },
-  ];
-  const dupColumns: ColumnsType<PatientImportSkippedDuplicate> = [
-    { title: '行号', dataIndex: 'rowIndex', width: 80 },
-    { title: '姓名', dataIndex: 'name' },
-  ];
+  const localFiles = useMemo(
+    () =>
+      selectedFiles
+        .filter(isExcelFile)
+        .map((file) => file.originFileObj)
+        .filter((file): file is NonNullable<UploadFile['originFileObj']> => file != null),
+    [selectedFiles],
+  );
 
-  const historyPatientColumns: ColumnsType<PatientHistoryImportPatientRow> = [
-    { title: '动作', dataIndex: 'action', width: 90, render: (value: string) => (value === 'created' ? '新建' : '补全') },
+  const affectedPatientColumns: ColumnsType<PatientAutoImportAffectedPatient> = [
+    {
+      title: '动作',
+      dataIndex: 'action',
+      width: 100,
+      render: (value: PatientAutoImportAffectedPatient['action']) =>
+        importResult ? actionLabel(value, importResult.dry_run) : value,
+    },
     {
       title: '患者',
       dataIndex: 'name',
@@ -70,98 +81,78 @@ export default function PatientImportPage() {
         </Space>
       ),
     },
-    { title: '匹配方式', dataIndex: 'matched_by', width: 110 },
-    { title: '来源文件', dataIndex: 'sources', render: (sources: string[]) => (sources || []).join('、') },
   ];
-  const historyLabColumns: ColumnsType<PatientHistoryImportLabRow> = [
-    { title: '患者', dataIndex: 'patient_name', width: 120 },
-    { title: '项目', dataIndex: 'test_type', width: 100 },
-    { title: '结果', render: (_value, record) => `${record.value} ${record.unit || ''}`.trim() },
-    { title: '日期', dataIndex: 'test_date', width: 110 },
-    { title: '来源文件', dataIndex: 'source_file' },
+
+  const rowErrorColumns: ColumnsType<PatientImportRowError> = [
+    { title: 'Excel行号', dataIndex: 'rowIndex', width: 100 },
+    { title: '姓名', dataIndex: 'name', width: 140, render: (value: string | undefined) => value || '—' },
+    { title: '错误', dataIndex: 'errors', render: (errors: string[]) => errors.join('；') },
   ];
-  const historyOrderColumns: ColumnsType<PatientHistoryImportOrderRow> = [
-    { title: '患者', dataIndex: 'patient_name', width: 120 },
-    { title: '药品', dataIndex: 'drug_name' },
-    { title: '类型', dataIndex: 'order_type', width: 120 },
-    { title: '频次', dataIndex: 'frequency', width: 100 },
-    { title: '生效日期', dataIndex: 'valid_from', width: 110 },
-    { title: '来源文件', dataIndex: 'source_file' },
+
+  const skippedDuplicateColumns: ColumnsType<PatientImportSkippedDuplicate> = [
+    { title: 'Excel行号', dataIndex: 'rowIndex', width: 100 },
+    { title: '姓名', dataIndex: 'name' },
   ];
+
   const issueColumns: ColumnsType<PatientHistoryImportIssueRow> = [
-    { title: '分类', dataIndex: 'category', width: 160 },
+    { title: '分类', dataIndex: 'category', width: 170 },
     { title: '文件', dataIndex: 'fileName', width: 220 },
-    { title: '行号', dataIndex: 'rowIndex', width: 80, render: (value: number | null) => value ?? '—' },
+    { title: '行号', dataIndex: 'rowIndex', width: 90, render: (value: number | null) => value ?? '—' },
     { title: '患者', dataIndex: 'patientName', width: 120, render: (value: string | null) => value || '—' },
     { title: '原因', dataIndex: 'reason' },
   ];
 
-  const historyLocalFiles = useMemo(
-    () =>
-      historyFiles
-        .map((file) => file.originFileObj)
-        .filter((file): file is NonNullable<UploadFile['originFileObj']> => file != null),
-    [historyFiles],
-  );
+  const unsupportedColumns: ColumnsType<PatientHistoryUnsupportedFile> = [
+    { title: '文件', dataIndex: 'fileName' },
+    { title: '原因', dataIndex: 'reason' },
+  ];
 
-  const runSingleUpload = async (file: File, dryRun: boolean) => {
+  const updateFiles = (fileList: UploadFile[]) => {
+    setSelectedFiles(fileList.filter((file) => {
+      if (isExcelFile(file)) return true;
+      if (file.status !== 'removed') {
+        message.warning(`已忽略非 Excel 文件：${file.name}`);
+      }
+      return false;
+    }));
+  };
+
+  const runImport = async (dryRun: boolean) => {
     if (!canImport) {
       message.warning('仅管理员与医生可执行导入');
       return;
     }
+    if (localFiles.length === 0) {
+      message.warning('请先选择 Excel 文件或整个历史资料文件夹');
+      return;
+    }
+
     const setLoading = dryRun ? setLoadingDry : setLoadingCommit;
     setLoading(true);
-    setSingleResult(null);
+    setImportResult(null);
     try {
-      const res = await patientsApi.importFromXlsx(file, dryRun);
+      const res = await patientsApi.importAuto(localFiles, dryRun);
       if (res.data.code !== 200 || !res.data.data) {
         message.error(res.data.message || '导入失败');
         return;
       }
-      setSingleResult(res.data.data);
+      setImportResult(res.data.data);
       message.success(res.data.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const runHistoryUpload = async (dryRun: boolean) => {
-    if (!canImport) {
-      message.warning('仅管理员与医生可执行导入');
-      return;
-    }
-    if (historyLocalFiles.length === 0) {
-      message.warning('请先选择一个包含历史资料的文件夹');
-      return;
-    }
-    const setLoading = dryRun ? setHistoryLoadingDry : setHistoryLoadingCommit;
-    setLoading(true);
-    setHistoryResult(null);
-    try {
-      const res = await patientsApi.importHistoryFolder(historyLocalFiles, dryRun);
-      if (res.data.code !== 200 || !res.data.data) {
-        message.error(res.data.message || '历史资料导入失败');
-        return;
-      }
-      setHistoryResult(res.data.data);
-      message.success(res.data.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const singleUploadProps = (dryRun: boolean) => ({
+  const sharedUploadProps = {
     accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    maxCount: 1,
-    showUploadList: false,
-    beforeUpload: (file: File) => {
-      void runSingleUpload(file, dryRun);
-      return false;
-    },
-  });
+    multiple: true,
+    beforeUpload: () => false,
+    fileList: selectedFiles,
+    onChange: ({ fileList }: { fileList: UploadFile[] }) => updateFiles(fileList),
+  };
 
   return (
-    <PageShell subtitle="批量导入患者">
+    <PageShell subtitle="导入患者资料">
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/patients')}>
           返回患者列表
@@ -170,140 +161,142 @@ export default function PatientImportPage() {
         <Alert
           type="info"
           showIcon
-          message="导入后仍需补全的工作"
+          message="统一导入入口"
           description={
             <Typography.Paragraph style={{ marginBottom: 0 }}>
-              首版会自动导入患者草稿、联系方式、责任护士、化验结果和长期医嘱；护理记录单仅识别后列为待人工处理。知情同意书影像、血管通路、历史透析护理记录等仍需后续补录。
+              支持标准模板单文件、多个历史资料文件和整个历史资料文件夹。系统会自动识别导入模式；护理记录单仍只识别并列入待人工处理，不自动写库。
             </Typography.Paragraph>
           }
         />
 
-        <Card title="1. 标准模板导入（原有能力）">
-          <Typography.Paragraph type="secondary">
-            模板首行为英文列名，第二行为示例（正式导入前请删除示例行）。也可在旧表上增加列，使用中文别名表头（见后端文档）。
-          </Typography.Paragraph>
-          <Space wrap>
-            <Button
-              icon={<DownloadOutlined />}
-              onClick={() => {
-                void patientsApi.downloadImportTemplate().catch(() => {
-                  message.error('下载模板失败');
-                });
-              }}
-              disabled={!canImport}
-            >
-              下载 patient_import_template.xlsx
-            </Button>
-            <Upload {...singleUploadProps(true)}>
-              <Button icon={<ExperimentOutlined />} loading={loadingDry} disabled={!canImport}>
-                预检单表
-              </Button>
-            </Upload>
-            <Upload {...singleUploadProps(false)}>
-              <Button type="primary" icon={<CloudUploadOutlined />} loading={loadingCommit} disabled={!canImport}>
-                正式导入单表
-              </Button>
-            </Upload>
-          </Space>
-          {singleResult ? (
-            <Card style={{ marginTop: 16 }} title="最近一次单表导入结果">
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <Typography.Text>
-                  数据行数 {singleResult.total_data_rows}；成功 {singleResult.imported_count}；跳过重复 {singleResult.skipped_duplicate_count}；错误行 {singleResult.row_errors.length}
-                  {singleResult.dry_run ? '（预检）' : ''}
-                </Typography.Text>
-                {singleResult.row_errors.length > 0 ? (
-                  <Table size="small" rowKey={(row) => String(row.rowIndex)} dataSource={singleResult.row_errors} columns={errColumns} pagination={false} />
-                ) : null}
-                {singleResult.skipped_duplicates.length > 0 ? (
-                  <Table size="small" rowKey={(row) => `${row.rowIndex}-${row.name}`} dataSource={singleResult.skipped_duplicates} columns={dupColumns} pagination={false} />
-                ) : null}
-                {singleResult.imported.length > 0 ? (
-                  <Table size="small" rowKey={(row) => `${row.rowIndex}-${row.id}`} dataSource={singleResult.imported} columns={okColumns} pagination={false} />
-                ) : null}
-              </Space>
-            </Card>
-          ) : null}
-        </Card>
-
-        <Card title="2. 历史资料文件夹导入">
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Card title="患者资料导入">
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              请选择包含 `患者联系方式登记表`、`责任护士所管病人`、`病历首页`、`化验记录表`、`医嘱记录单` 等 Excel 的文件夹。系统会自动识别文件类型并聚合导入。
+              标准模板首行为英文列名；历史资料可直接选择单个文件、多个文件或整个文件夹。若混入标准模板文件与历史资料文件，系统会提示分开导入。
             </Typography.Paragraph>
-            <Upload
-              directory
-              multiple
-              beforeUpload={() => false}
-              fileList={historyFiles}
-              onChange={({ fileList }) => setHistoryFiles(fileList)}
-              disabled={!canImport}
-            >
-              <Button icon={<FolderOpenOutlined />} disabled={!canImport}>
-                选择历史资料文件夹
-              </Button>
-            </Upload>
-            <Typography.Text type="secondary">
-              当前已选择 {historyLocalFiles.length} 个文件
-            </Typography.Text>
+
+            <Upload.Dragger {...sharedUploadProps} style={{ background: '#FAFCFF' }} disabled={!canImport}>
+              <p className="ant-upload-drag-icon">
+                <CloudUploadOutlined />
+              </p>
+              <p className="ant-upload-text">拖拽 Excel 到这里，或使用下面的按钮选择文件 / 文件夹</p>
+              <p className="ant-upload-hint">仅支持 .xlsx；可一次导入多个历史资料文件。</p>
+            </Upload.Dragger>
+
             <Space wrap>
-              <Button icon={<ExperimentOutlined />} loading={historyLoadingDry} disabled={!canImport} onClick={() => void runHistoryUpload(true)}>
-                预检历史资料
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={() => {
+                  void patientsApi.downloadImportTemplate().catch(() => {
+                    message.error('下载模板失败');
+                  });
+                }}
+                disabled={!canImport}
+              >
+                下载标准模板
               </Button>
-              <Button type="primary" icon={<CloudUploadOutlined />} loading={historyLoadingCommit} disabled={!canImport} onClick={() => void runHistoryUpload(false)}>
-                正式导入历史资料
+              <Upload {...sharedUploadProps} showUploadList={false} disabled={!canImport}>
+                <Button icon={<FileAddOutlined />} disabled={!canImport}>
+                  选择文件
+                </Button>
+              </Upload>
+              <Upload {...sharedUploadProps} directory showUploadList={false} disabled={!canImport}>
+                <Button icon={<FolderOpenOutlined />} disabled={!canImport}>
+                  选择文件夹
+                </Button>
+              </Upload>
+              <Button onClick={() => setSelectedFiles([])} disabled={!selectedFiles.length}>
+                清空已选
+              </Button>
+            </Space>
+
+            <Typography.Text type="secondary">
+              当前已选择 {localFiles.length} 个 Excel 文件
+            </Typography.Text>
+
+            <Space wrap>
+              <Button icon={<ExperimentOutlined />} loading={loadingDry} disabled={!canImport} onClick={() => void runImport(true)}>
+                预检导入
+              </Button>
+              <Button type="primary" icon={<CloudUploadOutlined />} loading={loadingCommit} disabled={!canImport} onClick={() => void runImport(false)}>
+                正式导入
               </Button>
             </Space>
           </Space>
         </Card>
 
-        {historyResult ? (
-          <Card title="最近一次历史资料导入结果">
+        {importResult ? (
+          <Card title="最近一次导入结果">
             <Space direction="vertical" size="large" style={{ width: '100%' }}>
               <Typography.Text>
-                文件数 {historyResult.files_count}；新建患者 {historyResult.patients_created}；补全患者 {historyResult.patients_updated}；导入化验 {historyResult.labs_created}；导入医嘱 {historyResult.orders_created}
-                {historyResult.dry_run ? '（预检）' : ''}
+                模式 {modeLabel(importResult.mode)}；文件数 {importResult.files_count}；识别类型 {importResult.detected_file_types.join('、') || '—'}
+                {importResult.dry_run ? '（预检）' : ''}
               </Typography.Text>
 
-              {historyResult.patients.length > 0 ? (
+              <Typography.Text>
+                新建患者 {importResult.patients_created}；补全患者 {importResult.patients_updated}；导入化验 {importResult.labs_created}；导入医嘱 {importResult.orders_created}
+              </Typography.Text>
+
+              {importResult.affected_patients.length > 0 ? (
                 <>
-                  <Typography.Title level={5}>患者</Typography.Title>
-                  <Table size="small" rowKey={(row) => `${row.action}-${row.id}-${row.draft_id}`} dataSource={historyResult.patients} columns={historyPatientColumns} pagination={false} />
+                  <Typography.Title level={5}>受影响患者</Typography.Title>
+                  <Table
+                    size="small"
+                    rowKey={(row) => `${row.action}-${row.id}-${row.name}`}
+                    dataSource={importResult.affected_patients}
+                    columns={affectedPatientColumns}
+                    pagination={false}
+                  />
                 </>
               ) : null}
 
-              {historyResult.labs.length > 0 ? (
+              {importResult.skipped_duplicates.length > 0 ? (
                 <>
-                  <Typography.Title level={5}>化验结果</Typography.Title>
-                  <Table size="small" rowKey={(row) => `${row.id}-${row.test_type}`} dataSource={historyResult.labs} columns={historyLabColumns} pagination={false} />
+                  <Typography.Title level={5}>跳过重复</Typography.Title>
+                  <Table
+                    size="small"
+                    rowKey={(row) => `${row.rowIndex}-${row.name}`}
+                    dataSource={importResult.skipped_duplicates}
+                    columns={skippedDuplicateColumns}
+                    pagination={false}
+                  />
                 </>
               ) : null}
 
-              {historyResult.orders.length > 0 ? (
+              {importResult.row_errors.length > 0 ? (
                 <>
-                  <Typography.Title level={5}>长期医嘱</Typography.Title>
-                  <Table size="small" rowKey={(row) => `${row.id}-${row.drug_name}`} dataSource={historyResult.orders} columns={historyOrderColumns} pagination={false} />
+                  <Typography.Title level={5}>行错误</Typography.Title>
+                  <Table
+                    size="small"
+                    rowKey={(row) => `${row.rowIndex}-${row.name || 'unknown'}`}
+                    dataSource={importResult.row_errors}
+                    columns={rowErrorColumns}
+                    pagination={false}
+                  />
                 </>
               ) : null}
 
-              {historyResult.unresolved_items.length > 0 ? (
+              {importResult.unresolved_items.length > 0 ? (
                 <>
                   <Typography.Title level={5}>待补全 / 待人工处理</Typography.Title>
-                  <Table size="small" rowKey={(_row, index) => `issue-${index}`} dataSource={historyResult.unresolved_items} columns={issueColumns} pagination={false} />
+                  <Table
+                    size="small"
+                    rowKey={(_row, index) => `issue-${index}`}
+                    dataSource={importResult.unresolved_items}
+                    columns={issueColumns}
+                    pagination={false}
+                  />
                 </>
               ) : null}
 
-              {historyResult.unsupported_files.length > 0 ? (
+              {importResult.unsupported_files.length > 0 ? (
                 <>
                   <Typography.Title level={5}>未支持文件</Typography.Title>
                   <Table
                     size="small"
                     rowKey={(row) => row.fileName}
-                    dataSource={historyResult.unsupported_files}
-                    columns={[
-                      { title: '文件', dataIndex: 'fileName' },
-                      { title: '原因', dataIndex: 'reason' },
-                    ]}
+                    dataSource={importResult.unsupported_files}
+                    columns={unsupportedColumns}
                     pagination={false}
                   />
                 </>

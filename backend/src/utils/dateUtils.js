@@ -89,8 +89,10 @@ function formatDuration(startDate, endDate = new Date()) {
  * 计算年龄
  */
 function calcAge(dob) {
+  if (dob == null || dob === '') return null;
   const today = new Date();
   const birth = parseBusinessDate(dob) || new Date(dob);
+  if (!(birth instanceof Date) || Number.isNaN(birth.getTime())) return null;
   let age = today.getFullYear() - birth.getFullYear();
   const m = today.getMonth() - birth.getMonth();
   if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
