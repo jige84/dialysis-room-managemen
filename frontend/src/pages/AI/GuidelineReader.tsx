@@ -67,7 +67,7 @@ export default function GuidelineReaderPage() {
     fetchList();
   }, [fetchList]);
 
-  const loadNotices = async () => {
+  const loadNotices = useCallback(async () => {
     if (!canUseAiGuidelines) return;
     try {
       const { data } = await guidelinesApi.listNotices();
@@ -75,11 +75,11 @@ export default function GuidelineReaderPage() {
     } catch {
       /*  */
     }
-  };
+  }, [canUseAiGuidelines]);
 
   useEffect(() => {
-    if (canUseAiGuidelines) loadNotices();
-  }, [canUseAiGuidelines]);
+    if (canUseAiGuidelines) void loadNotices();
+  }, [canUseAiGuidelines, loadNotices]);
 
   const dismissNotices = async () => {
     try {

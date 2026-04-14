@@ -1,0 +1,3 @@
+pg_dump unavailable in current environment.
+Fallback mode: schema-clone.
+Reason: spawnSync pg_dump EPERM

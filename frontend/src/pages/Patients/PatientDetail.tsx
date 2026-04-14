@@ -4,7 +4,7 @@
  * 主要功能：路由参数 id 拉取详情；Tabs 组织子模块；打印与返回列表。
  */
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { Card, Tabs, Button, Table, Tag, Space, message, Modal, Form, Input, Select, DatePicker, InputNumber, Checkbox, Switch } from 'antd';
+import { Card, Tabs, Button, Table, Tag, Space, message, Modal, Form, Input, Select, DatePicker, InputNumber, Checkbox, Switch, Popconfirm } from 'antd';
 import type { UploadFile } from 'antd/es/upload/interface';
 import { ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -28,7 +28,7 @@ import { patientsApi, type PatientDetailRecord } from '../../api/patients';
 import { usersApi, type NursingStaffRow } from '../../api/users';
 import { infectionApi, type InfectionScreeningLatestRow } from '../../api/infection';
 import labsApi, { LAB_TYPE_LABELS, type LabResult } from '../../api/labs';
-import { dialysisApi, type DialysisRecordListRow } from '../../api/dialysis';
+import { dialysisApi, type DialysisRecordDetail, type DialysisRecordListRow } from '../../api/dialysis';
 import vascularApi, { ACCESS_TYPE_LABELS, type AccessType } from '../../api/vascular';
 
 /** 将列表/详情中的通路类型字符串规范为 API 使用的 AccessType（小写） */
@@ -420,9 +420,33 @@ function TabBasic({ patient, infectionRows, recentLines }: TabBasicProps) {
 
 type TabDialysisHistoryProps = {
   rows: DialysisRecordListRow[];
+  patientId: string;
 };
 
-function TabDialysisHistory({ rows }: TabDialysisHistoryProps) {
+function TabDialysisHistory({ rows, patientId }: TabDialysisHistoryProps) {
+  const navigate = useNavigate();
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRecord, setDetailRecord] = useState<DialysisRecordDetail | null>(null);
+
+  const openDetail = useCallback(async (recordId: string) => {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setDetailRecord(null);
+    try {
+      const res = await dialysisApi.detail(recordId);
+      if (res.data.code !== 200 || !res.data.data) {
+        message.error(res.data.message || '透析记录详情加载失败');
+        return;
+      }
+      setDetailRecord(res.data.data);
+    } catch {
+      message.error('透析记录详情加载失败');
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
   const sortedRows = [...rows].sort((a, b) => b.session_date.localeCompare(a.session_date));
   const tableRows = sortedRows.map(r => {
     const complications: string[] = [];
@@ -473,8 +497,69 @@ function TabDialysisHistory({ rows }: TabDialysisHistoryProps) {
             render: v => <span className="num">{v != null ? `${v}%` : '—'}</span>,
           },
           { title: '并发症摘要', dataIndex: 'complicationsText' },
+          {
+            title: '操作',
+            key: 'actions',
+            width: 170,
+            render: (_value, record) => (
+              <Space size={6}>
+                <Button type="link" size="small" onClick={() => void openDetail(record.id)}>
+                  查看详情
+                </Button>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => {
+                    const dateParam =
+                      formatLocalDateKey(record.session_date)
+                      || String(record.session_date || '').slice(0, 10)
+                      || dayjs().format('YYYY-MM-DD');
+                    navigate(
+                      `/dialysis/entry?patient_id=${encodeURIComponent(patientId)}&date=${encodeURIComponent(dateParam)}&record_id=${encodeURIComponent(record.id)}`,
+                    );
+                  }}
+                >
+                  打开记录单
+                </Button>
+              </Space>
+            ),
+          },
         ]}
       />
+      <Modal
+        title="透析记录详情"
+        open={detailOpen}
+        onCancel={() => setDetailOpen(false)}
+        footer={null}
+        width={760}
+      >
+        {detailLoading ? (
+          <div style={{ color: '#64748B' }}>加载中…</div>
+        ) : detailRecord ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <div className="grid-3" style={{ gap: 12 }}>
+              <div>日期：<b>{detailRecord.session_date}</b></div>
+              <div>班次：<b>{formatShift(detailRecord.shift)}</b></div>
+              <div>护士：<b>{detailRecord.nurse_name || '—'}</b></div>
+              <div>机器：<b>{detailRecord.machine_no || '—'}</b></div>
+              <div>透前体重：<b>{detailRecord.pre_weight ?? '—'}{detailRecord.pre_weight != null ? ' kg' : ''}</b></div>
+              <div>透后体重：<b>{detailRecord.post_weight ?? '—'}{detailRecord.post_weight != null ? ' kg' : ''}</b></div>
+              <div>超滤量：<b>{detailRecord.uf_volume ?? '—'}{detailRecord.uf_volume != null ? ' mL' : ''}</b></div>
+              <div>实际时长：<b>{detailRecord.actual_duration != null ? `${(detailRecord.actual_duration / 60).toFixed(1)} h` : '—'}</b></div>
+              <div>Kt/V：<b>{detailRecord.ktv ?? '—'}</b></div>
+            </div>
+            <div style={{ color: '#1F2937' }}>
+              生命体征 {detailRecord.vital_signs?.length || 0} 条；并发症 {detailRecord.complications?.length || 0} 条；医嘱执行 {detailRecord.order_executions?.length || 0} 条
+            </div>
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>备注</div>
+              <div style={{ whiteSpace: 'pre-wrap', color: '#374151' }}>{detailRecord.notes || '—'}</div>
+            </div>
+          </Space>
+        ) : (
+          <div style={{ color: '#64748B' }}>暂无详情数据</div>
+        )}
+      </Modal>
     </Card>
   );
 }
@@ -819,11 +904,13 @@ export default function PatientDetailPage() {
   const [labRows, setLabRows] = useState<LabResult[]>([]);
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [editConsentFileList, setEditConsentFileList] = useState<UploadFile[]>([]);
   const [nursingStaff, setNursingStaff] = useState<NursingStaffRow[]>([]);
   const [editForm] = Form.useForm<EditFormValues>();
   const watchEditDialysisCode = Form.useWatch('dialysis_schedule_code', editForm);
   const canEditPatient = hasRole(['admin', 'doctor']);
+  const canDeletePatient = hasRole(['admin', 'head_nurse']);
 
   const nurseSelectOptions = useMemo(
     () => nursingStaff.map(n => ({
@@ -910,6 +997,25 @@ export default function PatientDetailPage() {
   }, [id]);
 
   const handlePrint = () => { message.info('打印功能开发中'); };
+
+  const handleDeletePatient = async () => {
+    if (!id || !patient) return;
+    try {
+      setDeleteLoading(true);
+      const res = await patientsApi.remove(id);
+      if (res.data.code !== 200) {
+        message.error(res.data.message || '删除失败');
+        return;
+      }
+      message.success(`已删除患者档案：${patient.name}`);
+      navigate('/patients');
+    } catch (err) {
+      // 统一由 axios 响应拦截器提示错误，避免重复弹 toast
+      console.error('[PatientDetail] delete patient failed', err);
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
   const p = patient;
 
   const openEditModal = () => {
@@ -1174,8 +1280,25 @@ export default function PatientDetailPage() {
           </div>
           <Space size={8}>
             {canEditPatient && <Button onClick={openEditModal}>编辑患者信息</Button>}
+            {canDeletePatient && (
+              <Popconfirm
+                title="确定删除该患者档案？"
+                description="将同步删除该患者相关透析/检验/医嘱等记录，删除后不可恢复。"
+                okText="确认删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true, loading: deleteLoading }}
+                onConfirm={() => void handleDeletePatient()}
+              >
+                <Button danger loading={deleteLoading}>删除档案</Button>
+              </Popconfirm>
+            )}
             <Button icon={<PrinterOutlined />} onClick={handlePrint}>打印档案</Button>
-            <Button type="primary" onClick={() => navigate('/dialysis/entry')}>💉 录入今日透析</Button>
+            <Button
+              type="primary"
+              onClick={() => navigate(`/dialysis/entry?patient_id=${encodeURIComponent(p.id)}`)}
+            >
+              💉 录入今日透析
+            </Button>
           </Space>
         </div>
       </Card>
@@ -1229,7 +1352,7 @@ export default function PatientDetailPage() {
           {
             key: 'history',
             label: '📖 透析历史',
-            children: <TabDialysisHistory rows={dialysisRows} />,
+            children: <TabDialysisHistory rows={dialysisRows} patientId={p.id} />,
           },
           {
             key: 'care',

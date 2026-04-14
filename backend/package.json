@@ -8,10 +8,19 @@
     "dev": "nodemon src/server.js",
     "migrate": "node src/utils/runMigrations.js",
     "seed": "node src/utils/runSeeds.js",
+    "hardening:baseline": "node scripts/generate-release-hardening-baseline.js",
+    "audit:migrations": "node scripts/audit-migrations.js",
+    "test:unit": "node scripts/run-unit-tests.js",
+    "test:auth-chain": "node scripts/smoke-auth-chain.js",
+    "test:rbac-matrix": "node scripts/smoke-rbac-matrix.js",
+    "test:smoke-five-modules": "node scripts/smoke-five-modules.js",
     "test:schedule": "node scripts/test-dialysis-schedule-expansion.js && node scripts/test-schedule-db-check.js",
     "test:profile-sync": "node scripts/test-patient-prescription-profile-sync.js",
     "test:smoke-readiness": "node scripts/smoke-online-readiness.js",
-    "import:patients": "node scripts/import-patients-from-xlsx.js"
+    "import:patients": "node scripts/import-patients-from-xlsx.js",
+    "sync:nurse-users": "node scripts/sync-nurse-users-from-assignment.js",
+    "db:drill": "node scripts/db-drill-rehearsal.js",
+    "observe:daily": "node scripts/generate-post-release-observation.js"
   },
   "keywords": [
     "hemodialysis",

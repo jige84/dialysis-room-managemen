@@ -14,7 +14,7 @@ export interface UserInfo {
   id: string;
   username: string;
   real_name: string;
-  role: 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'quality' | 'qc';
+  role: 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'technician' | 'quality' | 'qc';
   /** 侧栏可访问模块路径 key；null/undefined 表示不限制 */
   menu_permissions?: string[] | null;
 }

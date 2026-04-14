@@ -207,6 +207,9 @@ export const devicesApi = {
   patchMachine: (id: string, data: Partial<CreateMachinePayload & { status?: string }>) =>
     request.patch<ApiResponse<MachineRow>>(`/devices/machines/${id}`, data),
 
+  deleteMachine: (id: string) =>
+    request.delete<ApiResponse<{ id: string; machine_no: string }>>(`/devices/machines/${id}`),
+
   machineMaintenance: (machineId: string) =>
     request.get<ApiResponse<MachineMaintenanceRow[]>>(`/devices/machines/${machineId}/maintenance`),
 
@@ -239,6 +242,9 @@ export const devicesApi = {
   createConsumableStock: (data: CreateConsumableStockPayload) =>
     request.post<ApiResponse<ConsumableStockRow>>('/devices/consumables', data),
 
+  deleteConsumableStock: (id: string) =>
+    request.delete<ApiResponse<{ id: string; item_name: string; category: string }>>(`/devices/consumables/${id}`),
+
   outboundLines: (params?: { start_date?: string; end_date?: string; stock_item_id?: string; page?: number }) =>
     request.get<ApiResponse<OutboundLineRow[]>>('/devices/consumables/outbound-lines', { params }),
 
@@ -261,6 +267,9 @@ export const devicesApi = {
     next_disinfection_due?: string;
     notes?: string;
   }) => request.post<ApiResponse<WaterMachineRow>>('/devices/water-machines', data),
+
+  deleteWaterMachine: (id: string) =>
+    request.delete<ApiResponse<{ id: string; machine_no: string }>>(`/devices/water-machines/${id}`),
 
   waterMachineMaintenance: (waterMachineId: string) =>
     request.get<ApiResponse<WaterMaintenanceRow[]>>(`/devices/water-machines/${waterMachineId}/maintenance`),

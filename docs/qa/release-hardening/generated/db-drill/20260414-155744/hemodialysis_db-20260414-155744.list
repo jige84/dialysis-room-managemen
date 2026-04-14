@@ -1,0 +1,1 @@
+Skipped pg_restore --list because external pg_dump is unavailable; schema-level rehearsal continues.

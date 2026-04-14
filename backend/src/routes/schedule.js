@@ -11,12 +11,19 @@ const { rbac } = require('../middleware/rbac');
 const { success, created, error, notFound } = require('../utils/response');
 const { expandDialysisScheduleCode } = require('../services/DialysisScheduleExpansionService');
 const { formatDate, parseBusinessDate } = require('../utils/dateUtils');
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const isValidUuid = (value) => typeof value === 'string' && UUID_REGEX.test(value);
+const {
+  isValidUuid,
+  validateOptionalStartDate,
+  validateCreateSlotPayload,
+  validateScheduleSlotId,
+  validateNurseSheetWeekStart,
+  validateNurseSheetWeekStartBody,
+  validateSchedulePatientId,
+  validateScheduleRulePayload,
+  validateNurseAdjustPayload,
+} = require('../validators/scheduleValidators');
 
 const NURSE_SHEET_ROW_COUNT = 14;
-const DATE_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** 白班「分区」备注：与 rows 并列存于 payload */
 function normalizeNurseSheetWhiteZone(input) {
@@ -487,11 +494,10 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
 router.get('/week', auth, async (req, res, next) => {
   try {
     const { start_date: queryStart } = req.query;
-    if (queryStart && !DATE_PARAM_RE.test(String(queryStart))) {
-      return error(res, 'start_date 须为 YYYY-MM-DD', 400);
-    }
+    const startValid = validateOptionalStartDate(queryStart);
+    if (!startValid.ok) return error(res, startValid.message, 400);
     const todayStr = formatDate(new Date());
-    const weekStart = getWeekStart(queryStart || todayStr);
+    const weekStart = getWeekStart(startValid.value || todayStr);
     const start = parseBusinessDate(weekStart);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
@@ -614,11 +620,10 @@ router.get('/week', auth, async (req, res, next) => {
 router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
     const { start_date: bodyStart } = req.body || {};
-    if (bodyStart && !DATE_PARAM_RE.test(String(bodyStart))) {
-      return error(res, 'start_date 须为 YYYY-MM-DD', 400);
-    }
+    const startValid = validateOptionalStartDate(bodyStart);
+    if (!startValid.ok) return error(res, startValid.message, 400);
     const todayStr = formatDate(new Date());
-    const weekStart = getWeekStart(bodyStart || todayStr);
+    const weekStart = getWeekStart(startValid.value || todayStr);
     const start = parseBusinessDate(weekStart);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
@@ -786,14 +791,11 @@ router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, r
 // POST /api/schedule/slots — 手动新增单条患者排班
 router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
-    const { patient_id, scheduled_date, shift, machine_id, schedule_remark, session_dialysis_mode } = req.body || {};
+    const payloadValid = validateCreateSlotPayload(req.body);
+    if (!payloadValid.ok) return error(res, payloadValid.message, payloadValid.statusCode || 400);
+    const { patient_id, scheduled_date, shift, machine_id, schedule_remark, session_dialysis_mode } = payloadValid.value;
     const shiftDb = SHIFT_MAP[shift] || shift;
-    if (!patient_id || !scheduled_date || !shiftDb || !machine_id) {
-      return error(res, 'patient_id、scheduled_date、shift、machine_id 为必填项');
-    }
-    if (!isValidUuid(patient_id) || !isValidUuid(machine_id)) {
-      return error(res, 'ID 格式无效', 400);
-    }
+    if (!shiftDb) return error(res, 'patient_id、scheduled_date、shift、machine_id 为必填项');
 
     const { rows: pRows } = await pool.query(
       'SELECT id, isolation_zone FROM patients WHERE id = $1 AND status = $2',
@@ -926,7 +928,8 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
 router.patch('/slots/:id', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
     const { id } = req.params;
-    if (!isValidUuid(id)) return error(res, '排班ID格式无效', 400);
+    const idValid = validateScheduleSlotId(id);
+    if (!idValid.ok) return error(res, idValid.message, idValid.statusCode || 400);
 
     const patchSelectVariants = [
       {
@@ -1247,7 +1250,8 @@ router.patch('/slots/:id', auth, rbac(['admin', 'head_nurse']), async (req, res,
 router.delete('/slots/:id', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
     const { id } = req.params;
-    if (!isValidUuid(id)) return error(res, '排班ID格式无效', 400);
+    const idValid = validateScheduleSlotId(id);
+    if (!idValid.ok) return error(res, idValid.message, idValid.statusCode || 400);
     const { rowCount } = await pool.query('DELETE FROM schedules WHERE id = $1', [id]);
     if (rowCount === 0) return notFound(res, '排班不存在');
     return success(res, null, '排班已删除');
@@ -1302,10 +1306,9 @@ router.get('/today', auth, async (req, res, next) => {
 // GET /api/schedule/nurse-sheet?week_start=YYYY-MM-DD — 护士长排班空白表（按周）
 router.get('/nurse-sheet', auth, async (req, res, next) => {
   try {
-    const weekStart = req.query.week_start;
-    if (!weekStart || !DATE_PARAM_RE.test(String(weekStart))) {
-      return error(res, 'week_start 须为 YYYY-MM-DD', 400);
-    }
+    const weekValid = validateNurseSheetWeekStart(req.query.week_start);
+    if (!weekValid.ok) return error(res, weekValid.message, weekValid.statusCode || 400);
+    const weekStart = weekValid.value;
     const { rows } = await pool.query(
       `SELECT s.week_start_date, s.payload, s.updated_at, u.real_name AS updated_by_name
        FROM nurse_schedule_sheet s
@@ -1340,9 +1343,9 @@ router.get('/nurse-sheet', auth, async (req, res, next) => {
 router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
     const { week_start_date: weekStart, rows: bodyRows, white_zone: bodyWhiteZone } = req.body || {};
-    if (!weekStart || !DATE_PARAM_RE.test(String(weekStart))) {
-      return error(res, 'week_start_date 须为 YYYY-MM-DD', 400);
-    }
+    const weekValid = validateNurseSheetWeekStartBody(weekStart);
+    if (!weekValid.ok) return error(res, weekValid.message, weekValid.statusCode || 400);
+    const weekStartDate = weekValid.value;
     const normalized = normalizeNurseSheetRows(bodyRows);
     const whiteZone = normalizeNurseSheetWhiteZone(bodyWhiteZone);
     const userId = req.user?.id;
@@ -1356,7 +1359,7 @@ router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res,
          payload = EXCLUDED.payload,
          updated_at = NOW(),
          updated_by = EXCLUDED.updated_by`,
-      [weekStart, { rows: normalized, white_zone: whiteZone }, userId],
+      [weekStartDate, { rows: normalized, white_zone: whiteZone }, userId],
     );
 
     const { rows: out } = await pool.query(
@@ -1364,12 +1367,12 @@ router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res,
        FROM nurse_schedule_sheet s
        LEFT JOIN users u ON u.id = s.updated_by
        WHERE s.week_start_date = $1::date`,
-      [weekStart],
+      [weekStartDate],
     );
     return success(
       res,
       {
-        week_start_date: weekStart,
+        week_start_date: weekStartDate,
         rows: normalized,
         white_zone: whiteZone,
         updated_at: out[0]?.updated_at ?? null,
@@ -1384,9 +1387,8 @@ router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res,
 router.get('/:patientId', auth, async (req, res, next) => {
   try {
     const patientId = req.params.patientId;
-    if (!isValidUuid(patientId)) {
-      return error(res, '患者ID格式无效', 400);
-    }
+    const pidValid = validateSchedulePatientId(patientId);
+    if (!pidValid.ok) return error(res, pidValid.message, pidValid.statusCode || 400);
 
     const { rows: rules } = await pool.query(
       `SELECT *
@@ -1412,6 +1414,8 @@ router.get('/:patientId', auth, async (req, res, next) => {
 // POST /api/schedule/rules - 新建患者长期排班规则（护士长权限）
 router.post('/rules', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
+    const payloadValid = validateScheduleRulePayload(req.body);
+    if (!payloadValid.ok) return error(res, payloadValid.message);
     const {
       patient_id,
       pattern_type,
@@ -1422,11 +1426,7 @@ router.post('/rules', auth, rbac(['admin', 'head_nurse']), async (req, res, next
       end_date,
       preferred_machine_id,
       notes,
-    } = req.body;
-
-    if (!patient_id || !pattern_type || !Array.isArray(days) || !days.length || !shift || !start_date) {
-      return error(res, 'patient_id、pattern_type、days、shift、start_date 为必填项');
-    }
+    } = payloadValid.value;
 
     const { rows } = await pool.query(
       `INSERT INTO patient_schedule_rules (
@@ -1457,10 +1457,15 @@ router.post('/nurse-adjust', auth, rbac(['admin', 'head_nurse']), async (req, re
   try {
     await client.query('BEGIN');
 
-    const { date, shift, nurseIds } = req.body;
+    const payloadValid = validateNurseAdjustPayload(req.body);
+    if (!payloadValid.ok) {
+      await client.query('ROLLBACK');
+      return error(res, payloadValid.message);
+    }
+    const { date, shift, nurseIds } = payloadValid.value;
     const shiftDb = SHIFT_MAP[shift] || shift;
 
-    if (!date || !shiftDb) {
+    if (!shiftDb) {
       await client.query('ROLLBACK');
       return error(res, 'date 与 shift 为必填项');
     }

@@ -6,13 +6,13 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Form, Input, InputNumber, Select, Button, Checkbox,
-  DatePicker, message, Alert, Radio, Tag, Tooltip, Modal,
+  DatePicker, message, Alert, Radio, Tag, Tooltip, Modal, Table, Space,
 } from 'antd';
 import {
   SaveOutlined, PlusOutlined,
   DeleteOutlined, ClockCircleOutlined, CheckCircleFilled,
   WarningFilled, InfoCircleFilled, EditOutlined, CloseOutlined,
-  FileTextOutlined, PrinterOutlined,
+  FileTextOutlined, PrinterOutlined, SearchOutlined, HistoryOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -23,10 +23,12 @@ import {
   dialysisApi,
   parsePrepareDialysisResponse,
   type CreateDialysisPayload,
+  type DialysisRecordListRow,
+  type DialysisRecordDetail,
   type PrepareDialysisData,
   type OrderForSession,
 } from '../../api/dialysis';
-import { patientsApi } from '../../api/patients';
+import { patientsApi, type Patient } from '../../api/patients';
 import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import {
   shiftCodeToChinese,
@@ -69,6 +71,7 @@ import {
   saveDialysisEntryDraft,
   serializeFormValuesForDraft,
 } from '../../utils/dialysisEntryDraft';
+import { calcSpKtv, calcUrr } from '../../utils/ktv';
 
 // ── 演示数据（与透析处方工作台共用） ─────────────────────────
 const PATIENTS_LIST = DIALYSIS_DEMO_PATIENTS;
@@ -94,7 +97,21 @@ type FieldDef = {
 } & (
   | { type: 'text' | 'textarea' | 'number' }
   | { type: 'select' | 'radio'; options: { value: string; label: string }[] }
-  | { type: 'checkbox-group'; options: { value: string; label: string }[] }
+  | {
+    type: 'checkbox-group';
+    options: {
+      value: string;
+      label: string;
+      inputKey?: string;
+      inputUnit?: string;
+      inputPlaceholder?: string;
+      inputMin?: number;
+      inputMax?: number;
+      inputStep?: number;
+      inputPrecision?: number;
+      inputRequiredMessage?: string;
+    }[];
+  }
 );
 
 type ComplicationConfig = {
@@ -116,6 +133,17 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'saline_200', label: '输注生理盐水 200mL' },
         { value: 'slow_blood', label: '降低血流速' },
         { value: 'reduce_temp', label: '降低透析液温度' },
+        {
+          value: 'iv_50pct_glucose',
+          label: '静注50%葡萄糖注射液',
+          inputKey: 'glucoseDoseMl',
+          inputUnit: 'mL',
+          inputPlaceholder: '剂量',
+          inputMin: 0,
+          inputStep: 1,
+          inputPrecision: 0,
+          inputRequiredMessage: '请填写50%葡萄糖注射液剂量',
+        },
         { value: 'other', label: '其他（见备注）' },
       ]},
       { key: 'afterBp', label: '处理后血压', type: 'text', placeholder: '如：110/70 mmHg' },
@@ -143,6 +171,17 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'massage', label: '局部按摩' },
         { value: 'heat', label: '局部热敷' },
         { value: 'hypertonic', label: '输注高渗盐水' },
+        {
+          value: 'iv_50pct_glucose',
+          label: '静注50%葡萄糖注射液',
+          inputKey: 'glucoseDoseMl',
+          inputUnit: 'mL',
+          inputPlaceholder: '剂量',
+          inputMin: 0,
+          inputStep: 1,
+          inputPrecision: 0,
+          inputRequiredMessage: '请填写50%葡萄糖注射液剂量',
+        },
         { value: 'other', label: '其他（见备注）' },
       ]},
       { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
@@ -163,6 +202,17 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'reduce_uf', label: '减少超滤量' },
         { value: 'head_up', label: '头部抬高' },
         { value: 'antiemetic', label: '遵医嘱给予止吐药' },
+        {
+          value: 'iv_50pct_glucose',
+          label: '静注50%葡萄糖注射液',
+          inputKey: 'glucoseDoseMl',
+          inputUnit: 'mL',
+          inputPlaceholder: '剂量',
+          inputMin: 0,
+          inputStep: 1,
+          inputPrecision: 0,
+          inputRequiredMessage: '请填写50%葡萄糖注射液剂量',
+        },
         { value: 'other', label: '其他（见备注）' },
       ]},
       { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
@@ -187,6 +237,17 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'slow_blood', label: '降低血流速' },
         { value: 'analgesic', label: '遵医嘱给予镇痛药' },
         { value: 'observe', label: '加强观察' },
+        {
+          value: 'iv_50pct_glucose',
+          label: '静注50%葡萄糖注射液',
+          inputKey: 'glucoseDoseMl',
+          inputUnit: 'mL',
+          inputPlaceholder: '剂量',
+          inputMin: 0,
+          inputStep: 1,
+          inputPrecision: 0,
+          inputRequiredMessage: '请填写50%葡萄糖注射液剂量',
+        },
         { value: 'other', label: '其他（见备注）' },
       ]},
       { key: 'doctorNotified', label: '通知医生', type: 'radio', options: [
@@ -569,19 +630,48 @@ function createVitalSignRow(): VitalSignRow {
   };
 }
 
-// Daugirdas II 公式 — 来源：《血液净化标准化操作规程（2021版）》第11章
-function calcKtv(preBun: number, postBun: number, t: number, uf: number, postWeight: number): number | null {
-  if (!preBun || !postBun || postBun >= preBun) return null;
-  if (t < 1 || t > 8 || postWeight < 20 || postWeight > 200) return null;
-  if (uf < 0 || uf > 10) return null;
-  const R = postBun / preBun;
-  const ktv = -Math.log(R - 0.008 * t) + (4 - 3.5 * R) * (uf / postWeight);
-  return Math.round(ktv * 100) / 100;
+function toFixedDateFromAny(raw: string | null | undefined): Dayjs | null {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  const short = text.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(short) && dayjs(short, 'YYYY-MM-DD', true).isValid()) {
+    return dayjs(short).startOf('day');
+  }
+  const parsed = dayjs(text);
+  return parsed.isValid() ? parsed.startOf('day') : null;
 }
 
-function calcUrr(preBun: number, postBun: number): number | null {
-  if (!preBun || !postBun || postBun >= preBun) return null;
-  return Math.round((1 - postBun / preBun) * 100);
+function toHHmm(raw: string | null | undefined): string {
+  const text = String(raw ?? '').trim();
+  if (!text) return dayjs().format('HH:mm');
+  const parsed = dayjs(text);
+  if (parsed.isValid()) return parsed.format('HH:mm');
+  const m = text.match(/(\d{1,2}:\d{2})/);
+  if (!m) return dayjs().format('HH:mm');
+  return m[1].padStart(5, '0');
+}
+
+const DIALYSIS_SHIFT_LABELS: Record<string, string> = {
+  morning: '早班',
+  afternoon: '中班',
+  evening: '晚班',
+};
+
+function shiftLabelFromRecord(shift: string | null | undefined): string {
+  const key = String(shift ?? '').trim().toLowerCase();
+  return DIALYSIS_SHIFT_LABELS[key] ?? String(shift ?? '—');
+}
+
+function zoneLabelFromPatient(zone: string | null | undefined): string {
+  if (zone === 'hbv') return '乙肝区';
+  if (zone === 'hcv') return '丙肝区';
+  if (zone === 'observation') return '观察区';
+  if (zone === 'last_shift') return '末班区';
+  return '普通区';
+}
+
+function buildHistoryPatientOptionLabel(p: Patient): string {
+  return `${p.name} — ${zoneLabelFromPatient(p.isolation_zone)}`;
 }
 
 /** 与 PrescriptionWorkspace 处方表单、打印单处方区同源 */
@@ -730,8 +820,17 @@ function generatePrintHtml(d: PrintData): string {
       const measuresText = measuresArr?.length
         ? measuresArr.map(m => {
           const cfg = COMPLICATION_CONFIG[cv];
-          const opt = cfg?.fields.find(f => f.key === 'measures') as { options?: { value: string; label: string }[] } | undefined;
-          return opt?.options?.find(o => o.value === m)?.label ?? m;
+          const measuresField = cfg?.fields.find((f): f is Extract<FieldDef, { type: 'checkbox-group' }> =>
+            f.key === 'measures' && f.type === 'checkbox-group',
+          );
+          const option = measuresField?.options?.find(o => o.value === m);
+          if (!option) return m;
+          if (option.inputKey) {
+            const dose = rec?.[option.inputKey];
+            const doseText = dose !== null && dose !== undefined && dose !== '' ? String(dose) : '';
+            return doseText ? `${option.label}（${doseText}${option.inputUnit ?? ''}）` : option.label;
+          }
+          return option.label;
         }).join('、')
         : '';
       return `<div style="margin-bottom:3px">
@@ -1153,6 +1252,8 @@ export default function DialysisEntryPage() {
   } | null>(null);
 
   const [selectedPatient, setSelectedPatient] = useState<string>('');
+  const [recordIdFromUrl, setRecordIdFromUrl] = useState<string>('');
+  const [openedRecordDetail, setOpenedRecordDetail] = useState<DialysisRecordDetail | null>(null);
   /** 选中的日期（DatePicker），默认今日（与本地日历日对齐） */
   const [sessionDate, setSessionDate] = useState<Dayjs>(() => dayjs().startOf('day'));
   /** 与处方工作台 mergePrescriptionDefaultsForPatient 同源（演示默认值 + 医生保存的参数），仅展示只读 */
@@ -1186,6 +1287,18 @@ export default function DialysisEntryPage() {
   /** 来自 URL / 排班快捷入口，用于展示当前患者标签 */
   const [pinnedPatientOption, setPinnedPatientOption] = useState<{ value: string; label: string } | null>(null);
   const [todayDialysisQuickList, setTodayDialysisQuickList] = useState<TodaySchedulePatientRow[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyRows, setHistoryRows] = useState<DialysisRecordListRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(8);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPatientId, setHistoryPatientId] = useState<string>('');
+  const [historyShift, setHistoryShift] = useState<'all' | 'morning' | 'afternoon' | 'evening'>('all');
+  const [historyDateRange, setHistoryDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+  const [historyPatientOptions, setHistoryPatientOptions] = useState<{ value: string; label: string }[]>([]);
+  const [historyPatientLoading, setHistoryPatientLoading] = useState(false);
+  const [historyActionLoadingId, setHistoryActionLoadingId] = useState<string>('');
 
   /** 切换患者/透析日前一状态，用于临时保存草稿 key 与快照日期 */
   const prevPatientRef = useRef<string>(selectedPatient);
@@ -1193,6 +1306,7 @@ export default function DialysisEntryPage() {
   const draftDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressDraftSaveUntilRef = useRef(0);
   const [draftSavedAtIso, setDraftSavedAtIso] = useState<string | null>(null);
+  const hydratedRecordRef = useRef<string>('');
 
   const collectDraftSnapshotWithSessionDate = useCallback(
     (metaDate: Dayjs): DialysisEntryDraftSnapshot => ({
@@ -1271,6 +1385,12 @@ export default function DialysisEntryPage() {
 
   /** 切换患者或透析日期：先写入上一桶草稿，再清空本页状态，避免串患者 */
   useEffect(() => {
+    if (recordIdFromUrl) {
+      prevPatientRef.current = selectedPatient;
+      prevSessionDateRef.current = sessionDate;
+      return;
+    }
+
     const prevP = prevPatientRef.current;
     const prevD = prevSessionDateRef.current;
     const nextP = selectedPatient;
@@ -1304,9 +1424,10 @@ export default function DialysisEntryPage() {
 
     prevPatientRef.current = nextP;
     prevSessionDateRef.current = nextD;
-  }, [selectedPatient, sessionDate, form, collectDraftSnapshotWithSessionDate, signerLabel]);
+  }, [selectedPatient, sessionDate, form, collectDraftSnapshotWithSessionDate, signerLabel, recordIdFromUrl]);
 
   const schedulePersistDialysisDraft = useCallback(() => {
+    if (recordIdFromUrl) return;
     if (!selectedPatient) return;
     if (Date.now() < suppressDraftSaveUntilRef.current) return;
     if (isRealPatientId(selectedPatient) && realPrepareData === null) return;
@@ -1318,7 +1439,7 @@ export default function DialysisEntryPage() {
       saveDialysisEntryDraft(key, collectDialysisEntryDraftSnapshot());
       setDraftSavedAtIso(new Date().toISOString());
     }, 600);
-  }, [selectedPatient, sessionDate, realPrepareData, collectDialysisEntryDraftSnapshot]);
+  }, [recordIdFromUrl, selectedPatient, sessionDate, realPrepareData, collectDialysisEntryDraftSnapshot]);
 
   useEffect(
     () => () => {
@@ -1342,6 +1463,153 @@ export default function DialysisEntryPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!selectedPatient || !isRealPatientId(selectedPatient)) return;
+    setHistoryPatientId((prev) => (prev ? prev : selectedPatient));
+  }, [selectedPatient]);
+
+  useEffect(() => {
+    if (!historyOpen || historyPatientOptions.length > 0) return;
+    let cancelled = false;
+    (async () => {
+      setHistoryPatientLoading(true);
+      try {
+        const res = await patientsApi.list({ page: 1, page_size: 500, status: 'active' });
+        if (cancelled) return;
+        const payload = res.data.data as { list?: Patient[] } | Patient[] | null | undefined;
+        const list =
+          Array.isArray(payload)
+            ? payload
+            : payload && typeof payload === 'object' && Array.isArray(payload.list)
+              ? payload.list
+              : [];
+        setHistoryPatientOptions(
+          list.map((p) => ({ value: p.id, label: buildHistoryPatientOptionLabel(p) })),
+        );
+      } catch {
+        if (!cancelled) {
+          setHistoryPatientOptions([]);
+        }
+      } finally {
+        if (!cancelled) setHistoryPatientLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyOpen, historyPatientOptions.length]);
+
+  const loadHistoryRecords = useCallback(
+    async (opts?: {
+      page?: number;
+      pageSize?: number;
+      patientId?: string;
+      shift?: 'all' | 'morning' | 'afternoon' | 'evening';
+      dateRange?: [Dayjs | null, Dayjs | null] | null;
+    }) => {
+      const page = opts?.page ?? historyPage;
+      const pageSize = opts?.pageSize ?? historyPageSize;
+      const patientId = opts?.patientId ?? historyPatientId;
+      const shift = opts?.shift ?? historyShift;
+      const dateRange = opts?.dateRange ?? historyDateRange;
+
+      setHistoryLoading(true);
+      try {
+        const params: {
+          page: number;
+          page_size: number;
+          patient_id?: string;
+          shift?: 'morning' | 'afternoon' | 'evening';
+          start_date?: string;
+          end_date?: string;
+        } = {
+          page,
+          page_size: pageSize,
+        };
+        if (patientId && isRealPatientId(patientId)) params.patient_id = patientId;
+        if (shift !== 'all') params.shift = shift;
+        if (dateRange?.[0]) params.start_date = dateRange[0].format('YYYY-MM-DD');
+        if (dateRange?.[1]) params.end_date = dateRange[1].format('YYYY-MM-DD');
+
+        const res = await dialysisApi.list(params);
+        const payload = res.data.data as
+          | { list?: unknown; total?: unknown }
+          | DialysisRecordListRow[]
+          | null
+          | undefined;
+        const payloadRecord =
+          payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? (payload as { list?: unknown; total?: unknown })
+            : null;
+        const list =
+          Array.isArray(payload)
+            ? payload
+            : payloadRecord && Array.isArray(payloadRecord.list)
+              ? (payloadRecord.list as DialysisRecordListRow[])
+              : [];
+        const total =
+          typeof payloadRecord?.total === 'number'
+            ? payloadRecord.total
+            : list.length;
+
+        setHistoryRows(list);
+        setHistoryTotal(total);
+        setHistoryPage(page);
+        setHistoryPageSize(pageSize);
+      } catch {
+        setHistoryRows([]);
+        setHistoryTotal(0);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [historyDateRange, historyPage, historyPageSize, historyPatientId, historyShift],
+  );
+
+  const openHistoryRecord = useCallback(
+    async (recordId: string, autoPrint: boolean) => {
+      if (!recordId) return;
+      setHistoryActionLoadingId(recordId);
+      try {
+        const res = await dialysisApi.detail(recordId);
+        const detail = res.data.data;
+        if (!detail || !isRealPatientId(detail.patient_id)) {
+          message.error('历史记录信息不完整，无法打开');
+          return;
+        }
+        const dateStr =
+          toFixedDateFromAny(detail.session_date)?.format('YYYY-MM-DD')
+          ?? dayjs().format('YYYY-MM-DD');
+        const next = new URLSearchParams();
+        next.set('patient_id', detail.patient_id);
+        next.set('date', dateStr);
+        next.set('record_id', detail.id);
+        if (autoPrint) next.set('autoprint', '1');
+        setHistoryOpen(false);
+        navigate(`/dialysis/entry?${next.toString()}`);
+      } catch {
+        message.error(autoPrint ? '打开打印记录失败，请稍后重试' : '打开历史记录失败，请稍后重试');
+      } finally {
+        setHistoryActionLoadingId('');
+      }
+    },
+    [navigate],
+  );
+
+  const openHistoryQueryModal = useCallback(() => {
+    const initialPatientId =
+      historyPatientId || (selectedPatient && isRealPatientId(selectedPatient) ? selectedPatient : '');
+    if (initialPatientId && initialPatientId !== historyPatientId) {
+      setHistoryPatientId(initialPatientId);
+    }
+    setHistoryOpen(true);
+    void loadHistoryRecords({
+      page: 1,
+      pageSize: historyPageSize,
+      patientId: initialPatientId || undefined,
+    });
+  }, [historyPatientId, historyPageSize, loadHistoryRecords, selectedPatient]);
 
   /** 间期用药：拉取有效长期医嘱并筛选类型，用于下方「周几/日期」说明 */
   useEffect(() => {
@@ -1370,11 +1638,10 @@ export default function DialysisEntryPage() {
   useEffect(() => {
     const pid = searchParams.get('patient_id');
     const ds = searchParams.get('date');
-    if (ds && /^\d{4}-\d{2}-\d{2}$/.test(ds) && dayjs(ds, 'YYYY-MM-DD', true).isValid()) {
-      setSessionDate(dayjs(ds).startOf('day'));
-    } else {
-      setSessionDate(dayjs().startOf('day'));
-    }
+    const rid = searchParams.get('record_id');
+    setRecordIdFromUrl(rid && isRealPatientId(rid) ? rid : '');
+    const parsedDate = toFixedDateFromAny(ds);
+    setSessionDate(parsedDate ?? dayjs().startOf('day'));
     if (pid && isRealPatientId(pid)) {
       setSelectedPatient(pid);
       let cancelled = false;
@@ -1451,22 +1718,26 @@ export default function DialysisEntryPage() {
           const preFromRx = normNum(fe.preMachineWeight);
           setDryWeight(normNum(rx.dry_weight) ?? null);
           const dur = normNum(rx.duration_hours);
-          setDurationHours(dur ?? null);
-          form.setFieldsValue({
-            blood_flow_rate: normNum(rx.blood_flow_rate),
-            dialysate_flow_rate: normNum(rx.dialysate_flow_rate),
-            dialysate_na: normNum(rx.dialysate_na),
-            dialysate_ca: normNum(rx.dialysate_ca),
-            dialysate_k: normNum(rx.dialysate_k),
-            dialysate_temp: normNum(rx.dialysate_temp),
-            heparin_prime_dose: normNum(rx.heparin_prime_dose),
-            heparin_maintain: normNum(rx.heparin_maintain),
-            pre_weight: preFromRx ?? normNum(rx.dry_weight),
-          });
+          if (!recordIdFromUrl) {
+            setDurationHours(dur ?? null);
+            form.setFieldsValue({
+              blood_flow_rate: normNum(rx.blood_flow_rate),
+              dialysate_flow_rate: normNum(rx.dialysate_flow_rate),
+              dialysate_na: normNum(rx.dialysate_na),
+              dialysate_ca: normNum(rx.dialysate_ca),
+              dialysate_k: normNum(rx.dialysate_k),
+              dialysate_temp: normNum(rx.dialysate_temp),
+              heparin_prime_dose: normNum(rx.heparin_prime_dose),
+              heparin_maintain: normNum(rx.heparin_maintain),
+              pre_weight: preFromRx ?? normNum(rx.dry_weight),
+            });
+          }
         } else {
           setDryWeight(null);
-          setDurationHours(null);
-          form.setFieldsValue({ pre_weight: undefined });
+          if (!recordIdFromUrl) {
+            setDurationHours(null);
+            form.setFieldsValue({ pre_weight: undefined });
+          }
         }
         setRxDefaults(null);
       } catch {
@@ -1479,7 +1750,125 @@ export default function DialysisEntryPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPatient, sessionDate, form, prepareRefreshNonce]);
+  }, [selectedPatient, sessionDate, form, prepareRefreshNonce, recordIdFromUrl]);
+
+  /** 从 URL 的 record_id 打开既往透析记录：拉取详情并回填当前记录单 */
+  useEffect(() => {
+    if (!recordIdFromUrl) {
+      hydratedRecordRef.current = '';
+      setOpenedRecordDetail(null);
+      return;
+    }
+    if (hydratedRecordRef.current === recordIdFromUrl) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await dialysisApi.detail(recordIdFromUrl);
+        if (cancelled) return;
+        if (res.data.code !== 200 || !res.data.data) {
+          message.error(res.data.message || '透析记录详情加载失败');
+          return;
+        }
+        const detail = res.data.data;
+        setOpenedRecordDetail(detail);
+
+        if (isRealPatientId(detail.patient_id) && detail.patient_id !== selectedPatient) {
+          setSelectedPatient(detail.patient_id);
+        }
+        const detailDate = toFixedDateFromAny(detail.session_date);
+        if (detailDate) setSessionDate(detailDate);
+
+        form.setFieldsValue({
+          pre_weight: normNum(detail.pre_weight) ?? undefined,
+          blood_flow_rate: normNum(detail.blood_flow_rate) ?? undefined,
+          dialysate_flow_rate: normNum(detail.dialysate_flow_rate) ?? undefined,
+          dialysate_na: normNum(detail.dialysate_na) ?? undefined,
+          dialysate_ca: normNum(detail.dialysate_ca) ?? undefined,
+          dialysate_k: normNum(detail.dialysate_k) ?? undefined,
+          dialysate_temp: normNum(detail.dialysate_temp) ?? undefined,
+          heparin_prime_dose: normNum(detail.heparin_prime_dose) ?? undefined,
+          heparin_maintain: normNum(detail.heparin_maintain) ?? undefined,
+          puncture_result: detail.puncture_result ?? undefined,
+          puncture_method: detail.puncture_method ?? undefined,
+          coagulation_grade: detail.coagulation_grade ?? 0,
+          remark: detail.notes || undefined,
+          post_sbp: undefined,
+          post_dbp: undefined,
+          post_pulse: undefined,
+        });
+        setPostWeight(normNum(detail.post_weight) ?? null);
+        setDurationHours(
+          detail.actual_duration != null
+            ? Math.round((Number(detail.actual_duration) / 60) * 10) / 10
+            : null,
+        );
+        setPreBun(normNum(detail.pre_bun) ?? null);
+        setPostBun(normNum(detail.post_bun) ?? null);
+        setAccessType(detail.is_avf_session ? 'AVF' : 'TCC');
+
+        const vitals = Array.isArray(detail.vital_signs)
+          ? [...detail.vital_signs]
+              .sort((a, b) => {
+                const sa = Number(a.sequence_no ?? 9999);
+                const sb = Number(b.sequence_no ?? 9999);
+                if (sa !== sb) return sa - sb;
+                return String(a.record_time ?? '').localeCompare(String(b.record_time ?? ''));
+              })
+              .map((item, index) => ({
+                id: item.id || `vital-detail-${recordIdFromUrl}-${index}`,
+                time: toHHmm(item.record_time || item.time_label || ''),
+                values: {
+                  sbp: item.systolic_bp != null ? String(item.systolic_bp) : '',
+                  dbp: item.diastolic_bp != null ? String(item.diastolic_bp) : '',
+                  pulse: item.heart_rate != null ? String(item.heart_rate) : '',
+                  ap: item.arterial_pressure != null ? String(item.arterial_pressure) : '',
+                  vp: item.venous_pressure != null ? String(item.venous_pressure) : '',
+                  tmp: item.tmp != null ? String(item.tmp) : '',
+                  bloodflow: '',
+                  remark: item.notes || '',
+                  signature: '',
+                },
+              }))
+          : [];
+        setVitalRows(vitals.length > 0 ? vitals : [createVitalSignRow()]);
+
+        const validCompValues = new Set(COMPLICATIONS.map((item) => item.value));
+        const compValues: string[] = [];
+        const compRecords: Record<string, Record<string, unknown>> = {};
+        for (const comp of detail.complications || []) {
+          const compType = String(comp.comp_type || '').trim();
+          if (!compType || !validCompValues.has(compType)) continue;
+          if (!compValues.includes(compType)) compValues.push(compType);
+          const rawDetail = comp.detail && typeof comp.detail === 'object' ? comp.detail : {};
+          compRecords[compType] = {
+            ...(rawDetail as Record<string, unknown>),
+            occurrenceTime: toHHmm(comp.occurred_at || ''),
+            remark: comp.notes || (rawDetail as Record<string, unknown>).remark || '',
+          };
+        }
+        setComplications(compValues);
+        setComplicationRecords(compRecords);
+
+        const execMap: Record<string, boolean> = {};
+        for (const exec of detail.order_executions || []) {
+          if (!exec.long_term_order_id) continue;
+          execMap[exec.long_term_order_id] = exec.status === 'executed';
+        }
+        if (Object.keys(execMap).length > 0) {
+          setOrders((prev) => ({ ...prev, ...execMap }));
+        }
+
+        hydratedRecordRef.current = recordIdFromUrl;
+      } catch {
+        if (!cancelled) message.error('透析记录详情加载失败，请稍后重试');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recordIdFromUrl, selectedPatient, form]);
 
   const selectedDemoPatient = useMemo(
     () => isRealPatientId(selectedPatient)
@@ -1648,6 +2037,10 @@ export default function DialysisEntryPage() {
 
   /** prepare 就绪后恢复 sessionStorage 草稿（与处方刷新后再次叠加，以本地未入库编辑为准） */
   useEffect(() => {
+    if (recordIdFromUrl) {
+      setDraftSavedAtIso(null);
+      return;
+    }
     if (!selectedPatient) return;
     if (isRealPatientId(selectedPatient) && realPrepareData === null) return;
 
@@ -1660,6 +2053,7 @@ export default function DialysisEntryPage() {
     applyDialysisEntryDraftSnapshot(draft);
     setDraftSavedAtIso(draft.savedAt);
   }, [
+    recordIdFromUrl,
     selectedPatient,
     sessionDate,
     realPrepareData,
@@ -1817,7 +2211,7 @@ export default function DialysisEntryPage() {
   const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;
 
   const ktv = preBun && postBun && durationHours && postWeight
-    ? calcKtv(preBun, postBun, durationHours, (computedUF ?? 0) / 1000, postWeight)
+        ? calcSpKtv(preBun, postBun, durationHours, (computedUF ?? 0) / 1000, postWeight)
     : null;
   const urr = preBun && postBun ? calcUrr(preBun, postBun) : null;
   const ktvAdequate = ktv !== null ? ktv >= 1.2 : null;
@@ -2060,6 +2454,14 @@ export default function DialysisEntryPage() {
 
   const handlePrint = useCallback(() => {
     if (!selectedPatient) { message.warning('请先选择患者后再打印'); return; }
+    if (!recordIdFromUrl) {
+      message.warning('请先保存记录，再通过「历史记录查询」打开后打印');
+      return;
+    }
+    if (!openedRecordDetail) {
+      message.info('历史记录正在加载，请稍后再打印');
+      return;
+    }
     const patient = PATIENTS_LIST.find(p => p.value === selectedPatient);
     const formValues = form.getFieldsValue() as Record<string, unknown>;
     const html = generatePrintHtml({
@@ -2098,7 +2500,18 @@ export default function DialysisEntryPage() {
     durationHours, preBun, postBun, computedUF, ufPercent, ufAlert,
     accessType, catheterLocation, catheterDays, complications, complicationRecords,
     orders, orderDisplayList, vitalRows, ktv, urr, ktvAdequate, urrAdequate, form,
+    recordIdFromUrl, openedRecordDetail,
   ]);
+
+  useEffect(() => {
+    const autoPrint = searchParams.get('autoprint') === '1';
+    if (!autoPrint || !recordIdFromUrl || !openedRecordDetail) return;
+    if (openedRecordDetail.id !== recordIdFromUrl) return;
+    handlePrint();
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('autoprint');
+    navigate(`/dialysis/entry?${next.toString()}`, { replace: true });
+  }, [searchParams, recordIdFromUrl, openedRecordDetail, handlePrint, navigate]);
 
   return (
     <PageShell fullWidth>
@@ -2115,8 +2528,23 @@ export default function DialysisEntryPage() {
               临时保存 {dayjs(draftSavedAtIso).format('HH:mm:ss')}
             </span>
           ) : null}
+          {recordIdFromUrl ? (
+            <span className="hd-page-intro__chip">
+              历史记录 #{recordIdFromUrl.slice(0, 8)}
+            </span>
+          ) : null}
         </div>
       </div>
+
+      {recordIdFromUrl ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 10 }}
+          message={openedRecordDetail ? '已加载历史透析记录内容' : '正在加载历史透析记录内容…'}
+          description={openedRecordDetail ? `记录ID：${openedRecordDetail.id}` : `记录ID：${recordIdFromUrl}`}
+        />
+      ) : null}
 
       <div className="hd-filter-bar">
         <div className="hd-filter-bar__left">
@@ -2130,11 +2558,14 @@ export default function DialysisEntryPage() {
           />
         </div>
         <div className="hd-filter-bar__right">
+          <Button icon={<HistoryOutlined />} onClick={openHistoryQueryModal}>
+            历史记录查询
+          </Button>
           <Button icon={<PrinterOutlined />} onClick={handlePrint}>
             打印记录单
           </Button>
           <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit}>
-            保存记录
+            {recordIdFromUrl ? '保存为新记录' : '保存记录'}
           </Button>
         </div>
       </div>
@@ -3591,22 +4022,85 @@ export default function DialysisEntryPage() {
                       rules={field.required ? [{ required: true, message: `请至少选择一项${field.label}` }] : []}
                       style={{ marginBottom: 12 }}
                     >
-                      <Checkbox.Group style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {field.options.map(o => (
-                          <Checkbox key={o.value} value={o.value}
-                            style={{
-                              marginInlineStart: 0,
-                              padding: '3px 10px',
-                              border: '1px solid #E2E8F0',
-                              borderRadius: 5,
-                              fontSize: 12.5,
-                              background: '#FAFBFC',
-                            }}
-                          >
-                            {o.label}
-                          </Checkbox>
-                        ))}
-                      </Checkbox.Group>
+                      <Form.Item noStyle shouldUpdate={(prev, curr) => prev[field.key] !== curr[field.key]}>
+                        {() => {
+                          return (
+                            <Checkbox.Group
+                              style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
+                              onChange={(vals) => {
+                                const nextValues = vals as string[];
+                                field.options.forEach((o) => {
+                                  if (o.inputKey && !nextValues.includes(o.value)) {
+                                    treatmentForm.setFieldValue(o.inputKey, undefined);
+                                  }
+                                });
+                              }}
+                            >
+                              {field.options.map(o => {
+                                const withInput = !!o.inputKey;
+                                return (
+                                  <div
+                                    key={o.value}
+                                    style={{
+                                      marginInlineStart: 0,
+                                      padding: withInput ? '3px 8px' : '3px 10px',
+                                      border: '1px solid #E2E8F0',
+                                      borderRadius: 5,
+                                      fontSize: 12.5,
+                                      background: '#FAFBFC',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: withInput ? 4 : 0,
+                                    }}
+                                  >
+                                    <Checkbox value={o.value} style={{ marginInlineStart: 0 }}>
+                                      {o.label}
+                                    </Checkbox>
+                                    {withInput && (
+                                      <>
+                                        <span>（</span>
+                                        <Form.Item
+                                          noStyle
+                                          name={o.inputKey}
+                                          rules={[
+                                            ({ getFieldValue }) => ({
+                                              validator(_rule, value) {
+                                                const selected = (getFieldValue(field.key) as string[] | undefined) ?? [];
+                                                if (!selected.includes(o.value)) return Promise.resolve();
+                                                if (value === null || value === undefined || value === '') {
+                                                  return Promise.reject(new Error(o.inputRequiredMessage || `请填写${o.label}剂量`));
+                                                }
+                                                return Promise.resolve();
+                                              },
+                                            }),
+                                          ]}
+                                        >
+                                          <InputNumber
+                                            min={o.inputMin}
+                                            max={o.inputMax}
+                                            step={o.inputStep ?? 1}
+                                            precision={o.inputPrecision}
+                                            placeholder={o.inputPlaceholder}
+                                            style={{ width: 90 }}
+                                            size="small"
+                                            onFocus={() => {
+                                              const selected = (treatmentForm.getFieldValue(field.key) as string[] | undefined) ?? [];
+                                              if (!selected.includes(o.value)) {
+                                                treatmentForm.setFieldValue(field.key, [...selected, o.value]);
+                                              }
+                                            }}
+                                          />
+                                        </Form.Item>
+                                        <span>）{o.inputUnit ?? ''}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </Checkbox.Group>
+                          );
+                        }}
+                      </Form.Item>
                     </Form.Item>
                   );
                   return null;
@@ -3624,6 +4118,9 @@ export default function DialysisEntryPage() {
                 <WarningFilled /> 存在紧急并发症，请确认已通知医生
               </span>
             )}
+            <Button icon={<HistoryOutlined />} onClick={openHistoryQueryModal} size="large">
+              历史记录查询
+            </Button>
             <Button icon={<PrinterOutlined />} onClick={handlePrint} size="large">
               打印记录单
             </Button>
@@ -3633,6 +4130,180 @@ export default function DialysisEntryPage() {
           </div>
         </div>
       </Form>
+      <Modal
+        title="历史透析记录查询"
+        open={historyOpen}
+        onCancel={() => setHistoryOpen(false)}
+        footer={null}
+        width={1120}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+          <div style={{ minWidth: 230, flex: '1 1 230px' }}>
+            <div className="hd-toolbar-label" style={{ marginBottom: 6 }}>患者</div>
+            <Select
+              value={historyPatientId || undefined}
+              onChange={(val) => setHistoryPatientId(val || '')}
+              options={historyPatientOptions}
+              loading={historyPatientLoading}
+              placeholder="全部患者"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              style={{ width: '100%' }}
+            />
+          </div>
+          <div style={{ minWidth: 280, flex: '1 1 280px' }}>
+            <div className="hd-toolbar-label" style={{ marginBottom: 6 }}>透析日期范围</div>
+            <DatePicker.RangePicker
+              value={historyDateRange}
+              onChange={(dates) => setHistoryDateRange((dates as [Dayjs | null, Dayjs | null] | null) ?? null)}
+              style={{ width: '100%' }}
+            />
+          </div>
+          <div style={{ minWidth: 140, flex: '0 0 140px' }}>
+            <div className="hd-toolbar-label" style={{ marginBottom: 6 }}>班次</div>
+            <Select
+              value={historyShift}
+              onChange={(val) => setHistoryShift(val)}
+              options={[
+                { value: 'all', label: '全部班次' },
+                { value: 'morning', label: '早班' },
+                { value: 'afternoon', label: '中班' },
+                { value: 'evening', label: '晚班' },
+              ]}
+              style={{ width: '100%' }}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+            <Button
+              icon={<SearchOutlined />}
+              type="primary"
+              onClick={() => {
+                void loadHistoryRecords({ page: 1 });
+              }}
+              loading={historyLoading}
+            >
+              查询
+            </Button>
+            <Button
+              onClick={() => {
+                const resetPatientId =
+                  selectedPatient && isRealPatientId(selectedPatient) ? selectedPatient : '';
+                setHistoryPatientId(resetPatientId);
+                setHistoryShift('all');
+                setHistoryDateRange(null);
+                void loadHistoryRecords({
+                  page: 1,
+                  patientId: resetPatientId || undefined,
+                  shift: 'all',
+                  dateRange: null,
+                });
+              }}
+            >
+              重置
+            </Button>
+          </div>
+        </div>
+
+        <Table
+          rowKey="id"
+          size="small"
+          loading={historyLoading}
+          dataSource={historyRows}
+          scroll={{ x: 980 }}
+          locale={{ emptyText: '暂无符合条件的透析历史记录' }}
+          pagination={{
+            current: historyPage,
+            pageSize: historyPageSize,
+            total: historyTotal,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条`,
+            onChange: (page, pageSize) => {
+              void loadHistoryRecords({ page, pageSize });
+            },
+          }}
+          columns={[
+            {
+              title: '透析日期',
+              dataIndex: 'session_date',
+              width: 130,
+              render: (value: string) => {
+                const parsed = toFixedDateFromAny(value)?.format('YYYY-MM-DD');
+                if (parsed) return parsed;
+                const fallback = String(value || '').slice(0, 10);
+                return fallback || '—';
+              },
+            },
+            {
+              title: '患者',
+              dataIndex: 'patient_name',
+              width: 170,
+              render: (value: string | undefined) => value || '—',
+            },
+            {
+              title: '班次',
+              dataIndex: 'shift',
+              width: 90,
+              render: (value: string) => <Tag color="blue" style={{ margin: 0 }}>{shiftLabelFromRecord(value)}</Tag>,
+            },
+            {
+              title: '透前/透后体重',
+              key: 'weights',
+              width: 150,
+              render: (_value: unknown, record: DialysisRecordListRow) =>
+                `${record.pre_weight ?? '—'} / ${record.post_weight ?? '—'} kg`,
+            },
+            {
+              title: '超滤量',
+              dataIndex: 'uf_volume',
+              width: 90,
+              render: (value: number | null) => (value != null ? `${value} mL` : '—'),
+            },
+            {
+              title: 'Kt/V',
+              dataIndex: 'ktv',
+              width: 80,
+              render: (value: number | null) => (value != null ? value : '—'),
+            },
+            {
+              title: '记录护士',
+              dataIndex: 'nurse_name',
+              width: 110,
+              render: (value: string | undefined) => value || '—',
+            },
+            {
+              title: '操作',
+              key: 'actions',
+              width: 190,
+              fixed: 'right',
+              render: (_value: unknown, record: DialysisRecordListRow) => (
+                <Space size={6}>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      void openHistoryRecord(record.id, false);
+                    }}
+                    loading={historyActionLoadingId === record.id}
+                  >
+                    打开记录
+                  </Button>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      void openHistoryRecord(record.id, true);
+                    }}
+                    loading={historyActionLoadingId === record.id}
+                  >
+                    打印
+                  </Button>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Modal>
       {anomalyCtx && selectedPatient && isRealPatientId(selectedPatient) ? (
         <AnomalyAnalysisModal
           open={anomalyOpen}

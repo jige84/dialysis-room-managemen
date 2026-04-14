@@ -1,0 +1,140 @@
+name: release-hardening-gates
+
+on:
+  push:
+    branches:
+      - main
+      - release-hardening
+      - 'release-hardening/**'
+  pull_request:
+
+jobs:
+  frontend-gates:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  backend-gates:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_NAME: hemodialysis_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      ENCRYPT_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      PORT: 3080
+      NODE_ENV: test
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create app database
+        run: psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -c "CREATE DATABASE hemodialysis_db;"
+
+      - name: Run migrations
+        run: npm run migrate
+
+      - name: Seed users for smoke tests
+        run: node seedUsers.js
+
+      - name: Start backend server
+        run: |
+          nohup node src/server.js > ../backend-server.log 2>&1 &
+          echo $! > ../backend-server.pid
+
+      - name: Wait for health endpoint
+        run: |
+          for i in {1..40}; do
+            if curl -fsS "http://127.0.0.1:3080/health" >/dev/null; then
+              echo "Backend is healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become healthy in time."
+          exit 1
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: RBAC matrix smoke
+        env:
+          RBAC_STRICT: "true"
+        run: npm run test:rbac-matrix
+
+      - name: Auth chain smoke
+        run: npm run test:auth-chain
+
+      - name: Baseline artifact generation
+        run: npm run hardening:baseline
+
+      - name: Migration audit
+        run: npm run audit:migrations
+
+      - name: DB drill rehearsal
+        run: npm run db:drill
+
+      - name: Smoke readiness
+        run: npm run test:smoke-readiness
+
+      - name: Smoke five modules
+        run: npm run test:smoke-five-modules
+
+      - name: Upload backend logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-logs
+          path: |
+            backend-server.log
+            backend/logs

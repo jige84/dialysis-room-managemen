@@ -1,0 +1,37 @@
+{
+  "runId": "20260414-161248",
+  "generatedAt": "2026-04-14T08:12:49.029Z",
+  "metrics": {
+    "backingLogFile": "E:\\xuetoushiguanli\\backend\\logs\\2026-04-14.log",
+    "requestTotal": 729,
+    "status2xx": 465,
+    "status4xx": 264,
+    "status5xx": 0,
+    "api5xxRatePct": 0,
+    "errorLines": 0,
+    "unauthorizedEvents": 66,
+    "forbiddenEvents": 170,
+    "scheduledTaskSuccess": 3,
+    "scheduledTaskFailure": 0
+  },
+  "db": {
+    "patientsTotal": 74,
+    "activeAlerts": 3374,
+    "last24h": {
+      "dialysisRecords": {
+        "count": 0,
+        "timeColumn": "created_at"
+      },
+      "infectionScreenings": {
+        "count": 0,
+        "timeColumn": "created_at"
+      },
+      "auditLogs": {
+        "count": 2,
+        "timeColumn": "created_at"
+      }
+    }
+  },
+  "caveats": [],
+  "overallStatus": "稳定"
+}

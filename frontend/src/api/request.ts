@@ -83,6 +83,15 @@ request.interceptors.response.use(
       window.location.href = '/login';
     } else if (status === 403) {
       message.error('权限不足，无法执行此操作');
+    } else if (status === 502) {
+      const onLocalDevHost =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      if (onLocalDevHost) {
+        message.error('后端服务不可达，请确认 backend 已启动（默认 http://localhost:3080）');
+      } else {
+        message.error('网关错误，请稍后重试');
+      }
     } else if (status === 503) {
       // 常见于 AI 未配置或服务不可用，避免与「服务器内部故障」混淆
       message.warning(serverMsg);

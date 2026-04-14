@@ -1,7 +1,8 @@
 /**
  * 历史资料文件夹导入
  * 主要作用：解析多份历史 Excel，聚合为患者草稿，并按患者/化验/长期医嘱分批导入。
- * 首版范围：患者档案草稿、联系方式、责任护士、化验结果、长期医嘱；护理记录单仅识别提示，不自动入库。
+ * 首版范围：患者档案草稿、联系方式、责任护士、化验结果、长期医嘱；
+ * 护理记录单支持最小可用自动导入（患者 + 日期 + 班次 + 核心体重/UF字段）。
  */
 const ExcelJS = require('exceljs');
 const { encrypt, decrypt } = require('../utils/encrypt');
@@ -42,6 +43,14 @@ function formatDateOnly(date) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function addDaysToDateKey(dateKey, offsetDays) {
+  if (!dateKey || !Number.isFinite(offsetDays) || offsetDays === 0) return dateKey;
+  const base = new Date(`${dateKey}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return dateKey;
+  base.setDate(base.getDate() + offsetDays);
+  return formatDateOnly(base);
 }
 
 function cellToPlain(value) {
@@ -99,6 +108,344 @@ function parseNumber(raw) {
   if (raw == null || raw === '') return null;
   const n = Number(cellToPlain(raw));
   return Number.isFinite(n) ? n : null;
+}
+
+function parseSheetDateByName(sheetName, fileName) {
+  const text = normalizeWhitespace(sheetName);
+  if (!text) return null;
+  const full = text.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:\s*\((\d+)\))?/);
+  if (full) {
+    const year = Number(full[1]);
+    const month = Number(full[2]);
+    const day = Number(full[3]);
+    if (year >= 2000 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const base = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const dupIndex = Number(full[4] || 1);
+      if (Number.isFinite(dupIndex) && dupIndex > 1) return addDaysToDateKey(base, dupIndex - 1);
+      return base;
+    }
+  }
+
+  const monthDay = text.match(/(\d{1,2})\s*[-/.月]\s*(\d{1,2})(?:\s*\((\d+)\))?/);
+  if (!monthDay) return null;
+  const month = Number(monthDay[1]);
+  const day = Number(monthDay[2]);
+  if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) return null;
+
+  const yearFromFile = String(fileName || '').match(/(20\d{2})/);
+  const year = yearFromFile ? Number(yearFromFile[1]) : new Date().getFullYear();
+  const base = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const dupIndex = Number(monthDay[3] || 1);
+  if (Number.isFinite(dupIndex) && dupIndex > 1) return addDaysToDateKey(base, dupIndex - 1);
+  return base;
+}
+
+function inferPatientNameFromFileName(fileName) {
+  const base = String(fileName || '').replace(/\.xlsx$/i, '');
+  const matched = base.match(/^(.+?)[-_ ]*(?:护理|透析)记录单/);
+  const name = normalizeName(matched ? matched[1] : '');
+  return name || null;
+}
+
+function isLikelyPersonName(text) {
+  const name = normalizeName(text);
+  if (!name) return false;
+  if (name.length < 2 || name.length > 4) return false;
+  if (/\d/.test(name)) return false;
+  if (/(护士|签名|医生|透析|记录|姓名|住院号|上机|下机|核对|性别|年龄|诊断|病情)/.test(name)) return false;
+  return true;
+}
+
+function findTextNearLabel(sheet, labelKeywords, maxOffset = 16) {
+  for (let rowIndex = 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
+    const row = sheet.getRow(rowIndex);
+    for (let col = 1; col <= row.cellCount; col += 1) {
+      const label = normalizeWhitespace(cellToPlain(row.getCell(col).value));
+      if (!label) continue;
+      if (!labelKeywords.some((keyword) => label.includes(keyword))) continue;
+
+      for (let offset = 1; offset <= maxOffset; offset += 1) {
+        const value = normalizeWhitespace(cellToPlain(row.getCell(col + offset).value));
+        if (!value) continue;
+        if (labelKeywords.some((keyword) => value.includes(keyword))) continue;
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+function findNumberNearLabel(sheet, labelKeywords, maxOffset = 20) {
+  for (let rowIndex = 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
+    const row = sheet.getRow(rowIndex);
+    for (let col = 1; col <= row.cellCount; col += 1) {
+      const label = normalizeWhitespace(cellToPlain(row.getCell(col).value));
+      if (!label) continue;
+      if (!labelKeywords.some((keyword) => label.includes(keyword))) continue;
+
+      for (let offset = 1; offset <= maxOffset; offset += 1) {
+        const value = parseNumber(row.getCell(col + offset).value);
+        if (value != null) return value;
+      }
+    }
+  }
+  return null;
+}
+
+function parseSheetShift(sheetName) {
+  const text = normalizeWhitespace(sheetName).toLowerCase();
+  if (text.includes('晚') || text.includes('夜') || text.includes('evening')) return 'evening';
+  if (text.includes('下午') || text.includes('中班') || text.includes('afternoon')) return 'afternoon';
+  return 'morning';
+}
+
+function toDialysisDurationMinutes(hoursOrMinutes) {
+  if (hoursOrMinutes == null) return null;
+  if (hoursOrMinutes > 0 && hoursOrMinutes <= 24) {
+    const minutes = Math.round(hoursOrMinutes * 60);
+    return minutes >= 30 && minutes <= 24 * 60 ? minutes : null;
+  }
+  if (hoursOrMinutes > 24 && hoursOrMinutes <= 24 * 60) {
+    const minutes = Math.round(hoursOrMinutes);
+    return minutes >= 30 && minutes <= 24 * 60 ? minutes : null;
+  }
+  return null;
+}
+
+function normalizeDialysisWeight(value) {
+  if (value == null) return null;
+  if (value < 20 || value > 250) return null;
+  return value;
+}
+
+function normalizeDialysisUf(value) {
+  if (value == null) return null;
+  if (value < 0 || value > 20) return null;
+  return value;
+}
+
+function normalizeDialysisDurationHours(value) {
+  if (value == null) return null;
+  if (value < 0.5 || value > 8) return null;
+  return value;
+}
+
+function normalizeDialysisFlowRate(value) {
+  if (value == null) return null;
+  if (value < 20 || value > 800) return null;
+  return Math.round(value);
+}
+
+function normalizeHeparinDose(value) {
+  if (value == null) return null;
+  if (value < 100 || value > 20000) return null;
+  return Math.round(value);
+}
+
+function normalizeDialysisTemperature(value) {
+  if (value == null) return null;
+  if (value < 30 || value > 45) return null;
+  return Math.round(value * 10) / 10;
+}
+
+function normalizeCoagulationGrade(value) {
+  if (value == null) return null;
+  const rounded = Math.round(value);
+  if (rounded < 0 || rounded > 3) return null;
+  return rounded;
+}
+
+function parseTimeLabel(raw) {
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+    const hh = String(raw.getHours()).padStart(2, '0');
+    const mm = String(raw.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw < 1) {
+    const totalMinutes = Math.round(raw * 24 * 60);
+    const hh = String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0');
+    const mm = String(totalMinutes % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+
+  const text = normalizeWhitespace(cellToPlain(raw)).replace(/：/g, ':');
+  if (!text) return null;
+  const normalizedDate = text.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (normalizedDate && text.length >= 10) {
+    const parsedDateTime = new Date(text);
+    if (!Number.isNaN(parsedDateTime.getTime())) {
+      const hh = String(parsedDateTime.getHours()).padStart(2, '0');
+      const mm = String(parsedDateTime.getMinutes()).padStart(2, '0');
+      return `${hh}:${mm}`;
+    }
+  }
+  const hhmm = text.match(/([01]?\d|2[0-3])\s*:\s*([0-5]\d)/);
+  if (hhmm) {
+    return `${String(Number(hhmm[1])).padStart(2, '0')}:${hhmm[2]}`;
+  }
+  const hourOnly = text.match(/^([01]?\d|2[0-3])$/);
+  if (hourOnly) return `${String(Number(hourOnly[1])).padStart(2, '0')}:00`;
+  return null;
+}
+
+function parseBpPair(raw) {
+  const text = normalizeWhitespace(cellToPlain(raw)).replace(/[／]/g, '/');
+  if (!text) return { systolic: null, diastolic: null };
+  const match = text.match(/(\d{2,3})\s*\/\s*(\d{2,3})/);
+  if (!match) return { systolic: null, diastolic: null };
+  const systolic = Number(match[1]);
+  const diastolic = Number(match[2]);
+  if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
+    return { systolic: null, diastolic: null };
+  }
+  return {
+    systolic: systolic >= 50 && systolic <= 260 ? Math.round(systolic) : null,
+    diastolic: diastolic >= 20 && diastolic <= 160 ? Math.round(diastolic) : null,
+  };
+}
+
+function normalizeSmallInt(raw, min, max) {
+  const value = parseNumber(raw);
+  if (value == null) return null;
+  const rounded = Math.round(value);
+  if (rounded < min || rounded > max) return null;
+  return rounded;
+}
+
+function getRowCellValueNear(row, startCol, maxSpan = 4) {
+  if (!startCol || !Number.isFinite(startCol)) return null;
+  for (let offset = 0; offset <= maxSpan; offset += 1) {
+    const cell = row.getCell(startCol + offset);
+    const text = normalizeWhitespace(cellToPlain(cell.value));
+    if (text) return cell.value;
+  }
+  return null;
+}
+
+function findPersonNameNearLabel(sheet, labelKeywords, maxOffset = 80) {
+  for (let rowIndex = 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
+    const row = sheet.getRow(rowIndex);
+    for (let col = 1; col <= row.cellCount; col += 1) {
+      const label = normalizeWhitespace(cellToPlain(row.getCell(col).value));
+      if (!label) continue;
+      if (!labelKeywords.some((keyword) => label.includes(keyword))) continue;
+
+      for (let offset = 1; offset <= maxOffset; offset += 1) {
+        const valueRaw = cellToPlain(row.getCell(col + offset).value);
+        if (!valueRaw) continue;
+        const value = normalizeName(valueRaw);
+        if (!value) continue;
+        if (isLikelyPersonName(value)) return value;
+      }
+    }
+  }
+  return null;
+}
+
+function parseNursingVitalSigns(sheet, sessionDate) {
+  let headerRowIndex = null;
+  const headerCols = {
+    time: null,
+    bp: null,
+    pulse: null,
+    ap: null,
+    vp: null,
+    tmp: null,
+    bloodFlow: null,
+    temp: null,
+    note: null,
+  };
+
+  for (let rowIndex = 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
+    const row = sheet.getRow(rowIndex);
+    let hasTime = false;
+    let hasBp = false;
+    let hasPulse = false;
+
+    for (let col = 1; col <= row.cellCount; col += 1) {
+      const text = normalizeHeader(cellToPlain(row.getCell(col).value));
+      if (!text) continue;
+      if (text.includes('时间')) {
+        hasTime = true;
+        if (!headerCols.time) headerCols.time = col;
+      }
+      if (text.includes('血压') || text === 'BP') {
+        hasBp = true;
+        if (!headerCols.bp) headerCols.bp = col;
+      }
+      if (text.includes('心率') || text.includes('脉搏') || text === 'P') {
+        hasPulse = true;
+        if (!headerCols.pulse) headerCols.pulse = col;
+      }
+      if ((text.includes('动脉压') || text.includes('AP')) && !headerCols.ap) headerCols.ap = col;
+      if ((text.includes('静脉压') || text.includes('VP')) && !headerCols.vp) headerCols.vp = col;
+      if ((text.includes('跨膜压') || text.includes('TMP')) && !headerCols.tmp) headerCols.tmp = col;
+      if (text.includes('血流速') && !headerCols.bloodFlow) headerCols.bloodFlow = col;
+      if ((text.includes('温度') || text.includes('体温')) && !headerCols.temp) headerCols.temp = col;
+      if (text.includes('病情变化') && !headerCols.note) headerCols.note = col;
+    }
+
+    if (hasTime && hasBp && hasPulse) {
+      headerRowIndex = rowIndex;
+      break;
+    }
+  }
+
+  if (!headerRowIndex || !headerCols.time) return [];
+
+  const vitals = [];
+  let emptyStreak = 0;
+  const maxRows = Math.min(sheet.rowCount, headerRowIndex + 24);
+  for (let rowIndex = headerRowIndex + 1; rowIndex <= maxRows; rowIndex += 1) {
+    const row = sheet.getRow(rowIndex);
+    const leftText = normalizeHeader(
+      `${cellToPlain(row.getCell(1).value)} ${cellToPlain(row.getCell(2).value)} ${cellToPlain(row.getCell(3).value)}`
+    );
+    if (leftText.includes('下机后')) break;
+
+    const timeLabel = parseTimeLabel(getRowCellValueNear(row, headerCols.time, 4));
+    const bpValue = getRowCellValueNear(row, headerCols.bp, 8);
+    const bp = parseBpPair(bpValue);
+    const pulse = normalizeSmallInt(getRowCellValueNear(row, headerCols.pulse, 4), 20, 220);
+    const ap = normalizeSmallInt(getRowCellValueNear(row, headerCols.ap, 4), -500, 100);
+    const vp = normalizeSmallInt(getRowCellValueNear(row, headerCols.vp, 4), -50, 400);
+    const tmp = normalizeSmallInt(getRowCellValueNear(row, headerCols.tmp, 4), -100, 400);
+    const bodyTemp = normalizeDialysisTemperature(parseNumber(getRowCellValueNear(row, headerCols.temp, 4)));
+    const note = normalizeWhitespace(cellToPlain(getRowCellValueNear(row, headerCols.note, 8))) || null;
+
+    const hasMetric =
+      bp.systolic != null ||
+      bp.diastolic != null ||
+      pulse != null ||
+      ap != null ||
+      vp != null ||
+      tmp != null ||
+      bodyTemp != null ||
+      note;
+
+    if (!hasMetric) {
+      emptyStreak += 1;
+      if (emptyStreak >= 6 && vitals.length > 0) break;
+      continue;
+    }
+    emptyStreak = 0;
+
+    vitals.push({
+      sequence_no: vitals.length + 1,
+      time_label: timeLabel || null,
+      record_time: timeLabel ? `${sessionDate} ${timeLabel}:00` : null,
+      systolic_bp: bp.systolic,
+      diastolic_bp: bp.diastolic,
+      heart_rate: pulse,
+      arterial_pressure: ap,
+      venous_pressure: vp,
+      tmp,
+      body_temp: bodyTemp,
+      notes: note,
+    });
+  }
+
+  return vitals;
 }
 
 function inferDobGenderFromIdCard(idCard) {
@@ -162,6 +509,7 @@ function createEmptyParseResult() {
     nurseAssignments: [],
     labEntries: [],
     orderEntries: [],
+    dialysisEntries: [],
     unresolvedItems: [],
     unsupportedFiles: [],
   };
@@ -172,6 +520,7 @@ function mergeParseResult(target, next) {
   target.nurseAssignments.push(...next.nurseAssignments);
   target.labEntries.push(...next.labEntries);
   target.orderEntries.push(...next.orderEntries);
+  target.dialysisEntries.push(...next.dialysisEntries);
   target.unresolvedItems.push(...next.unresolvedItems);
   target.unsupportedFiles.push(...next.unsupportedFiles);
 }
@@ -190,7 +539,7 @@ function classifyFile(fileName, workbook) {
   if (fileName.includes('病历首页')) return 'medical_home';
   if (fileName.includes('化验记录表')) return 'labs';
   if (fileName.includes('医嘱记录单')) return 'orders';
-  if (fileName.includes('护理记录单')) return 'nursing_record';
+  if (fileName.includes('护理记录单') || fileName.includes('透析记录单')) return 'nursing_record';
 
   const firstSheet = workbook.worksheets[0];
   const row1 = firstSheet ? firstSheet.getRow(1) : null;
@@ -206,6 +555,7 @@ function classifyFile(fileName, workbook) {
   if (row1Text.includes('患者ID') && row1Text.includes('患者姓名') && row1Text.includes('简单病史')) return 'medical_home';
   if (row1Text.includes('spKt/V') || row1Text.includes('透前尿素氮C0')) return 'labs';
   if (row1Text.includes('用药品种') && row1Text.includes('是否持续使用')) return 'orders';
+  if (row1Text.includes('透析记录') || row1Text.includes('血液透析间期') || row1Text.includes('上机前')) return 'nursing_record';
   return 'unknown';
 }
 
@@ -355,17 +705,54 @@ async function parseNurseAssignmentWorkbook(workbook, fileName) {
     return result;
   }
 
-  const headerRow = sheet.getRow(2);
-  const nurseColumns = [];
-  headerRow.eachCell({ includeEmpty: false }, (cell, col) => {
-    const nurseName = normalizeName(cellToPlain(cell.value));
-    if (nurseName) nurseColumns.push({ col, nurseName });
-  });
+  function parseNurseColumnsFromRow(row) {
+    const cols = [];
+    row.eachCell({ includeEmpty: false }, (cell, col) => {
+      const nurseName = normalizeName(cellToPlain(cell.value));
+      if (!nurseName) return;
+      if (!isLikelyPersonName(nurseName)) return;
+      cols.push({
+        col,
+        nurseName,
+        isBold: Boolean(cell.font && cell.font.bold),
+      });
+    });
+    return cols;
+  }
+
+  const candidateRows = Math.min(sheet.rowCount, 8);
+  let best = null;
+  for (let rowIndex = 1; rowIndex <= candidateRows; rowIndex += 1) {
+    const row = sheet.getRow(rowIndex);
+    const cols = parseNurseColumnsFromRow(row);
+    if (cols.length === 0) continue;
+    const boldCount = cols.filter((item) => item.isBold).length;
+    const score = cols.length * 10 + boldCount * 3 - rowIndex;
+    if (!best || score > best.score) {
+      best = { rowIndex, cols, score };
+    }
+  }
+
+  const fallbackCols = parseNurseColumnsFromRow(sheet.getRow(2));
+  const nurseColumns = (best && best.cols.length >= 2 ? best.cols : fallbackCols)
+    .map((item) => ({ col: item.col, nurseName: item.nurseName }));
+  const headerRowIndex = best && best.cols.length >= 2 ? best.rowIndex : 2;
+
+  if (nurseColumns.length === 0) {
+    result.unresolvedItems.push({
+      category: 'nurse_assignment',
+      fileName,
+      rowIndex: 1,
+      patientName: null,
+      reason: '责任护士表头未识别到护士姓名列，请检查首行/次行是否为护士姓名',
+    });
+    return result;
+  }
 
   for (const nurseColumn of nurseColumns) {
-    for (let rowIndex = 3; rowIndex <= sheet.rowCount; rowIndex += 1) {
+    for (let rowIndex = headerRowIndex + 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
       const patientName = normalizeName(cellToPlain(sheet.getRow(rowIndex).getCell(nurseColumn.col).value));
-      if (!patientName) continue;
+      if (!patientName || !isLikelyPersonName(patientName)) continue;
       result.patientDraftInputs.push({
         source: 'nurse_assignment',
         fileName,
@@ -620,15 +1007,122 @@ async function parseOrderWorkbook(workbook, fileName) {
   return result;
 }
 
-async function parseNursingRecordWorkbook(_workbook, fileName) {
+async function parseNursingRecordWorkbook(workbook, fileName) {
   const result = createEmptyParseResult();
-  result.unresolvedItems.push({
-    category: 'nursing_record',
-    fileName,
-    rowIndex: 1,
-    patientName: null,
-    reason: '已识别为护理记录单，首版仅提示待人工录入，未自动写入系统',
-  });
+  const fileNamePatient = inferPatientNameFromFileName(fileName);
+  let parsedCount = 0;
+
+  for (let sheetIndex = 0; sheetIndex < workbook.worksheets.length; sheetIndex += 1) {
+    const sheet = workbook.worksheets[sheetIndex];
+    if (!sheet) continue;
+
+    const patientNameFromSheet = findTextNearLabel(sheet, ['姓名']);
+    const patientNameRaw = isLikelyPersonName(patientNameFromSheet) ? patientNameFromSheet : fileNamePatient;
+    const patientName = normalizeName(patientNameRaw);
+    const sessionDate = parseSheetDateByName(sheet.name, fileName);
+    const shift = parseSheetShift(sheet.name);
+
+    if (!patientName) {
+      result.unresolvedItems.push({
+        category: 'dialysis_patient',
+        fileName,
+        rowIndex: sheetIndex + 1,
+        patientName: null,
+        reason: `护理记录单工作表「${sheet.name}」未识别到患者姓名，无法导入透析记录`,
+      });
+      continue;
+    }
+    if (!sessionDate) {
+      result.unresolvedItems.push({
+        category: 'dialysis_date',
+        fileName,
+        rowIndex: sheetIndex + 1,
+        patientName,
+        reason: `护理记录单工作表「${sheet.name}」未识别到透析日期，已留待人工处理`,
+      });
+      continue;
+    }
+
+    const preWeight = normalizeDialysisWeight(findNumberNearLabel(sheet, ['透前体重'], 40));
+    const postWeight = normalizeDialysisWeight(findNumberNearLabel(sheet, ['透后体重'], 40));
+    const ufVolume = normalizeDialysisUf(findNumberNearLabel(sheet, ['实际脱水', '实际超滤量'], 40));
+    const durationHours = normalizeDialysisDurationHours(findNumberNearLabel(sheet, ['实际透析时间'], 40));
+    const bloodFlowRate = normalizeDialysisFlowRate(findNumberNearLabel(sheet, ['血流速'], 40));
+    const dialysateTemp = normalizeDialysisTemperature(findNumberNearLabel(sheet, ['温度', '体温'], 40));
+    const heparinPrimeDose = normalizeHeparinDose(findNumberNearLabel(sheet, ['首剂'], 40));
+    const coagulationGrade = normalizeCoagulationGrade(findNumberNearLabel(sheet, ['滤器凝血', '凝血情况'], 40));
+    const diagnosisText = normalizeWhitespace(findTextNearLabel(sheet, ['诊断'], 60));
+    const accessHint = normalizeWhitespace(findTextNearLabel(sheet, ['通路', '置管', '内瘘'], 60));
+    let isAvfSession = null;
+    if (accessHint) {
+      if (/(导管|置管|tcc|cvc)/i.test(accessHint)) isAvfSession = false;
+      if (/(内瘘|avf|avg)/i.test(accessHint)) isAvfSession = true;
+    }
+
+    const nurseName =
+      findPersonNameNearLabel(sheet, ['上机护士', '护士签名', '穿刺护士', '二次核对护士'], 80) ||
+      (() => {
+        const nurseNameRaw = findTextNearLabel(sheet, ['上机护士', '护士签名', '穿刺护士', '二次核对护士'], 80);
+        return isLikelyPersonName(nurseNameRaw) ? normalizeName(nurseNameRaw) : null;
+      })();
+
+    const vitalSigns = parseNursingVitalSigns(sheet, sessionDate);
+    const notes = buildNotes([
+      `来源=历史护理记录单:${fileName}/${sheet.name}`,
+      preWeight != null ? `透前体重=${preWeight}kg` : null,
+      postWeight != null ? `透后体重=${postWeight}kg` : null,
+      ufVolume != null ? `实际超滤量=${ufVolume}` : null,
+      durationHours != null ? `实际透析时长=${durationHours}h` : null,
+      bloodFlowRate != null ? `血流速=${bloodFlowRate}` : null,
+      dialysateTemp != null ? `透析液温度=${dialysateTemp}` : null,
+      heparinPrimeDose != null ? `肝素首剂=${heparinPrimeDose}` : null,
+      coagulationGrade != null ? `滤器凝血分级=${coagulationGrade}` : null,
+      diagnosisText ? `诊断=${diagnosisText}` : null,
+      vitalSigns.length ? `生命体征行数=${vitalSigns.length}` : null,
+      nurseName ? `表内护士=${nurseName}` : null,
+    ]);
+
+    result.patientDraftInputs.push({
+      source: 'nursing_record',
+      fileName,
+      rowIndex: sheetIndex + 1,
+      patientCode: null,
+      name: patientName,
+    });
+
+    result.dialysisEntries.push({
+      fileName,
+      sheetName: sheet.name,
+      rowIndex: sheetIndex + 1,
+      patientCode: null,
+      patientName,
+      session_date: sessionDate,
+      shift,
+      pre_weight: preWeight,
+      post_weight: postWeight,
+      uf_volume: ufVolume,
+      actual_duration: toDialysisDurationMinutes(durationHours),
+      blood_flow_rate: bloodFlowRate,
+      dialysate_temp: dialysateTemp,
+      heparin_prime_dose: heparinPrimeDose,
+      coagulation_grade: coagulationGrade,
+      is_avf_session: isAvfSession,
+      vital_signs: vitalSigns,
+      nurse_name: nurseName,
+      notes,
+    });
+    parsedCount += 1;
+  }
+
+  if (parsedCount === 0) {
+    result.unresolvedItems.push({
+      category: 'nursing_record',
+      fileName,
+      rowIndex: 1,
+      patientName: fileNamePatient,
+      reason: '已识别为护理记录单，但未提取到可自动导入的透析记录，请人工补录',
+    });
+  }
   return result;
 }
 
@@ -1001,6 +1495,176 @@ async function orderExists(client, patientId, order) {
   return rows.length > 0;
 }
 
+function buildNursingSourceTag(entry) {
+  if (!entry || !entry.fileName || !entry.sheetName) return null;
+  return `来源=历史护理记录单:${entry.fileName}/${entry.sheetName}`;
+}
+
+function mergeNotes(existingNotes, incomingNotes) {
+  const oldText = normalizeWhitespace(existingNotes);
+  const nextText = normalizeWhitespace(incomingNotes);
+  if (!nextText) return oldText || null;
+  if (!oldText) return nextText;
+  if (oldText.includes(nextText)) return oldText;
+  return `${oldText}；${nextText}`;
+}
+
+async function findExistingDialysisRecord(client, patientId, entry) {
+  const sourceTag = buildNursingSourceTag(entry);
+  if (sourceTag) {
+    const bySource = await client.query(
+      `SELECT id, patient_id, session_date, shift, pre_weight, post_weight, uf_volume, actual_duration,
+              blood_flow_rate, dialysate_temp, heparin_prime_dose, coagulation_grade, is_avf_session, notes
+         FROM dialysis_records
+        WHERE patient_id = $1
+          AND COALESCE(notes, '') LIKE $2
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [patientId, `%${sourceTag}%`],
+    );
+    if (bySource.rows.length > 0) return bySource.rows[0];
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, patient_id, session_date, shift, pre_weight, post_weight, uf_volume, actual_duration,
+            blood_flow_rate, dialysate_temp, heparin_prime_dose, coagulation_grade, is_avf_session, notes
+       FROM dialysis_records
+      WHERE patient_id = $1
+        AND session_date = $2
+        AND shift = $3
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [patientId, entry.session_date, entry.shift || 'morning'],
+  );
+  return rows[0] || null;
+}
+
+async function insertVitalSignsForDialysis(
+  client,
+  actorUserId,
+  dialysisRecordId,
+  patientId,
+  vitalSigns,
+  sessionDateKey = null,
+) {
+  if (!Array.isArray(vitalSigns) || vitalSigns.length === 0) return 0;
+  const existingCountRes = await client.query(
+    'SELECT COUNT(*)::int AS c FROM vital_signs WHERE dialysis_record_id = $1',
+    [dialysisRecordId],
+  );
+  if ((existingCountRes.rows[0]?.c || 0) > 0) return 0;
+
+  let inserted = 0;
+  for (let i = 0; i < vitalSigns.length; i += 1) {
+    const item = vitalSigns[i] || {};
+    const hasPayload = Boolean(
+      item.systolic_bp != null ||
+      item.diastolic_bp != null ||
+      item.heart_rate != null ||
+      item.arterial_pressure != null ||
+      item.venous_pressure != null ||
+      item.tmp != null ||
+      item.body_temp != null ||
+      normalizeWhitespace(item.notes) ||
+      normalizeWhitespace(item.time_label),
+    );
+    if (!hasPayload) continue;
+
+    const sequenceNo = Number.isFinite(Number(item.sequence_no))
+      ? Math.max(1, Math.min(32767, Math.round(Number(item.sequence_no))))
+      : i + 1;
+    let recordTime = normalizeWhitespace(item.record_time);
+    if (!recordTime && normalizeWhitespace(item.time_label)) {
+      const t = parseTimeLabel(item.time_label);
+      if (t) {
+        const d = sessionDateKey || formatDateOnly(new Date());
+        recordTime = `${d} ${t}:00`;
+      }
+    }
+    if (!recordTime) {
+      const baseMinutes = 6 * 60 + (sequenceNo - 1) * 50;
+      const hh = String(Math.floor(baseMinutes / 60) % 24).padStart(2, '0');
+      const mm = String(baseMinutes % 60).padStart(2, '0');
+      const d = sessionDateKey || formatDateOnly(new Date());
+      recordTime = `${d} ${hh}:${mm}:00`;
+    }
+
+    await client.query(
+      `INSERT INTO vital_signs (
+         dialysis_record_id, patient_id, record_time, time_label, sequence_no,
+         systolic_bp, diastolic_bp, heart_rate, arterial_pressure, venous_pressure, tmp, body_temp,
+         notes, recorded_by
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+       )`,
+      [
+        dialysisRecordId,
+        patientId,
+        recordTime,
+        item.time_label || null,
+        sequenceNo,
+        item.systolic_bp != null ? item.systolic_bp : null,
+        item.diastolic_bp != null ? item.diastolic_bp : null,
+        item.heart_rate != null ? item.heart_rate : null,
+        item.arterial_pressure != null ? item.arterial_pressure : null,
+        item.venous_pressure != null ? item.venous_pressure : null,
+        item.tmp != null ? item.tmp : null,
+        item.body_temp != null ? item.body_temp : null,
+        normalizeWhitespace(item.notes) || null,
+        actorUserId,
+      ],
+    );
+    inserted += 1;
+  }
+  return inserted;
+}
+
+async function patchExistingDialysisRecord(client, existingRow, entry) {
+  const sets = [];
+  const params = [];
+  let index = 1;
+  const nullableFields = [
+    'pre_weight',
+    'post_weight',
+    'uf_volume',
+    'actual_duration',
+    'blood_flow_rate',
+    'dialysate_temp',
+    'heparin_prime_dose',
+    'coagulation_grade',
+  ];
+
+  nullableFields.forEach((field) => {
+    if (existingRow[field] == null && entry[field] != null) {
+      sets.push(`${field} = $${index++}`);
+      params.push(entry[field]);
+    }
+  });
+
+  if (existingRow.is_avf_session == null && entry.is_avf_session != null) {
+    sets.push(`is_avf_session = $${index++}`);
+    params.push(entry.is_avf_session);
+  }
+
+  const mergedNotes = mergeNotes(existingRow.notes, entry.notes);
+  if (mergedNotes !== (existingRow.notes || null)) {
+    sets.push(`notes = $${index++}`);
+    params.push(mergedNotes);
+  }
+
+  if (sets.length === 0) return existingRow;
+  params.push(existingRow.id);
+  const { rows } = await client.query(
+    `UPDATE dialysis_records
+        SET ${sets.join(', ')}, updated_at = NOW()
+      WHERE id = $${index}
+      RETURNING id, patient_id, session_date, shift, pre_weight, post_weight, uf_volume, actual_duration,
+                blood_flow_rate, dialysate_temp, heparin_prime_dose, coagulation_grade, is_avf_session, notes`,
+    params,
+  );
+  return rows[0] || existingRow;
+}
+
 async function insertLabEntry(client, actorUserId, binding, entry) {
   const { rows } = await client.query(
     `INSERT INTO lab_results (
@@ -1071,6 +1735,93 @@ async function insertOrderEntry(client, actorUserId, binding, entry, doctorsByNa
     ],
   );
   return rows[0];
+}
+
+function resolveDialysisNurseId(entry, draft, users, actorUserId, unresolvedItems) {
+  if (!entry.nurse_name) return draft.responsible_nurse_id || actorUserId;
+  const nurses = users.nursesByName.get(entry.nurse_name) || [];
+  if (nurses.length === 1) return nurses[0].id;
+
+  unresolvedItems.push({
+    category: nurses.length === 0 ? 'dialysis_nurse_missing' : 'dialysis_nurse_ambiguous',
+    fileName: entry.fileName,
+    rowIndex: entry.rowIndex,
+    patientName: entry.patientName,
+    reason:
+      nurses.length === 0
+        ? `透析记录护士「${entry.nurse_name}」未在系统找到，已回退到默认导入人员`
+        : `透析记录护士「${entry.nurse_name}」匹配到多个账号，已回退到默认导入人员`,
+  });
+  return draft.responsible_nurse_id || actorUserId;
+}
+
+async function insertDialysisEntry(client, actorUserId, draft, binding, entry, users, unresolvedItems) {
+  const nurseId = resolveDialysisNurseId(entry, draft, users, actorUserId, unresolvedItems);
+  const { rows } = await client.query(
+    `INSERT INTO dialysis_records (
+       patient_id, session_date, shift, nurse_id,
+       pre_weight, post_weight, uf_volume, actual_duration,
+       blood_flow_rate, dialysate_temp, heparin_prime_dose, coagulation_grade, is_avf_session,
+       notes
+     ) VALUES (
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+     )
+     RETURNING id, patient_id, session_date, shift, pre_weight, post_weight, uf_volume, actual_duration,
+               blood_flow_rate, dialysate_temp, heparin_prime_dose, coagulation_grade, is_avf_session, notes`,
+    [
+      binding.patient_id,
+      entry.session_date,
+      entry.shift || 'morning',
+      nurseId,
+      entry.pre_weight != null ? entry.pre_weight : null,
+      entry.post_weight != null ? entry.post_weight : null,
+      entry.uf_volume != null ? entry.uf_volume : null,
+      entry.actual_duration != null ? entry.actual_duration : null,
+      entry.blood_flow_rate != null ? entry.blood_flow_rate : null,
+      entry.dialysate_temp != null ? entry.dialysate_temp : null,
+      entry.heparin_prime_dose != null ? entry.heparin_prime_dose : null,
+      entry.coagulation_grade != null ? entry.coagulation_grade : null,
+      entry.is_avf_session != null ? entry.is_avf_session : null,
+      entry.notes || null,
+    ],
+  );
+  const saved = rows[0];
+  await insertVitalSignsForDialysis(
+    client,
+    actorUserId,
+    saved.id,
+    binding.patient_id,
+    entry.vital_signs || [],
+    entry.session_date || null,
+  );
+  return saved;
+}
+
+async function upsertDialysisEntry(client, actorUserId, draft, binding, entry, users, unresolvedItems) {
+  const existing = await findExistingDialysisRecord(client, binding.patient_id, entry);
+  if (existing) {
+    const patched = await patchExistingDialysisRecord(client, existing, entry);
+    await insertVitalSignsForDialysis(
+      client,
+      actorUserId,
+      patched.id,
+      binding.patient_id,
+      entry.vital_signs || [],
+      entry.session_date || null,
+    );
+    return { created: false, row: patched };
+  }
+
+  const inserted = await insertDialysisEntry(
+    client,
+    actorUserId,
+    draft,
+    binding,
+    entry,
+    users,
+    unresolvedItems,
+  );
+  return { created: true, row: inserted };
 }
 
 function pushReferenceUnresolved(unresolvedItems, category, entry, reason) {
@@ -1197,6 +1948,29 @@ async function buildImportPlan(client, files) {
     });
   });
 
+  const dialysisPlans = [];
+  const dialysisPlanKeys = new Set();
+  parsed.dialysisEntries.forEach((entry) => {
+    const draft = locateDraftForReference(draftStore, entry);
+    const bindingPlan = draft ? bindingPlans.get(draft.draftId) : null;
+    if (!draft || !bindingPlan) {
+      pushReferenceUnresolved(parsed.unresolvedItems, 'dialysis_patient', entry, '透析记录未能匹配到患者档案，已留待人工处理');
+      return;
+    }
+    const dedupeKey = `${draft.draftId}|${entry.session_date}|${entry.shift}|${entry.fileName}|${entry.sheetName || entry.rowIndex || ''}`;
+    if (dialysisPlanKeys.has(dedupeKey)) {
+      pushReferenceUnresolved(parsed.unresolvedItems, 'dialysis_duplicate', entry, '同一患者同日期同班次透析记录重复，已按一条处理');
+      return;
+    }
+    dialysisPlanKeys.add(dedupeKey);
+    dialysisPlans.push({
+      draftId: draft.draftId,
+      draft,
+      entry,
+      previewBinding: bindingPlan.binding,
+    });
+  });
+
   return {
     files,
     parsed,
@@ -1208,6 +1982,7 @@ async function buildImportPlan(client, files) {
     updatedPreview,
     labPlans,
     orderPlans,
+    dialysisPlans,
   };
 }
 
@@ -1234,6 +2009,16 @@ function buildPreviewResult(plan) {
     source_file: entry.fileName,
   }));
 
+  const dialysis_records = plan.dialysisPlans.map(({ entry, previewBinding }) => ({
+    id: `(preview:dialysis:${entry.rowIndex})`,
+    patient_id: previewBinding.patient_id,
+    patient_name: previewBinding.patient_name,
+    session_date: entry.session_date,
+    shift: entry.shift,
+    source_file: entry.fileName,
+    sheet_name: entry.sheetName || null,
+  }));
+
   return {
     dry_run: true,
     files_count: plan.files.length,
@@ -1241,9 +2026,11 @@ function buildPreviewResult(plan) {
     patients_updated: plan.updatedPreview,
     labs_created: labs.length,
     orders_created: orders.length,
+    dialysis_created: dialysis_records.length,
     patients: plan.patientPreview,
     labs,
     orders,
+    dialysis_records,
     unresolved_items: plan.parsed.unresolvedItems,
     unsupported_files: plan.parsed.unsupportedFiles,
   };
@@ -1313,6 +2100,28 @@ async function applyImportPlan(client, plan, actorUserId) {
     });
   }
 
+  const dialysis_records = [];
+  for (const { draftId, draft, entry } of plan.dialysisPlans) {
+    const binding = bindings.get(draftId);
+    if (!binding) continue;
+    const { created, row } = await upsertDialysisEntry(
+      client,
+      actorUserId,
+      draft,
+      binding,
+      entry,
+      plan.users,
+      plan.parsed.unresolvedItems,
+    );
+    if (!created) continue;
+    dialysis_records.push({
+      ...row,
+      patient_name: binding.patient_name,
+      source_file: entry.fileName,
+      sheet_name: entry.sheetName || null,
+    });
+  }
+
   return {
     dry_run: false,
     files_count: plan.files.length,
@@ -1320,9 +2129,11 @@ async function applyImportPlan(client, plan, actorUserId) {
     patients_updated: patientsUpdated,
     labs_created: labs.length,
     orders_created: orders.length,
+    dialysis_created: dialysis_records.length,
     patients: patientResults,
     labs,
     orders,
+    dialysis_records,
     unresolved_items: plan.parsed.unresolvedItems,
     unsupported_files: plan.parsed.unsupportedFiles,
   };

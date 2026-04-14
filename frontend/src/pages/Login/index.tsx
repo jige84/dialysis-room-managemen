@@ -79,7 +79,7 @@ export default function LoginPage() {
           >
             <Input.Password
               prefix={<LockOutlined className="login-input-icon" />}
-              placeholder="密码（≥8位含大小写数字）"
+              placeholder="密码（≥6位，字母与数字）"
               className="login-input"
             />
           </Form.Item>

@@ -23,10 +23,11 @@ const SIDER_COLLAPSED_WIDTH = 64;
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileNavOpenPath, setMobileNavOpenPath] = useState<string | null>(null);
   const [pendingAlerts, setPendingAlerts] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
+  const mobileNavOpen = isMobileViewport && mobileNavOpenPath === location.pathname;
   const { user, logout } = useAuthStore();
   const menuPermissions = useAuthStore(s => s.user?.menu_permissions);
   const { canManageUsers, canManageMedicalSites } = usePermission();
@@ -89,7 +90,7 @@ export default function AppLayout() {
     const syncViewport = (matches: boolean) => {
       setIsMobileViewport(matches);
       if (!matches) {
-        setMobileNavOpen(false);
+        setMobileNavOpenPath(null);
       }
     };
     syncViewport(media.matches);
@@ -101,22 +102,16 @@ export default function AppLayout() {
   useEffect(() => {
     if (!isMobileViewport || !mobileNavOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMobileNavOpen(false);
+      if (event.key === 'Escape') setMobileNavOpenPath(null);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isMobileViewport, mobileNavOpen]);
 
-  useEffect(() => {
-    if (isMobileViewport) {
-      setMobileNavOpen(false);
-    }
-  }, [location.pathname, isMobileViewport]);
-
   const handleLogout = async () => {
     try { await authApi.logout(); } catch { /* 忽略网络错误 */ }
     logout();
-    setMobileNavOpen(false);
+    setMobileNavOpenPath(null);
     navigate('/login');
     message.success('已安全退出');
   };
@@ -124,7 +119,7 @@ export default function AppLayout() {
   const handleNavigate = (target: string) => {
     navigate(target);
     if (isMobileViewport) {
-      setMobileNavOpen(false);
+      setMobileNavOpenPath(null);
     }
   };
 
@@ -280,7 +275,7 @@ export default function AppLayout() {
           type="button"
           className="hd-mobile-backdrop"
           aria-label="关闭导航"
-          onClick={() => setMobileNavOpen(false)}
+          onClick={() => setMobileNavOpenPath(null)}
         />
       ) : null}
 
@@ -300,7 +295,7 @@ export default function AppLayout() {
             aria-label={isMobileViewport ? (mobileNavOpen ? '关闭侧边导航' : '打开侧边导航') : (collapsed ? '展开侧边导航' : '收起侧边导航')}
             onClick={() => {
               if (isMobileViewport) {
-                setMobileNavOpen(open => !open);
+                setMobileNavOpenPath(prev => (prev === location.pathname ? null : location.pathname));
                 return;
               }
               setCollapsed(!collapsed);

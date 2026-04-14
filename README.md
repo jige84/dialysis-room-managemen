@@ -1,6 +1,6 @@
 # 涉县善谷医院血液透析室管理系统
 
-基于 React 18 + Node.js + PostgreSQL 的透析室全流程数字化管理平台。
+基于 React 19 + Node.js + PostgreSQL 的透析室全流程数字化管理平台。
 
 ---
 
@@ -15,7 +15,7 @@
 
 ```bash
 # 创建数据库
-psql -U postgres -c "CREATE DATABASE hemodialysis;"
+psql -U postgres -c "CREATE DATABASE hemodialysis_db;"
 
 # 进入后端目录
 cd backend
@@ -37,7 +37,7 @@ node src/utils/initAdminUser.js
 cd backend
 npm install
 npm run dev
-# ➜ 监听 http://localhost:3000
+# ➜ 默认监听 http://localhost:3080
 
 # 前端（新终端）
 cd frontend
@@ -135,9 +135,9 @@ npm run dev
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | React 18 + TypeScript 5 + Ant Design 5 + Recharts + Zustand |
-| 后端 | Node.js 24 + Express 5 + node-cron |
-| 数据库 | PostgreSQL 16（26张表） |
+| 前端 | React 19 + TypeScript 5 + Ant Design 6 + Recharts + Zustand |
+| 后端 | Node.js 20+ + Express 4 + node-cron |
+| 数据库 | PostgreSQL 16（由迁移脚本持续演进） |
 | 缓存 | Redis 7（JWT 黑名单，可选） |
 | 安全 | JWT + bcrypt + AES-256-GCM |
 | 构建 | Vite 8 |
@@ -150,20 +150,20 @@ npm run dev
 ```
 xuetoushiguanli/
 ├── backend/
-│   ├── migrations/          # 21个SQL迁移文件（26张表DDL）
+│   ├── migrations/          # SQL 迁移脚本（当前约 58 个）
 │   ├── seeds/               # 初始数据
 │   └── src/
 │       ├── config/          # 数据库/Redis连接
 │       ├── jobs/            # 定时任务（scheduledTasks.js）
 │       ├── middleware/       # auth/rbac/audit/errorHandler
-│       ├── routes/          # 14个业务路由模块
+│       ├── routes/          # 业务路由模块（当前约 20+）
 │       ├── services/        # KtvCalculator/CVCRiskScoring/AlertEngine/ReportGenerator
 │       └── utils/           # encrypt/logger/dateUtils/response
 ├── frontend/
 │   └── src/
 │       ├── api/             # Axios API客户端（7个模块）
 │       ├── components/      # AppLayout（含预警铃铛）
-│       ├── pages/           # 14个功能页面
+│       ├── pages/           # 功能页面（当前约 20+）
 │       └── stores/          # authStore（Zustand）
 └── README.md
 ```

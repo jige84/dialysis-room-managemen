@@ -1,0 +1,75 @@
+# Migration Audit
+
+- 生成时间：2026-04-14T08:07:38.256Z
+- 总脚本数：58
+- 最小编号：1
+- 最大编号：58
+
+## 结果
+
+- 命名不规范：无
+- 重复编号：无
+- 缺失编号：无
+
+## 文件清单
+
+```text
+001_create_users.sql
+002_create_patients.sql
+003_create_prescriptions.sql
+004_create_long_term_orders.sql
+005_create_order_executions.sql
+006_create_dialysis_records.sql
+007_create_vital_signs.sql
+008_create_complications.sql
+009_create_lab_results.sql
+010_create_vascular_accesses.sql
+011_create_thrombolysis_records.sql
+012_create_cvc_risk_assessments.sql
+013_create_infection_screenings.sql
+014_create_infection_monitoring.sql
+015_create_schedules.sql
+016_create_devices.sql
+017_create_water_quality.sql
+018_create_consumables.sql
+019_create_cqi.sql
+020_create_qc_reports.sql
+021_create_audit_alerts.sql
+022_add_patient_history_fields.sql
+023_devices_consumables_extend.sql
+024_seed_consumable_catalog.sql
+025_create_water_machines.sql
+026_create_schedule_rules_and_nurse_schedule.sql
+027_create_vascular_avf_assessments.sql
+028_create_vascular_cvc_assessments.sql
+029_create_vascular_punctures.sql
+030_extend_cvc_risk_assessments.sql
+031_users_role_add_quality.sql
+032_knowledge_base_and_rules.sql
+033_kb_tables_grants.sql
+034_kb_ai_scenario_metadata.sql
+035_medical_sites_and_guidelines.sql
+036_cqi_records_align.sql
+037_kb_schema_placeholder.sql
+038_patient_dialysis_schedule_consent_image.sql
+039_patient_responsible_nurse.sql
+040_patient_consent_images_array.sql
+041_user_menu_permissions.sql
+042_patient_dialysis_schedule_anchor_date.sql
+043_schedules_schedule_remark.sql
+044_schedules_session_dialysis_mode.sql
+045_prescriptions_hemodialysis_modality.sql
+046_patients_profile_anticoagulant.sql
+047_patients_profile_dry_weight.sql
+048_prescriptions_hdf_replacement.sql
+049_prescriptions_form_extra.sql
+050_long_term_orders_combo_parent.sql
+051_long_term_orders_frequency_add_tid.sql
+052_user_guideline_notices.sql
+053_patients_schedules_machine_station.sql
+054_nurse_schedule_sheet.sql
+055_water_quality_machine_and_daily_inspections.sql
+056_patients_history_import_nullable.sql
+057_patients_history_import_nullable_demographics.sql
+058_users_role_add_technician.sql
+```

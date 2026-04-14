@@ -88,10 +88,34 @@ const STOCK_STATUS: Record<string, { label: string; color: string; bg: string }>
   low: { label: '不足', color: '#BE123C', bg: '#FFF1F2' },
 };
 
+type DailyWaterMetricMode = 'normal' | 'abnormal' | 'manual';
+
+const DAILY_WATER_METRIC_MODE_OPTIONS: { value: DailyWaterMetricMode; label: string }[] = [
+  { value: 'normal', label: '正常' },
+  { value: 'abnormal', label: '异常' },
+  { value: 'manual', label: '手动输入数值' },
+];
+
+function buildDailyWaterMetricValue(
+  mode: DailyWaterMetricMode | undefined,
+  abnormalNote?: string,
+  manualValue?: string,
+): string | undefined {
+  if (!mode) return undefined;
+  if (mode === 'normal') return '正常';
+  if (mode === 'abnormal') {
+    const note = abnormalNote?.trim();
+    return note ? `异常（${note}）` : undefined;
+  }
+  const value = manualValue?.trim();
+  return value || undefined;
+}
+
 export default function DevicesPage() {
   const { hasRole } = useAuthStore();
   const canWriteDevice = hasRole(['admin', 'head_nurse']);
   const canInbound = hasRole(['admin', 'head_nurse', 'nurse']);
+  const canDeleteDeviceAsset = hasRole(['admin', 'head_nurse', 'technician']);
 
   const [loading, setLoading] = useState(true);
   const [machines, setMachines] = useState<MachineRow[]>([]);
@@ -252,6 +276,79 @@ export default function DevicesPage() {
     }
   };
 
+  const handleDeleteMachine = (m: MachineRow) => {
+    Modal.confirm({
+      title: '确认删除透析机？',
+      content: `删除后不可恢复：${m.machine_no}`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await devicesApi.deleteMachine(m.id);
+          if (drawerMachine?.id === m.id) {
+            setDrawerOpen(false);
+            setDrawerMachine(null);
+            setDrawerMaint([]);
+            setDrawerAlerts([]);
+          }
+          message.success(`透析机 ${m.machine_no} 已删除`);
+          await loadAll();
+        } catch {
+          /* request 已提示 */
+        }
+      },
+    });
+  };
+
+  const handleDeleteConsumable = (r: ConsumableStockRow) => {
+    Modal.confirm({
+      title: '确认删除耗材目录？',
+      content: `删除后不可恢复：${r.item_name}${r.specification ? `（${r.specification}）` : ''}`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await devicesApi.deleteConsumableStock(r.id);
+          if (inboundStockId === r.id) {
+            setShowInboundModal(false);
+            inboundForm.resetFields();
+            setInboundStockId(undefined);
+          }
+          message.success(`耗材目录 ${r.item_name} 已删除`);
+          await loadAll();
+        } catch {
+          /* request 已提示 */
+        }
+      },
+    });
+  };
+
+  const handleDeleteWaterMachine = (r: WaterMachineRow) => {
+    Modal.confirm({
+      title: '确认删除水机？',
+      content: `删除后不可恢复：${r.machine_no}`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await devicesApi.deleteWaterMachine(r.id);
+          if (waterDrawerMachine?.id === r.id) {
+            setWaterDrawerOpen(false);
+            setWaterDrawerMachine(null);
+            setWaterMaintRows([]);
+          }
+          message.success(`水机 ${r.machine_no} 已删除`);
+          await loadWaterMachines();
+        } catch {
+          /* request 已提示 */
+        }
+      },
+    });
+  };
+
   const filteredMachines = useMemo(() => {
     return machines.filter((m) => {
       if (search) {
@@ -393,6 +490,11 @@ export default function DevicesPage() {
               维护
             </Button>
           )}
+          {canDeleteDeviceAsset && (
+            <Button size="small" danger onClick={() => handleDeleteMachine(r)}>
+              删除
+            </Button>
+          )}
         </Space>
       ),
     },
@@ -453,19 +555,28 @@ export default function DevicesPage() {
     {
       title: '操作',
       render: (_: unknown, r: ConsumableStockRow) =>
-        canInbound ? (
-          <Button
-            size="small"
-            type="primary"
-            onClick={() => {
-              inboundForm.resetFields();
-              setInboundStockId(r.id);
-              inboundForm.setFieldsValue({ stock_item_id: r.id });
-              setShowInboundModal(true);
-            }}
-          >
-            入库
-          </Button>
+        canInbound || canDeleteDeviceAsset ? (
+          <Space size="small">
+            {canInbound && (
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => {
+                  inboundForm.resetFields();
+                  setInboundStockId(r.id);
+                  inboundForm.setFieldsValue({ stock_item_id: r.id });
+                  setShowInboundModal(true);
+                }}
+              >
+                入库
+              </Button>
+            )}
+            {canDeleteDeviceAsset && (
+              <Button size="small" danger onClick={() => handleDeleteConsumable(r)}>
+                删除
+              </Button>
+            )}
+          </Space>
         ) : null,
     },
   ];
@@ -890,6 +1001,11 @@ export default function DevicesPage() {
                               >
                                 详情/维护
                               </Button>
+                              {canDeleteDeviceAsset && (
+                                <Button size="small" danger onClick={() => handleDeleteWaterMachine(r)}>
+                                  删除
+                                </Button>
+                              )}
                             </Space>
                           ),
                         },
@@ -908,14 +1024,24 @@ export default function DevicesPage() {
                       layout="vertical"
                       size="middle"
                       onFinish={async (v) => {
+                        const hardness = buildDailyWaterMetricValue(
+                          v.hardness_mode as DailyWaterMetricMode | undefined,
+                          v.hardness_abnormal_note,
+                          v.hardness_manual_value,
+                        );
+                        const totalChlorine = buildDailyWaterMetricValue(
+                          v.total_chlorine_mode as DailyWaterMetricMode | undefined,
+                          v.total_chlorine_abnormal_note,
+                          v.total_chlorine_manual_value,
+                        );
                         try {
                           await devicesApi.createWaterDailyInspection({
                             water_machine_id: v.water_machine_id,
                             check_date: v.check_date
                               ? dayjs(v.check_date).format('YYYY-MM-DD')
                               : dayjs().format('YYYY-MM-DD'),
-                            hardness: v.hardness,
-                            total_chlorine: v.total_chlorine,
+                            hardness,
+                            total_chlorine: totalChlorine,
                             tap_pressure: v.tap_pressure,
                             sand_delta_p: v.sand_delta_p,
                             resin_delta_p: v.resin_delta_p,
@@ -932,7 +1058,11 @@ export default function DevicesPage() {
                           });
                           message.success('日常检测已保存');
                           dailyWaterForm.resetFields();
-                          dailyWaterForm.setFieldsValue({ check_date: dayjs() });
+                          dailyWaterForm.setFieldsValue({
+                            check_date: dayjs(),
+                            hardness_mode: 'normal',
+                            total_chlorine_mode: 'normal',
+                          });
                           await loadWaterDailyInspections();
                         } catch {
                           /* request 已提示 */
@@ -950,11 +1080,118 @@ export default function DevicesPage() {
                         <Form.Item label="检测日期" name="check_date" initialValue={dayjs()}>
                           <DatePicker style={{ width: '100%' }} />
                         </Form.Item>
-                        <Form.Item label="硬度 (mg/L)" name="hardness">
-                          <Input />
+                        <Form.Item label="硬度 (mg/L)" required>
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            <Form.Item
+                              name="hardness_mode"
+                              initialValue="normal"
+                              style={{ marginBottom: 0 }}
+                            >
+                              <Select
+                                options={DAILY_WATER_METRIC_MODE_OPTIONS}
+                                onChange={() =>
+                                  dailyWaterForm.setFieldsValue({
+                                    hardness_abnormal_note: undefined,
+                                    hardness_manual_value: undefined,
+                                  })
+                                }
+                              />
+                            </Form.Item>
+                            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.hardness_mode !== curr.hardness_mode}>
+                              {({ getFieldValue }) => {
+                                const mode = getFieldValue('hardness_mode') as DailyWaterMetricMode | undefined;
+                                if (mode === 'abnormal') {
+                                  return (
+                                    <Form.Item
+                                      name="hardness_abnormal_note"
+                                      rules={[{ required: true, message: '请选择异常时请填写说明' }]}
+                                      style={{ marginBottom: 0 }}
+                                    >
+                                      <Input placeholder="填写硬度异常说明" />
+                                    </Form.Item>
+                                  );
+                                }
+                                if (mode === 'manual') {
+                                  return (
+                                    <Form.Item
+                                      name="hardness_manual_value"
+                                      rules={[
+                                        { required: true, message: '请填写硬度数值' },
+                                        {
+                                          validator: (_rule, value?: string) =>
+                                            value && value.trim() !== '' && !Number.isNaN(Number(value))
+                                              ? Promise.resolve()
+                                              : Promise.reject(new Error('请输入有效数字')),
+                                        },
+                                      ]}
+                                      style={{ marginBottom: 0 }}
+                                    >
+                                      <Input placeholder="请输入数值，如 1.2" />
+                                    </Form.Item>
+                                  );
+                                }
+                                return null;
+                              }}
+                            </Form.Item>
+                          </div>
                         </Form.Item>
-                        <Form.Item label="总氯 (mg/L)" name="total_chlorine">
-                          <Input />
+                        <Form.Item label="总氯 (mg/L)" required>
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            <Form.Item
+                              name="total_chlorine_mode"
+                              initialValue="normal"
+                              style={{ marginBottom: 0 }}
+                            >
+                              <Select
+                                options={DAILY_WATER_METRIC_MODE_OPTIONS}
+                                onChange={() =>
+                                  dailyWaterForm.setFieldsValue({
+                                    total_chlorine_abnormal_note: undefined,
+                                    total_chlorine_manual_value: undefined,
+                                  })
+                                }
+                              />
+                            </Form.Item>
+                            <Form.Item
+                              noStyle
+                              shouldUpdate={(prev, curr) => prev.total_chlorine_mode !== curr.total_chlorine_mode}
+                            >
+                              {({ getFieldValue }) => {
+                                const mode = getFieldValue('total_chlorine_mode') as DailyWaterMetricMode | undefined;
+                                if (mode === 'abnormal') {
+                                  return (
+                                    <Form.Item
+                                      name="total_chlorine_abnormal_note"
+                                      rules={[{ required: true, message: '请选择异常时请填写说明' }]}
+                                      style={{ marginBottom: 0 }}
+                                    >
+                                      <Input placeholder="填写总氯异常说明" />
+                                    </Form.Item>
+                                  );
+                                }
+                                if (mode === 'manual') {
+                                  return (
+                                    <Form.Item
+                                      name="total_chlorine_manual_value"
+                                      rules={[
+                                        { required: true, message: '请填写总氯数值' },
+                                        {
+                                          validator: (_rule, value?: string) =>
+                                            value && value.trim() !== '' && !Number.isNaN(Number(value))
+                                              ? Promise.resolve()
+                                              : Promise.reject(new Error('请输入有效数字')),
+                                        },
+                                      ]}
+                                      style={{ marginBottom: 0 }}
+                                    >
+                                      <Input placeholder="请输入数值，如 0.1" />
+                                    </Form.Item>
+                                  );
+                                }
+                                return null;
+                              }}
+                            </Form.Item>
+                          </div>
                         </Form.Item>
                         <Form.Item label="自来水压力 (MPa)" name="tap_pressure">
                           <Input />

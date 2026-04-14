@@ -19,8 +19,10 @@ async function login(username, password) {
   return { token: j.data?.token, code: j.code, message: j.message };
 }
 
-function authHeaders(token) {
-  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+function authHeaders(token, contentType = 'application/json') {
+  const headers = { Authorization: `Bearer ${token}` };
+  if (contentType) headers['Content-Type'] = contentType;
+  return headers;
 }
 
 async function get(path, token) {
@@ -76,6 +78,24 @@ async function patch(path, token, body) {
   };
 }
 
+async function getRaw(path, token) {
+  if (!token) {
+    return { path, status: 0, code: null, ok: false, skip: true, headers: {} };
+  }
+  const r = await fetch(`${base}${path}`, { headers: authHeaders(token, null) });
+  return {
+    path,
+    status: r.status,
+    code: null,
+    ok: r.status === 200,
+    skip: false,
+    headers: {
+      contentType: r.headers.get('content-type') || '',
+      contentDisposition: r.headers.get('content-disposition') || '',
+    },
+  };
+}
+
 (async () => {
   const password = process.env.SMOKE_PASSWORD || 'Shangu@2026';
   const admin = await login('renjige', password);
@@ -83,6 +103,7 @@ async function patch(path, token, body) {
   const head = await login('yangchen', password);
   const nurse = await login('nurse01', password);
   const quality = await login('qc01', password);
+  const technician = await login('tech01', password);
 
   console.log('登录探测:', {
     admin: !!admin.token,
@@ -90,6 +111,7 @@ async function patch(path, token, body) {
     head_nurse: !!head.token,
     nurse01: !!nurse.token,
     qc01: !!quality.token,
+    tech01: !!technician.token,
   });
 
   if (!doctor.token) {
@@ -121,12 +143,52 @@ async function patch(path, token, body) {
     label: 'infection GET overdue (doctor 应403)',
     ...(await get('/api/infection/screenings/overdue', doctor.token)),
   });
+  rows.push({
+    label: 'infection POST screenings (quality 应403)',
+    ...(await post('/api/infection/screenings/00000000-0000-0000-0000-000000000001', quality.token, {
+      test_type: 'hbsag',
+      result: 'negative',
+      test_date: `${y}-${String(m).padStart(2, '0')}-01`,
+      notes: 'rbac smoke',
+    })),
+  });
+  rows.push({
+    label: 'infection POST latest batch (technician)',
+    ...(await post('/api/infection/screenings/latest/batch', technician.token, {
+      patient_ids: ['00000000-0000-0000-0000-000000000001'],
+    })),
+    optionalSkip: true,
+  });
   rows.push({ label: 'reports GET qc-upload', ...(await get(`/api/reports/qc-upload/${y}/${m}`, admin.token || doctor.token)) });
+  const initRes = await post(`/api/reports/qc-upload/${y}/${m}/init`, admin.token || head.token, {});
+  rows.push({
+    label: 'reports init draft (admin/head_nurse)',
+    ...initRes,
+    ok: initRes.skip ? false : initRes.status === 200 || initRes.code === 200,
+  });
   rows.push({
     label: 'reports GET monthly-workload',
     ...(await get(`/api/reports/monthly-workload/${y}/${m}`, doctor.token)),
   });
   rows.push({ label: 'reports GET qc-upload/history', ...(await get('/api/reports/qc-upload/history', doctor.token)) });
+  const exportXlsx = await getRaw(`/api/reports/qc-upload/${y}/${m}/export`, admin.token || head.token || doctor.token);
+  rows.push({
+    label: 'reports GET qc-upload export(xlsx)',
+    ...exportXlsx,
+    ok:
+      !exportXlsx.skip &&
+      exportXlsx.status === 200 &&
+      exportXlsx.headers.contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+  });
+  const exportPdf = await getRaw(`/api/reports/qc-upload/${y}/${m}/export-pdf`, admin.token || head.token || doctor.token);
+  rows.push({
+    label: 'reports GET qc-upload export(pdf)',
+    ...exportPdf,
+    ok:
+      !exportPdf.skip &&
+      exportPdf.status === 200 &&
+      exportPdf.headers.contentType.includes('application/pdf'),
+  });
   rows.push({
     label: 'cqi GET /api/cqi',
     ...(await get('/api/cqi?page=1&page_size=5', quality.token || doctor.token)),
@@ -173,8 +235,9 @@ async function patch(path, token, body) {
   let fail = 0;
   for (const r of rows) {
     if (r.skip) {
-      console.log(`- ${r.label}: SKIP 无 token`);
-      fail += 1;
+      const optionalSkip = r.optionalSkip === true;
+      console.log(`- ${r.label}: SKIP 无 token${optionalSkip ? '（可选账号）' : ''}`);
+      if (!optionalSkip) fail += 1;
       continue;
     }
     const expect403 = r.label.includes('应403');

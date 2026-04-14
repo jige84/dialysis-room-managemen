@@ -5,6 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { redactForLog } = require('./logRedactor');
 
 const logDir = path.join(__dirname, '../../logs');
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
@@ -23,7 +24,15 @@ function formatDate() {
 }
 
 function writeLog(level, message, data) {
-  const entry = `[${formatDate()}] [${level}] ${message}${data ? ' ' + JSON.stringify(data) : ''}\n`;
+  let payload = '';
+  if (data !== undefined) {
+    try {
+      payload = ' ' + JSON.stringify(redactForLog(data));
+    } catch {
+      payload = ' [UNSERIALIZABLE_DATA]';
+    }
+  }
+  const entry = `[${formatDate()}] [${level}] ${message}${payload}\n`;
   const date = formatDateOnly();
   const filePath = path.join(logDir, `${date}.log`);
   fs.appendFile(filePath, entry, () => {});

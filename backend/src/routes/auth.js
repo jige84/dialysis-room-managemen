@@ -7,10 +7,10 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const Joi = require('joi');
 const { pool } = require('../config/database');
 const { cache } = require('../config/redis');
 const auth = require('../middleware/auth');
+const { validateLoginPayload, validateChangePasswordPayload } = require('../validators/authValidators');
 const { success, error, unauthorized } = require('../utils/response');
 require('dotenv').config();
 
@@ -19,11 +19,6 @@ const loginAttempts = new Map();
 const LOGIN_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.LOGIN_MAX_ATTEMPTS || '5', 10));
 const LOGIN_LOCK_MINUTES = Math.max(1, parseInt(process.env.LOGIN_LOCK_MINUTES || '30', 10));
 const LOGIN_CACHE_PREFIX = 'login_attempts:';
-
-const loginSchema = Joi.object({
-  username: Joi.string().required().label('用户名'),
-  password: Joi.string().required().label('密码'),
-});
 
 function loginAttemptKey(username) {
   return `${LOGIN_CACHE_PREFIX}${String(username || '').trim().toLowerCase()}`;
@@ -61,10 +56,10 @@ async function clearLoginAttemptRecord(username) {
 // POST /api/auth/login
 router.post('/login', async (req, res, next) => {
   try {
-    const { error: validErr } = loginSchema.validate(req.body);
-    if (validErr) return error(res, validErr.details[0].message);
+    const valid = validateLoginPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
 
-    const { username, password } = req.body;
+    const { username, password } = valid.value;
 
     // 检查登录失败次数
     const attempts = await getLoginAttemptRecord(username);
@@ -147,14 +142,12 @@ router.post('/logout', auth, async (req, res, next) => {
 // POST /api/auth/change-password
 router.post('/change-password', auth, async (req, res, next) => {
   try {
-    const { old_password, new_password } = req.body;
+    const valid = validateChangePasswordPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
+    const { old_password, new_password } = valid.value;
 
-    if (!old_password || !new_password) {
-      return error(res, '请提供旧密码和新密码');
-    }
-
-    if (new_password.length < 8 || !/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(new_password)) {
-      return error(res, '新密码必须≥8位，且包含大写字母、小写字母和数字');
+    if (new_password.length < 6 || !/^[A-Za-z0-9]+$/.test(new_password)) {
+      return error(res, '新密码至少6位，且只能包含字母与数字');
     }
 
     const { rows } = await pool.query(

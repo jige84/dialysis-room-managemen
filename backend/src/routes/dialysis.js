@@ -14,6 +14,12 @@ const KtvCalc = require('../services/KtvCalculator');
 const OrderAutoFill = require('../services/OrderAutoFill');
 const AlertEngine = require('../services/AlertEngine');
 const ConsumableStockService = require('../services/ConsumableStockService');
+const {
+  validatePrepareQuery,
+  validateYearMonthQuery,
+  validateCreateDialysisPayload,
+  validateDialysisNotePayload,
+} = require('../validators/dialysisValidators');
 const { success, created, paginated, error, notFound } = require('../utils/response');
 const { formatDate, getMonthRange } = require('../utils/dateUtils');
 
@@ -32,8 +38,9 @@ function isHypotensionFlag(systolicBp, baselineSbp) {
 // GET /api/dialysis/prepare?patientId=xxx&date=xxx
 router.get('/prepare', auth, async (req, res, next) => {
   try {
-    const { patientId, date } = req.query;
-    if (!patientId) return error(res, '请提供 patientId 参数');
+    const valid = validatePrepareQuery(req.query);
+    if (!valid.ok) return error(res, valid.message);
+    const { patientId, date } = valid.value;
 
     const data = await OrderAutoFill.prepareForDialysis(patientId, date, {
       orderTypes: ['dialysis_drug'],
@@ -69,8 +76,9 @@ router.get('/stats/daily', auth, async (req, res, next) => {
 // GET /api/dialysis/stats/monthly?year=2026&month=3
 router.get('/stats/monthly', auth, async (req, res, next) => {
   try {
-    const { year, month } = req.query;
-    if (!year || !month) return error(res, '请提供 year 和 month 参数');
+    const valid = validateYearMonthQuery(req.query);
+    if (!valid.ok) return error(res, valid.message);
+    const { year, month } = valid.value;
 
     const { startDate, endDate } = getMonthRange(Number(year), Number(month));
 
@@ -221,6 +229,8 @@ router.post('/',
   auditLog('dialysis_records', 'CREATE'),
   async (req, res, next) => {
     try {
+      const payloadValid = validateCreateDialysisPayload(req.body);
+      if (!payloadValid.ok) return error(res, payloadValid.message);
       const {
         patient_id, prescription_id, machine_id,
         session_date, shift, double_check_nurse_id,
@@ -237,11 +247,7 @@ router.post('/',
         vital_signs = [],     // VitalSign[]
         complications = [],   // { comp_type, occurred_at?, notes?, detail? }[]
         order_executions = [] // { long_term_order_id, status, actual_dose?, notes? }[]
-      } = req.body;
-
-      if (!patient_id || !session_date || !shift) {
-        return error(res, '患者、透析日期、班次为必填项');
-      }
+      } = payloadValid.value;
 
       // 传染病初筛完整性校验：仅「新入患者」（尚无任意透析记录）时强制 4 项齐全
       const { rows: priorDialysis } = await pool.query(
@@ -492,10 +498,9 @@ router.patch('/:id/note',
   auditLog('dialysis_records', 'UPDATE'),
   async (req, res, next) => {
     try {
-      const { note } = req.body;
-      if (!note || typeof note !== 'string' || !note.trim()) {
-        return error(res, '备注内容不能为空', 400);
-      }
+      const valid = validateDialysisNotePayload(req.body);
+      if (!valid.ok) return error(res, valid.message, 400);
+      const { note } = valid.value;
 
       // 护士只能追加备注，不覆盖原有备注
       const { rows } = await pool.query(
@@ -507,7 +512,7 @@ router.patch('/:id/note',
          updated_at = NOW()
          WHERE id = $2
          RETURNING id, notes, session_date`,
-        [note.trim(), req.params.id]
+        [note, req.params.id]
       );
       if (rows.length === 0) return notFound(res, '透析记录不存在');
       return success(res, rows[0], '备注已追加');
