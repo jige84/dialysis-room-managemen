@@ -171,7 +171,7 @@ export default function DashboardPage() {
         const m = dayjs().month() + 1;
         const weekStart = getWeekStartMonday(dayjs());
 
-        const [stRes, dailyRes, scheduleRows, weekDataResult, sumRes, listRes, qcRes, trendRes] = await Promise.all([
+        const [stRes, dailyRes, scheduleRows, weekDataResult, sumRes, listRes, qcRes] = await Promise.all([
           patientsApi.stats(),
           dialysisApi.statsDaily(todayStr),
           scheduleApi.getToday(),
@@ -179,8 +179,15 @@ export default function DashboardPage() {
           alertsApi.summary(),
           alertsApi.list({ status: 'active', page_size: 8 }),
           reportsApi.getQCUpload(y, m),
-          reportsApi.trend(),
         ]);
+
+        let trendRows: QcTrendRow[] = [];
+        try {
+          const trendRes = await reportsApi.trend();
+          trendRows = trendRes.data.data;
+        } catch {
+          message.warning('质控趋势加载失败，已显示其余工作台数据');
+        }
 
         if (cancelled) return;
         setPatientStats(stRes.data.data);
@@ -190,7 +197,7 @@ export default function DashboardPage() {
         setAlertSummary(sumRes.data.data);
         setAlertItems(listRes.data.data.data);
         setQcReport(qcRes.data.data);
-        setQcTrendRows(trendRes.data.data);
+        setQcTrendRows(trendRows);
       } catch {
         message.error('工作台数据加载失败，请稍后重试');
       } finally {

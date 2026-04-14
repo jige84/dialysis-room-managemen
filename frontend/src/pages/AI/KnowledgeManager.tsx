@@ -3,7 +3,7 @@
  * 主要作用：查看与管理 `kb_documents` 条目（来源、校验状态等），支持分页与筛选。
  * 主要功能：拉取 `knowledgeApi.listDocuments`；表格展示；需角色与侧栏「知识库管理」权限。
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Typography, Switch, Alert, Spin, Select, Space } from 'antd';
 import PageShell from '../../components/PageShell/PageShell';
 import { usePermission } from '../../utils/permission';
@@ -21,7 +21,7 @@ export default function KnowledgeManagerPage() {
   const [sourceType, setSourceType] = useState<string | undefined>(undefined);
   const [detailChunks, setDetailChunks] = useState<{ id: string; content_text: string }[]>([]);
 
-  const load = async (p = page) => {
+  const load = useCallback(async (p = page) => {
     setLoading(true);
     try {
       const { data } = await knowledgeApi.listDocuments({
@@ -36,14 +36,14 @@ export default function KnowledgeManagerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, pageSize, sourceType]);
 
   useEffect(() => {
     if (canUseAiKnowledge) {
       setPage(1);
-      load(1);
+      void load(1);
     }
-  }, [canUseAiKnowledge, sourceType]);
+  }, [canUseAiKnowledge, sourceType, load]);
 
   const onVerify = async (id: string, checked: boolean) => {
     try {

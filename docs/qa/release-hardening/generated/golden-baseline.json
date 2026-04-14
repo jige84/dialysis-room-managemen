@@ -1,0 +1,1035 @@
+{
+  "generatedAt": "2026-04-14T08:07:30.275Z",
+  "git": {
+    "branch": "",
+    "head": "",
+    "statusShort": ""
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/ai/anomaly-analysis",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/anomaly-analysis/save-kb",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/cvc-risk-explain",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/ktv-root-cause",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/labs-analysis",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/medication-advice",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/nlp-query",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/patient-trend",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai/qc-monthly-insight",
+      "source": "backend/src/routes/ai.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/alerts",
+      "source": "backend/src/routes/alerts.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/alerts/:id/ack",
+      "source": "backend/src/routes/alerts.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/alerts/run-checks",
+      "source": "backend/src/routes/alerts.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/alerts/summary",
+      "source": "backend/src/routes/alerts.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/change-password",
+      "source": "backend/src/routes/auth.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/login",
+      "source": "backend/src/routes/auth.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "source": "backend/src/routes/auth.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "source": "backend/src/routes/auth.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cqi",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/cqi",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cqi/:id",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/cqi/:id",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/cqi/defects",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cqi/defects/list",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cqi/user-options",
+      "source": "backend/src/routes/cqi.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/consumables",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/consumables",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/devices/consumables/:id",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/consumables/:id/last-inbound",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/devices/consumables/:id/stock",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/consumables/inbound",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/consumables/outbound-lines",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/consumables/patient-usage",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/consumables/today-summary",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/machines",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/machines",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/devices/machines/:id",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/devices/machines/:id",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/machines/:id/alerts",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/machines/:id/alerts",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/machines/:id/maintenance",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/machines/:id/maintenance",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/devices/machines/:id/status",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/maintenance",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/maintenance",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/water-daily-inspections",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/water-daily-inspections",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/water-machines",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/water-machines",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/devices/water-machines/:id",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/water-machines/:id/maintenance",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/water-machines/:id/maintenance",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/devices/water-quality",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/devices/water-quality",
+      "source": "backend/src/routes/devices.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dialysis",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/dialysis",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dialysis/:id",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/dialysis/:id/note",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/dialysis/:id/vitals",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dialysis/prepare",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dialysis/stats/daily",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dialysis/stats/ktv-trend/:patientId",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dialysis/stats/monthly",
+      "source": "backend/src/routes/dialysis.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/guidelines",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/guidelines",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/guidelines/:id",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/guidelines/:id",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/guidelines/:id/generate-note",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/guidelines/:id/save-to-kb",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/guidelines/notices",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/guidelines/notices/read-all",
+      "source": "backend/src/routes/guidelines.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/infection/buttonhole-monitoring",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/infection/monitoring",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/infection/monitoring/:year/:month",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/infection/monitoring/batch",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/infection/screenings/:patientId",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/infection/screenings/:patientId",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/infection/screenings/:patientId/latest",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/infection/screenings/latest/batch",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/infection/screenings/overdue",
+      "source": "backend/src/routes/infection.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/knowledge/documents",
+      "source": "backend/src/routes/knowledge.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/knowledge/documents/:id",
+      "source": "backend/src/routes/knowledge.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/knowledge/documents/:id",
+      "source": "backend/src/routes/knowledge.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/labs/:id/critical-confirm",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/:patientId",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/labs/:patientId",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/:patientId/latest",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/:patientId/trends",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/critical/unconfirmed",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/month-completion",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/overdue",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/recent",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/labs/recheck",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/labs/review-due-soon",
+      "source": "backend/src/routes/labs.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/medical-sites",
+      "source": "backend/src/routes/medicalSites.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/medical-sites/:siteKey",
+      "source": "backend/src/routes/medicalSites.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/medical-sites/:siteKey/test",
+      "source": "backend/src/routes/medicalSites.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/medical-sites/import-guidance",
+      "source": "backend/src/routes/medicalSites.js"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/orders/:orderId",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/orders/:orderId/stop",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/orders/:patientId",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orders/:patientId/active",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orders/:patientId/history",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orders/:patientId/today-tasks",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/orders/execute",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orders/executions",
+      "source": "backend/src/routes/orders.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/patients",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/patients",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/patients/:id",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/patients/:id",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/patients/:id",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/patients/:id/consent-dialysis-image",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/patients/:id/consent-dialysis-image",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/patients/:id/consent-dialysis-image/:index",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/patients/:id/isolation",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/patients/:id/status",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/patients/import",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/patients/import/auto",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/patients/import/history-folder",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/patients/import/template",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/patients/stats",
+      "source": "backend/src/routes/patients.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/prescriptions/:id/dry-weight",
+      "source": "backend/src/routes/prescriptions.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/prescriptions/:patientId",
+      "source": "backend/src/routes/prescriptions.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/prescriptions/:patientId/current",
+      "source": "backend/src/routes/prescriptions.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/prescriptions/:patientId/history",
+      "source": "backend/src/routes/prescriptions.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/prescriptions/check",
+      "source": "backend/src/routes/prescriptions.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/monthly-workload/:year/:month",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/qc-routine/:year/:month",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/qc-trend",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/qc-upload/:year/:month",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/reports/qc-upload/:year/:month",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/reports/qc-upload/:year/:month/confirm",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/qc-upload/:year/:month/export-pdf",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/qc-upload/:year/:month/export",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/reports/qc-upload/:year/:month/init",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/reports/qc-upload/:year/:month/submit",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/qc-upload/history",
+      "source": "backend/src/routes/reports.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/schedule/:patientId",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/schedule/generate-week",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/schedule/nurse-adjust",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/schedule/nurse-sheet",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/schedule/nurse-sheet",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/schedule/rules",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/schedule/slots",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/schedule/slots/:id",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/schedule/slots/:id",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/schedule/today",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/schedule/week",
+      "source": "backend/src/routes/schedule.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/users",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/users",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/users/:id",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/users/:id",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/users/:id/password",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/users/:id/toggle-active",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/users/audit-logs",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/users/nursing-staff",
+      "source": "backend/src/routes/users.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:accessId/assessments",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vascular/:accessId/assessments",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:accessId/cvc-assessments",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vascular/:accessId/cvc-assessments",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:accessId/cvc-risk",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vascular/:accessId/cvc-risk",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:accessId/punctures",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vascular/:accessId/punctures",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:accessId/thrombolysis",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vascular/:accessId/thrombolysis",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "POST",
+      "path": "/api/vascular/:patientId",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:patientId/current",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/:patientId/list",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/vascular/access/:id",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/vascular/access/:id/abandon",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/cvc-all",
+      "source": "backend/src/routes/vascular.js"
+    },
+    {
+      "method": "GET",
+      "path": "/api/vascular/factor-definitions",
+      "source": "backend/src/routes/vascular.js"
+    }
+  ],
+  "cronJobs": [
+    {
+      "cron": "0 6 * * *",
+      "source": "backend/src/jobs/scheduledTasks.js"
+    },
+    {
+      "cron": "0 8 1 * *",
+      "source": "backend/src/jobs/scheduledTasks.js"
+    },
+    {
+      "cron": "0 9 * * 1",
+      "source": "backend/src/jobs/scheduledTasks.js"
+    }
+  ],
+  "migrations": [
+    "001_create_users.sql",
+    "002_create_patients.sql",
+    "003_create_prescriptions.sql",
+    "004_create_long_term_orders.sql",
+    "005_create_order_executions.sql",
+    "006_create_dialysis_records.sql",
+    "007_create_vital_signs.sql",
+    "008_create_complications.sql",
+    "009_create_lab_results.sql",
+    "010_create_vascular_accesses.sql",
+    "011_create_thrombolysis_records.sql",
+    "012_create_cvc_risk_assessments.sql",
+    "013_create_infection_screenings.sql",
+    "014_create_infection_monitoring.sql",
+    "015_create_schedules.sql",
+    "016_create_devices.sql",
+    "017_create_water_quality.sql",
+    "018_create_consumables.sql",
+    "019_create_cqi.sql",
+    "020_create_qc_reports.sql",
+    "021_create_audit_alerts.sql",
+    "022_add_patient_history_fields.sql",
+    "023_devices_consumables_extend.sql",
+    "024_seed_consumable_catalog.sql",
+    "025_create_water_machines.sql",
+    "026_create_schedule_rules_and_nurse_schedule.sql",
+    "027_create_vascular_avf_assessments.sql",
+    "028_create_vascular_cvc_assessments.sql",
+    "029_create_vascular_punctures.sql",
+    "030_extend_cvc_risk_assessments.sql",
+    "031_users_role_add_quality.sql",
+    "032_knowledge_base_and_rules.sql",
+    "033_kb_tables_grants.sql",
+    "034_kb_ai_scenario_metadata.sql",
+    "035_medical_sites_and_guidelines.sql",
+    "036_cqi_records_align.sql",
+    "037_kb_schema_placeholder.sql",
+    "038_patient_dialysis_schedule_consent_image.sql",
+    "039_patient_responsible_nurse.sql",
+    "040_patient_consent_images_array.sql",
+    "041_user_menu_permissions.sql",
+    "042_patient_dialysis_schedule_anchor_date.sql",
+    "043_schedules_schedule_remark.sql",
+    "044_schedules_session_dialysis_mode.sql",
+    "045_prescriptions_hemodialysis_modality.sql",
+    "046_patients_profile_anticoagulant.sql",
+    "047_patients_profile_dry_weight.sql",
+    "048_prescriptions_hdf_replacement.sql",
+    "049_prescriptions_form_extra.sql",
+    "050_long_term_orders_combo_parent.sql",
+    "051_long_term_orders_frequency_add_tid.sql",
+    "052_user_guideline_notices.sql",
+    "053_patients_schedules_machine_station.sql",
+    "054_nurse_schedule_sheet.sql",
+    "055_water_quality_machine_and_daily_inspections.sql",
+    "056_patients_history_import_nullable.sql",
+    "057_patients_history_import_nullable_demographics.sql",
+    "058_users_role_add_technician.sql"
+  ],
+  "formulaAnchors": [
+    {
+      "key": "ktv_threshold",
+      "source": "backend/src/routes/dialysis.js",
+      "line": 94,
+      "snippet": "COUNT(*) FILTER (WHERE ktv >= 1.2)                as ktv_qualified_count,"
+    },
+    {
+      "key": "uf_5pct_threshold",
+      "source": "backend/src/routes/dialysis.js",
+      "line": 438,
+      "snippet": "if (ufPct !== null && ufPct > 5) {"
+    },
+    {
+      "key": "daugirdas_formula",
+      "source": "backend/src/services/KtvCalculator.js",
+      "line": 24,
+      "snippet": "const ktv = -Math.log(R - 0.008 * t) + (4 - 3.5 * R) * (UF / W);"
+    },
+    {
+      "key": "ktv_threshold",
+      "source": "backend/src/services/KtvCalculator.js",
+      "line": 30,
+      "snippet": "isKtvReached: ktv >= 1.2,"
+    },
+    {
+      "key": "urr_threshold",
+      "source": "backend/src/services/KtvCalculator.js",
+      "line": 31,
+      "snippet": "isUrrReached: urr >= 65,"
+    },
+    {
+      "key": "ktv_threshold",
+      "source": "backend/src/services/QcRoutineMetricsService.js",
+      "line": 41,
+      "snippet": "COUNT(*) FILTER (WHERE ktv >= 1.2)::int AS numer"
+    },
+    {
+      "key": "urr_threshold",
+      "source": "backend/src/services/QcRoutineMetricsService.js",
+      "line": 57,
+      "snippet": "COUNT(*) FILTER (WHERE urr >= 65)::int AS numer"
+    },
+    {
+      "key": "uf_5pct_threshold",
+      "source": "frontend/src/pages/Dashboard/dashboardHelpers.ts",
+      "line": 181,
+      "snippet": "const ufAlert = ufPct != null && ufPct > 5;"
+    },
+    {
+      "key": "uf_5pct_threshold",
+      "source": "frontend/src/pages/Dialysis/DialysisEntry.tsx",
+      "line": 2211,
+      "snippet": "const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;"
+    },
+    {
+      "key": "ktv_threshold",
+      "source": "frontend/src/pages/Dialysis/DialysisEntry.tsx",
+      "line": 2217,
+      "snippet": "const ktvAdequate = ktv !== null ? ktv >= 1.2 : null;"
+    },
+    {
+      "key": "urr_threshold",
+      "source": "frontend/src/pages/Dialysis/DialysisEntry.tsx",
+      "line": 2218,
+      "snippet": "const urrAdequate = urr !== null ? urr >= 65 : null;"
+    },
+    {
+      "key": "uf_5pct_threshold",
+      "source": "frontend/src/pages/Prescription/PrescriptionWorkspace.tsx",
+      "line": 124,
+      "snippet": "* 超滤量是否超过干体重 5%（与质控警示一致：ufMl / (dryKg×1000) > 5%）"
+    },
+    {
+      "key": "uf_5pct_threshold",
+      "source": "frontend/src/pages/Prescription/PrescriptionWorkspace.tsx",
+      "line": 722,
+      "snippet": "const ufAlertDialysis = ufPercentDialysis ? parseFloat(ufPercentDialysis) > 5 : false;"
+    },
+    {
+      "key": "daugirdas_formula",
+      "source": "frontend/src/utils/ktv.ts",
+      "line": 20,
+      "snippet": "const ktv = -Math.log(r - 0.008 * durationHours) + (4 - 3.5 * r) * (ufVolumeL / postWeightKg);"
+    }
+  ]
+}

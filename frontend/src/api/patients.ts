@@ -261,6 +261,16 @@ export interface PatientHistoryImportOrderRow {
   source_file: string;
 }
 
+export interface PatientHistoryImportDialysisRow {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  session_date: string;
+  shift: 'morning' | 'afternoon' | 'evening';
+  source_file: string;
+  sheet_name?: string | null;
+}
+
 export interface PatientHistoryImportIssueRow {
   category: string;
   fileName: string;
@@ -281,9 +291,11 @@ export interface PatientHistoryImportResult {
   patients_updated: number;
   labs_created: number;
   orders_created: number;
+  dialysis_created: number;
   patients: PatientHistoryImportPatientRow[];
   labs: PatientHistoryImportLabRow[];
   orders: PatientHistoryImportOrderRow[];
+  dialysis_records?: PatientHistoryImportDialysisRow[];
   unresolved_items: PatientHistoryImportIssueRow[];
   unsupported_files: PatientHistoryUnsupportedFile[];
 }
@@ -303,6 +315,7 @@ export interface PatientAutoImportResult {
   patients_updated: number;
   labs_created: number;
   orders_created: number;
+  dialysis_created: number;
   row_errors: PatientImportRowError[];
   unresolved_items: PatientHistoryImportIssueRow[];
   unsupported_files: PatientHistoryUnsupportedFile[];
@@ -336,6 +349,9 @@ export const patientsApi = {
 
   update: (id: string, data: UpdatePatientPayload) =>
     request.put<ApiResponse<Patient>>(`/patients/${id}`, data),
+
+  remove: (id: string) =>
+    request.delete<ApiResponse<{ id: string; name: string }>>(`/patients/${id}`),
 
   updateStatus: (id: string, status: string, note?: string) =>
     request.patch<ApiResponse<Patient>>(`/patients/${id}/status`, { status, status_note: note }),

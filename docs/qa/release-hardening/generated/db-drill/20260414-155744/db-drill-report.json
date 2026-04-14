@@ -1,0 +1,200 @@
+{
+  "runId": "20260414-155744",
+  "generatedAt": "2026-04-14T07:57:44.271Z",
+  "status": "passed",
+  "database": "hemodialysis_db",
+  "user": "hd_app",
+  "mode": "schema-level",
+  "limitation": "External pg_dump unavailable (spawnSync pg_dump EPERM); fallback to schema-level logical backup rehearsal. Current DB role has no createdb privilege; rehearsal executed in schema-level isolation.",
+  "backupMethod": "schema-clone-fallback",
+  "tables": [
+    "users",
+    "patients",
+    "dialysis_records",
+    "prescriptions",
+    "infection_screenings",
+    "devices",
+    "alerts",
+    "audit_logs",
+    "complications",
+    "consumable_batches"
+  ],
+  "steps": [
+    {
+      "name": "db-backup",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.329Z",
+      "endedAt": "2026-04-14T07:57:44.331Z",
+      "durationMs": 1,
+      "details": {
+        "backupMethod": "schema-clone-fallback",
+        "fallbackReason": "spawnSync pg_dump EPERM"
+      }
+    },
+    {
+      "name": "backup-verify-list",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.331Z",
+      "endedAt": "2026-04-14T07:57:44.331Z",
+      "durationMs": 0,
+      "details": {
+        "skipped": true,
+        "reason": "Skipped pg_restore --list because external pg_dump is unavailable; schema-level rehearsal continues."
+      }
+    },
+    {
+      "name": "capability-check",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.331Z",
+      "endedAt": "2026-04-14T07:57:44.334Z",
+      "durationMs": 3,
+      "details": {
+        "current_user": "hd_app",
+        "role_can_createdb": false,
+        "db_can_create": true
+      }
+    },
+    {
+      "name": "target-table-selection",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.334Z",
+      "endedAt": "2026-04-14T07:57:44.349Z",
+      "durationMs": 15,
+      "details": [
+        "users",
+        "patients",
+        "dialysis_records",
+        "prescriptions",
+        "infection_screenings",
+        "devices",
+        "alerts",
+        "audit_logs",
+        "complications",
+        "consumable_batches"
+      ]
+    },
+    {
+      "name": "prepare-drill-schemas",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.349Z",
+      "endedAt": "2026-04-14T07:57:44.357Z",
+      "durationMs": 8,
+      "details": {
+        "backupSchema": "drill_backup_20260414_155744",
+        "workSchema": "drill_work_20260414_155744"
+      }
+    },
+    {
+      "name": "clone-public-into-drill-schemas",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.357Z",
+      "endedAt": "2026-04-14T07:57:44.577Z",
+      "durationMs": 220,
+      "details": {
+        "tableCount": 10
+      }
+    },
+    {
+      "name": "baseline-row-counts",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.577Z",
+      "endedAt": "2026-04-14T07:57:44.581Z",
+      "durationMs": 4,
+      "details": {
+        "users": 16,
+        "patients": 74,
+        "dialysis_records": 20,
+        "prescriptions": 17,
+        "infection_screenings": 0,
+        "devices": 0,
+        "alerts": 3078,
+        "audit_logs": 168,
+        "complications": 0,
+        "consumable_batches": 8
+      }
+    },
+    {
+      "name": "simulate-migration-on-work-schema",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.581Z",
+      "endedAt": "2026-04-14T07:57:44.606Z",
+      "durationMs": 24,
+      "details": {
+        "modifiedTables": 10
+      }
+    },
+    {
+      "name": "rollback-restore-from-backup-schema",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.606Z",
+      "endedAt": "2026-04-14T07:57:44.712Z",
+      "durationMs": 106,
+      "details": {
+        "restoredTables": 10
+      }
+    },
+    {
+      "name": "verify-row-counts-after-restore",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.712Z",
+      "endedAt": "2026-04-14T07:57:44.715Z",
+      "durationMs": 3,
+      "details": {
+        "users": 16,
+        "patients": 74,
+        "dialysis_records": 20,
+        "prescriptions": 17,
+        "infection_screenings": 0,
+        "devices": 0,
+        "alerts": 3078,
+        "audit_logs": 168,
+        "complications": 0,
+        "consumable_batches": 8
+      }
+    },
+    {
+      "name": "cleanup-drill-schemas",
+      "status": "passed",
+      "startedAt": "2026-04-14T07:57:44.715Z",
+      "endedAt": "2026-04-14T07:57:44.792Z",
+      "durationMs": 77,
+      "details": {
+        "cleaned": true
+      }
+    }
+  ],
+  "rowCounts": {
+    "backup": {
+      "users": 16,
+      "patients": 74,
+      "dialysis_records": 20,
+      "prescriptions": 17,
+      "infection_screenings": 0,
+      "devices": 0,
+      "alerts": 3078,
+      "audit_logs": 168,
+      "complications": 0,
+      "consumable_batches": 8
+    },
+    "afterRestore": {
+      "users": 16,
+      "patients": 74,
+      "dialysis_records": 20,
+      "prescriptions": 17,
+      "infection_screenings": 0,
+      "devices": 0,
+      "alerts": 3078,
+      "audit_logs": 168,
+      "complications": 0,
+      "consumable_batches": 8
+    }
+  },
+  "rowCountDiff": [],
+  "artifacts": {
+    "backupDump": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155744\\hemodialysis_db-20260414-155744.dump",
+    "backupList": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155744\\hemodialysis_db-20260414-155744.list",
+    "reportJson": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155744\\db-drill-report.json",
+    "reportMd": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155744\\db-drill-report.md"
+  },
+  "error": null
+}

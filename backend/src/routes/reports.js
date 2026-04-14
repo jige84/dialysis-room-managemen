@@ -11,6 +11,7 @@ const { rbac } = require('../middleware/rbac');
 const ReportGenerator = require('../services/ReportGenerator');
 const QcRoutineMetricsService = require('../services/QcRoutineMetricsService');
 const MonthlyWorkloadService = require('../services/MonthlyWorkloadService');
+const { validateYearMonthParams, validateTrendYearsQuery } = require('../validators/reportsValidators');
 const { success, error, notFound } = require('../utils/response');
 
 async function ensureQcReportDraft(year, month) {
@@ -49,10 +50,9 @@ async function ensureQcReportDraft(year, month) {
 // GET /api/reports/qc-routine/:year/:month - 科室内部质控指标（实时聚合，不落库）
 router.get('/qc-routine/:year/:month', auth, async (req, res, next) => {
   try {
-    const yy = parseInt(req.params.year, 10);
-    const mm = parseInt(req.params.month, 10);
-    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
-    const data = await QcRoutineMetricsService.getRoutineMetrics(yy, mm);
+    const valid = validateYearMonthParams(req.params);
+    if (!valid.ok) return error(res, valid.message);
+    const data = await QcRoutineMetricsService.getRoutineMetrics(valid.value.year, valid.value.month);
     return success(res, data);
   } catch (err) { next(err); }
 });
@@ -60,10 +60,9 @@ router.get('/qc-routine/:year/:month', auth, async (req, res, next) => {
 // GET /api/reports/monthly-workload/:year/:month - 月度工作量（需求 3.8.1，实时聚合）
 router.get('/monthly-workload/:year/:month', auth, async (req, res, next) => {
   try {
-    const yy = parseInt(req.params.year, 10);
-    const mm = parseInt(req.params.month, 10);
-    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
-    const data = await MonthlyWorkloadService.getMonthlyWorkload(yy, mm);
+    const valid = validateYearMonthParams(req.params);
+    if (!valid.ok) return error(res, valid.message);
+    const data = await MonthlyWorkloadService.getMonthlyWorkload(valid.value.year, valid.value.month);
     return success(res, data);
   } catch (err) { next(err); }
 });
@@ -71,10 +70,9 @@ router.get('/monthly-workload/:year/:month', auth, async (req, res, next) => {
 // GET /api/reports/qc-upload/:year/:month - 获取月度质控上报数据
 router.get('/qc-upload/:year/:month', auth, async (req, res, next) => {
   try {
-    const { year, month } = req.params;
-    const yy = parseInt(year, 10);
-    const mm = parseInt(month, 10);
-    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+    const valid = validateYearMonthParams(req.params);
+    if (!valid.ok) return error(res, valid.message);
+    const { year: yy, month: mm } = valid.value;
 
     const { rows } = await pool.query(
       'SELECT * FROM qc_reports WHERE report_year = $1 AND report_month = $2',
@@ -87,10 +85,9 @@ router.get('/qc-upload/:year/:month', auth, async (req, res, next) => {
 // POST /api/reports/qc-upload/:year/:month/init - 显式初始化月度质控草稿
 router.post('/qc-upload/:year/:month/init', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
-    const { year, month } = req.params;
-    const yy = parseInt(year, 10);
-    const mm = parseInt(month, 10);
-    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+    const valid = validateYearMonthParams(req.params);
+    if (!valid.ok) return error(res, valid.message);
+    const { year: yy, month: mm } = valid.value;
     const row = await ensureQcReportDraft(yy, mm);
     return success(res, row, '质控月报草稿已初始化');
   } catch (err) { next(err); }
@@ -115,9 +112,9 @@ router.post('/qc-upload/:year/:month/submit', auth, rbac(['admin','head_nurse'])
 // PATCH /api/reports/qc-upload/:year/:month — 补充时点/周日护患比、备注（草稿或待审批可改）
 router.patch('/qc-upload/:year/:month', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
   try {
-    const yy = parseInt(req.params.year, 10);
-    const mm = parseInt(req.params.month, 10);
-    if (!yy || mm < 1 || mm > 12) return error(res, 'year、month 参数无效');
+    const valid = validateYearMonthParams(req.params);
+    if (!valid.ok) return error(res, valid.message);
+    const { year: yy, month: mm } = valid.value;
 
     const { rows: cur } = await pool.query(
       'SELECT id, status FROM qc_reports WHERE report_year = $1 AND report_month = $2',
@@ -228,8 +225,9 @@ router.get('/qc-upload/:year/:month/export', auth, async (req, res, next) => {
 router.get('/qc-upload/:year/:month/export-pdf', auth, async (req, res, next) => {
   try {
     const { year, month } = req.params;
-    const yy = parseInt(year, 10);
-    const mm = parseInt(month, 10);
+    const valid = validateYearMonthParams(req.params);
+    if (!valid.ok) return error(res, valid.message);
+    const { year: yy, month: mm } = valid.value;
     const { rows } = await pool.query(
       'SELECT * FROM qc_reports WHERE report_year = $1 AND report_month = $2',
       [yy, mm],
@@ -294,12 +292,19 @@ router.get('/qc-upload/history', auth, async (req, res, next) => {
 // GET /api/reports/qc-trend?years=2 - 质控趋势图数据
 router.get('/qc-trend', auth, async (req, res, next) => {
   try {
+    const valid = validateTrendYearsQuery(req.query);
+    if (!valid.ok) return error(res, valid.message);
+    const startYear = new Date().getFullYear() - valid.value.years + 1;
+
     const { rows } = await pool.query(
       `SELECT report_year, report_month, nurse_patient_ratio,
               circuit_clotting_rate, membrane_rupture_rate,
               puncture_injury_rate, crbsi_rate
-       FROM qc_reports WHERE status IN ('submitted','confirmed')
-       ORDER BY report_year ASC, report_month ASC`
+       FROM qc_reports
+       WHERE status IN ('submitted','confirmed')
+         AND report_year >= $1
+       ORDER BY report_year ASC, report_month ASC`,
+      [startYear]
     );
     return success(res, rows);
   } catch (err) { next(err); }

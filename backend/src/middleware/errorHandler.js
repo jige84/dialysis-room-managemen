@@ -4,13 +4,17 @@
  * 主要功能：区分业务错误与系统错误；开发环境附带堆栈；错误写入日志且不泄露敏感信息。
  */
 const logger = require('../utils/logger');
+const { redactForLog } = require('../utils/logRedactor');
 
 module.exports = (err, req, res, next) => {
   logger.error(`[${req.method} ${req.path}] 未捕获的错误：`, {
     message: err.message,
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-    user: req.user?.real_name,
-    body: req.body,
+    userId: req.user?.id,
+    role: req.user?.role,
+    query: redactForLog(req.query),
+    params: redactForLog(req.params),
+    body: redactForLog(req.body),
   });
 
   // PostgreSQL约束违反错误

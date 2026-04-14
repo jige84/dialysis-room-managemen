@@ -163,8 +163,8 @@ const reportsApi = {
   history: () =>
     request.get<ApiResponse<QCReport[]>>('/reports/qc-upload/history'),
 
-  trend: () =>
-    request.get<ApiResponse<QcTrendRow[]>>('/reports/qc-trend'),
+  trend: (years = 2) =>
+    request.get<ApiResponse<QcTrendRow[]>>('/reports/qc-trend', { params: { years } }),
 };
 
 export default reportsApi;

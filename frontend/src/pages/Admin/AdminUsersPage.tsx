@@ -34,12 +34,14 @@ import {
 } from '../../constants/sidebarModules';
 import { AI_ASSISTANT_FEATURES, AI_ASSISTANT_FEATURE_KEYS } from '../../constants/aiAssistantFeatures';
 
-const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/;
+/** 仅 ASCII 字母与数字 */
+const PASSWORD_ALLOWED = /^[A-Za-z0-9]+$/;
 
 const ROLE_OPTIONS: { value: SystemUserRole; label: string }[] = [
   { value: 'admin', label: ROLE_LABELS.admin },
   { value: 'doctor', label: ROLE_LABELS.doctor },
   { value: 'nurse', label: ROLE_LABELS.nurse },
+  { value: 'technician', label: ROLE_LABELS.technician },
   { value: 'head_nurse', label: ROLE_LABELS.head_nurse },
   { value: 'quality', label: ROLE_LABELS.quality },
 ];
@@ -123,7 +125,7 @@ export default function AdminUsersPage() {
     }
   };
 
-  const openEdit = (r: UserRow) => {
+  const openEdit = useCallback((r: UserRow) => {
     setEditing(r);
     const role = normalizeRoleForForm(r.role);
     const keys = mergePermissionsForForm(role, r.menu_permissions);
@@ -133,7 +135,7 @@ export default function AdminUsersPage() {
       menu_keys: keys,
     });
     setEditOpen(true);
-  };
+  }, [editForm]);
 
   const submitEdit = async () => {
     if (!editing) return;
@@ -154,7 +156,7 @@ export default function AdminUsersPage() {
     }
   };
 
-  const handleToggle = async (r: UserRow) => {
+  const handleToggle = useCallback(async (r: UserRow) => {
     try {
       await usersApi.toggleActive(r.id);
       message.success('操作成功');
@@ -162,13 +164,23 @@ export default function AdminUsersPage() {
     } catch {
       /* 拦截器 */
     }
-  };
+  }, [load]);
 
-  const openReset = (r: UserRow) => {
+  const handleDelete = useCallback(async (r: UserRow) => {
+    try {
+      await usersApi.remove(r.id);
+      message.success(`已删除用户：${r.real_name}`);
+      await load();
+    } catch {
+      /* 拦截器 */
+    }
+  }, [load]);
+
+  const openReset = useCallback((r: UserRow) => {
     setEditing(r);
     resetForm.resetFields();
     setResetOpen(true);
-  };
+  }, [resetForm]);
 
   const submitReset = async () => {
     if (!editing) return;
@@ -242,7 +254,7 @@ export default function AdminUsersPage() {
       {
         title: '操作',
         key: 'actions',
-        width: 260,
+        width: 320,
         fixed: 'right',
         render: (_: unknown, r: UserRow) => {
           const isSelf = currentUserId != null && String(r.id) === String(currentUserId);
@@ -266,12 +278,25 @@ export default function AdminUsersPage() {
                   </Button>
                 </Popconfirm>
               )}
+              {!isSelf && (
+                <Popconfirm
+                  title="确定删除该用户？"
+                  description="若该用户已被业务数据引用，系统会阻止删除。"
+                  onConfirm={() => handleDelete(r)}
+                  okText="删除"
+                  cancelText="取消"
+                >
+                  <Button type="link" size="small" danger>
+                    删除
+                  </Button>
+                </Popconfirm>
+              )}
             </Space>
           );
         },
       },
     ],
-    [currentUserId]
+    [currentUserId, handleDelete, handleToggle, openEdit, openReset]
   );
 
   return (
@@ -336,7 +361,7 @@ export default function AdminUsersPage() {
             name="password"
             label="初始密码"
             rules={[{ required: true, message: '请输入密码' }]}
-            extra="至少 8 位，且含大写、小写与数字"
+            extra="至少 6 位，仅含字母与数字"
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
@@ -400,7 +425,7 @@ export default function AdminUsersPage() {
             name="new_password"
             label="新密码"
             rules={[{ required: true, message: '请输入新密码' }]}
-            extra="至少 8 位，且含大写、小写与数字"
+            extra="至少 6 位，仅含字母与数字"
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
@@ -411,8 +436,8 @@ export default function AdminUsersPage() {
 }
 
 function validatePassword(password: string): string | null {
-  if (!password || password.length < 8) return '密码不能少于8位';
-  if (!PASSWORD_RULE.test(password)) return '密码必须包含大写字母、小写字母和数字';
+  if (!password || password.length < 6) return '密码不能少于6位';
+  if (!PASSWORD_ALLOWED.test(password)) return '密码只能包含字母与数字';
   return null;
 }
 

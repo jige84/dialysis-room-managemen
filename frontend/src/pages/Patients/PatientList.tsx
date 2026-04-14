@@ -4,7 +4,7 @@
  * 主要功能：Table + 搜索；导出（权限受控）；对接 patientsApi.list。
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Card, Input, Select, Button, Table, Space, Tooltip, message } from 'antd';
+import { Card, Input, Select, Button, Table, Space, Tooltip, Popconfirm, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { SearchOutlined, PlusOutlined, ExportOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -77,12 +77,15 @@ const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> =
 
 export default function PatientListPage() {
   const navigate = useNavigate();
-  const canCreatePatient = useAuthStore((s) => s.hasRole(['admin', 'doctor']));
+  const hasRole = useAuthStore((s) => s.hasRole);
+  const canCreatePatient = hasRole(['admin', 'doctor']);
+  const canDeletePatient = hasRole(['admin', 'head_nurse']);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [accessFilter, setAccessFilter] = useState('');
   const [zoneFilter, setZoneFilter] = useState('');
   const [rows, setRows] = useState<PatientRow[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
@@ -134,6 +137,24 @@ export default function PatientListPage() {
     if (r.zone === 'hbv') return 'row-hbv';
     if (r.zone === 'hcv') return 'row-hcv';
     return '';
+  };
+
+  const handleDeletePatient = async (row: PatientRow) => {
+    try {
+      setDeletingId(row.id);
+      const res = await patientsApi.remove(row.id);
+      if (res.data.code !== 200) {
+        message.error(res.data.message || '删除失败');
+        return;
+      }
+      setRows(prev => prev.filter(item => item.id !== row.id));
+      message.success(`已删除患者档案：${row.name}`);
+    } catch (err) {
+      // 统一由 axios 响应拦截器提示错误，避免重复弹 toast
+      console.error('[PatientList] delete patient failed', err);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const columns: ColumnsType<PatientRow> = [
@@ -217,6 +238,20 @@ export default function PatientListPage() {
           <Button size="small" onClick={() => navigate(`/patients/${r.id}`)}>档案</Button>
           {r.status === 'active' && (
             <Button size="small" type="primary" onClick={() => navigate('/dialysis/entry')}>录入</Button>
+          )}
+          {canDeletePatient && (
+            <Popconfirm
+              title="确定删除该患者档案？"
+              description="将同步删除该患者相关透析/检验/医嘱等记录，删除后不可恢复。"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true, loading: deletingId === r.id }}
+              onConfirm={() => void handleDeletePatient(r)}
+            >
+              <Button size="small" danger loading={deletingId === r.id}>
+                删除
+              </Button>
+            </Popconfirm>
           )}
         </Space>
       ),

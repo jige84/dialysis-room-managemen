@@ -3,7 +3,7 @@
  */
 import request, { type ApiResponse } from './request';
 
-export type SystemUserRole = 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'qc' | 'quality';
+export type SystemUserRole = 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'technician' | 'qc' | 'quality';
 
 export interface UserRow {
   id: string;
@@ -60,4 +60,7 @@ export const usersApi = {
     request.patch<ApiResponse<{ id: string; username: string }>>(`/users/${id}/password`, {
       new_password,
     }),
+
+  remove: (id: string) =>
+    request.delete<ApiResponse<{ id: string; username: string; real_name: string; role: SystemUserRole }>>(`/users/${id}`),
 };

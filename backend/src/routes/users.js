@@ -13,7 +13,7 @@ const auditLog = require('../middleware/audit');
 const { success, created, paginated, error, notFound } = require('../utils/response');
 
 /** 与 DB users_role_check 及 rbac 中间件一致；qc 与 quality 并存 */
-const VALID_ROLES = ['admin', 'doctor', 'nurse', 'head_nurse', 'qc', 'quality'];
+const VALID_ROLES = ['admin', 'doctor', 'nurse', 'head_nurse', 'technician', 'qc', 'quality'];
 
 /** 与前端侧栏 menu key 一致；menu_permissions 为 JSON 数组白名单 */
 const ALLOWED_MENU_KEYS = new Set([
@@ -85,12 +85,12 @@ function menuPermissionsJsonbParam(mp) {
   return JSON.stringify(mp);
 }
 
-/** 与 POST /api/auth/change-password 强度一致 */
-const PASSWORD_STRENGTH = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/;
+/** 与 POST /api/auth/change-password 强度一致：至少 6 位，仅 ASCII 字母与数字 */
+const PASSWORD_ALLOWED = /^[A-Za-z0-9]+$/;
 
 function validatePasswordStrength(password) {
-  if (!password || password.length < 8) return '密码不能少于8位';
-  if (!PASSWORD_STRENGTH.test(password)) return '密码必须包含大写字母、小写字母和数字';
+  if (!password || password.length < 6) return '密码不能少于6位';
+  if (!PASSWORD_ALLOWED.test(password)) return '密码只能包含字母与数字';
   return null;
 }
 
@@ -283,6 +283,45 @@ router.patch('/:id/password', auth, rbac(['admin']), async (req, res, next) => {
 
     return success(res, { id: rows[0].id, username: rows[0].username }, '密码已重置');
   } catch (err) { next(err); }
+});
+
+// DELETE /api/users/:id — 管理员删除用户（仅未被业务数据引用时可删）
+router.delete('/:id', auth, rbac(['admin']), auditLog('users', 'DELETE'), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (String(id) === String(req.user.id)) {
+      return error(res, '不能删除自己的账号');
+    }
+
+    const { rows: existsRows } = await pool.query(
+      'SELECT id, username, real_name, role FROM users WHERE id = $1',
+      [id],
+    );
+    if (existsRows.length === 0) return notFound(res, '用户不存在');
+    const target = existsRows[0];
+
+    if (target.role === 'admin') {
+      const { rows: adminCountRows } = await pool.query(
+        "SELECT COUNT(*)::int AS c FROM users WHERE role = 'admin' AND is_active = true",
+      );
+      const activeAdminCount = adminCountRows[0]?.c || 0;
+      if (activeAdminCount <= 1) {
+        return error(res, '系统至少保留 1 个启用中的管理员，无法删除');
+      }
+    }
+
+    const { rows } = await pool.query(
+      'DELETE FROM users WHERE id = $1 RETURNING id, username, real_name, role',
+      [id],
+    );
+    if (rows.length === 0) return notFound(res, '用户不存在');
+    return success(res, rows[0], '用户已删除');
+  } catch (err) {
+    if (err?.code === '23503') {
+      return error(res, '该用户已被业务数据引用，无法删除。请改为禁用账号。');
+    }
+    next(err);
+  }
 });
 
 // GET /api/audit-logs（审计日志查询）

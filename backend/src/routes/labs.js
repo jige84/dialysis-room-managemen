@@ -132,7 +132,7 @@ router.get('/critical/unconfirmed', auth, rbac(['admin','head_nurse','doctor']),
 });
 
 // GET /api/labs/overdue - 复查到期患者列表
-router.get('/overdue', auth, async (req, res, next) => {
+router.get('/overdue', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'quality']), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (p.id, lr.test_type)

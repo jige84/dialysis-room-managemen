@@ -164,7 +164,7 @@ export default function PatientImportPage() {
           message="统一导入入口"
           description={
             <Typography.Paragraph style={{ marginBottom: 0 }}>
-              支持标准模板单文件、多个历史资料文件和整个历史资料文件夹。系统会自动识别导入模式；护理记录单仍只识别并列入待人工处理，不自动写库。
+              支持标准模板单文件、多个历史资料文件和整个历史资料文件夹。系统会自动识别导入模式；护理记录单已支持最小透析记录自动导入（未识别部分仍列入待人工处理）。
             </Typography.Paragraph>
           }
         />
@@ -234,7 +234,7 @@ export default function PatientImportPage() {
               </Typography.Text>
 
               <Typography.Text>
-                新建患者 {importResult.patients_created}；补全患者 {importResult.patients_updated}；导入化验 {importResult.labs_created}；导入医嘱 {importResult.orders_created}
+                新建患者 {importResult.patients_created}；补全患者 {importResult.patients_updated}；导入化验 {importResult.labs_created}；导入医嘱 {importResult.orders_created}；导入透析记录 {importResult.dialysis_created}
               </Typography.Text>
 
               {importResult.affected_patients.length > 0 ? (

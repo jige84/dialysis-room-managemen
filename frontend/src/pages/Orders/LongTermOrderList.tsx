@@ -416,7 +416,7 @@ export default function LongTermOrderListPage() {
   // 批量提交
   const handleConfirmAllNewOrders = async () => {
     if (!selectedPatient) return;
-    let finalOrders = [...draftOrders];
+    const finalOrders = [...draftOrders];
 
     const hasForm = newForm.getFieldValue('drug_name');
     if (hasForm) {

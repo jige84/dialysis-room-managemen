@@ -8,50 +8,36 @@ const router = express.Router();
 const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
-const { success, created, error, notFound } = require('../utils/response');
-const { formatDate } = require('../utils/dateUtils');
-
-/**
- * 请求体中的别名 → 数据库 infection_screenings.test_type（见 migrations/013）
- */
-function normalizeTestType(raw) {
-  if (!raw) return null;
-  const s = String(raw).toLowerCase();
-  const map = {
-    hbsag: 'hbsag',
-    hbvdna: 'hbvdna',
-    hcv: 'hcvab',
-    hcvab: 'hcvab',
-    hcvrna: 'hcvrna',
-    hiv: 'hiv',
-    tp: 'syphilis_tppa',
-    syphilis: 'syphilis_tppa',
-    syphilis_tppa: 'syphilis_tppa',
-    syphilis_rpr: 'syphilis_rpr',
-    chest_xray: 'chest_xray',
-  };
-  return map[s] || s;
-}
+const { success, created, error } = require('../utils/response');
+const InfectionService = require('../services/InfectionService');
+const {
+  validateLatestBatchPayload,
+  normalizeScreeningItemsPayload,
+  validateMonitoringPayload,
+  validateMonitoringBatchPayload,
+  normalizeButtonholeFilters,
+} = require('../validators/infectionValidators');
 
 // ── 感染筛查 ──────────────────────────────────────────────
 
 // GET /api/infection/screenings/overdue - 全科到期筛查（静态路由，必须在 :patientId 之前）
 router.get('/screenings/overdue', auth, rbac(['admin','head_nurse']), async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `WITH latest AS (
-         SELECT DISTINCT ON (is2.patient_id, is2.test_type)
-           p.id as patient_id, p.name, is2.test_type as screen_type, is2.test_date as screen_date,
-           is2.result,
-           EXTRACT(DAY FROM NOW() - is2.test_date) as days_since
-         FROM patients p
-         LEFT JOIN infection_screenings is2 ON is2.patient_id = p.id
-         WHERE p.status = 'active'
-         ORDER BY is2.patient_id, is2.test_type, is2.test_date DESC
-       )
-       SELECT * FROM latest WHERE days_since > 166 OR screen_date IS NULL
-       ORDER BY days_since DESC NULLS FIRST`
-    );
+    const { rows } = await InfectionService.listOverdueScreenings(pool);
+    return success(res, rows);
+  } catch (err) { next(err); }
+});
+
+// POST /api/infection/screenings/latest/batch - 批量获取患者最新筛查结果（用于感染页汇总）
+router.post('/screenings/latest/batch', auth, rbac(['admin', 'doctor', 'head_nurse', 'nurse', 'technician', 'quality', 'qc']), async (req, res, next) => {
+  try {
+    const valid = validateLatestBatchPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
+    const patientIds = valid.value;
+    if (patientIds.length === 0) return success(res, []);
+
+    const { rows } = await InfectionService.listLatestScreeningsBatch(pool, patientIds);
+
     return success(res, rows);
   } catch (err) { next(err); }
 });
@@ -59,14 +45,7 @@ router.get('/screenings/overdue', auth, rbac(['admin','head_nurse']), async (req
 // GET /api/infection/screenings/:patientId - 某患者筛查历史
 router.get('/screenings/:patientId', auth, async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT is2.*, u.real_name as entered_by_name
-       FROM infection_screenings is2
-       LEFT JOIN users u ON is2.entered_by = u.id
-       WHERE is2.patient_id = $1
-       ORDER BY is2.test_date DESC`,
-      [req.params.patientId]
-    );
+    const { rows } = await InfectionService.listScreeningsByPatient(pool, req.params.patientId);
     return success(res, rows);
   } catch (err) { next(err); }
 });
@@ -74,60 +53,23 @@ router.get('/screenings/:patientId', auth, async (req, res, next) => {
 // GET /api/infection/screenings/:patientId/latest - 最新各项筛查结果
 router.get('/screenings/:patientId/latest', auth, async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT DISTINCT ON (test_type)
-         id,
-         test_type AS screen_type,
-         test_date AS screen_date,
-         result,
-         notes,
-         next_due_date
-       FROM infection_screenings
-       WHERE patient_id = $1
-       ORDER BY test_type, test_date DESC`,
-      [req.params.patientId]
-    );
+    const { rows } = await InfectionService.listLatestScreeningsByPatient(pool, req.params.patientId);
     return success(res, rows);
   } catch (err) { next(err); }
 });
 
 // POST /api/infection/screenings/:patientId - 录入筛查结果（支持批量）
-router.post('/screenings/:patientId', auth, async (req, res, next) => {
+router.post('/screenings/:patientId', auth, rbac(['admin', 'doctor', 'head_nurse', 'nurse', 'technician']), async (req, res, next) => {
   try {
-    const items = Array.isArray(req.body) ? req.body : [req.body];
-    if (items.length === 0) return error(res, '请提供筛查数据');
+    const valid = normalizeScreeningItemsPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
 
-    const results = [];
-    for (const item of items) {
-      const { screen_type, test_type, result, screen_date, test_date, notes } = item;
-      const tt = normalizeTestType(test_type || screen_type);
-      if (!tt || !result) continue;
-
-      const { rows } = await pool.query(
-        `INSERT INTO infection_screenings
-           (patient_id, test_type, result, test_date, notes, entered_by, is_positive)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [
-          req.params.patientId,
-          tt,
-          result,
-          test_date || screen_date || formatDate(new Date()),
-          notes,
-          req.user.id,
-          result === 'positive',
-        ]
-      );
-      results.push(rows[0]);
-
-      // 如果HBV/HCV阳性，自动更新患者隔离区
-      if ((tt === 'hbsag' || tt === 'hcvab') && result === 'positive') {
-        const zone = tt === 'hbsag' ? 'hbv' : 'hcv';
-        await pool.query(
-          `UPDATE patients SET isolation_zone = $1 WHERE id = $2 AND isolation_zone = 'normal'`,
-          [zone, req.params.patientId]
-        );
-      }
-    }
+    const results = await InfectionService.createScreenings(
+      pool,
+      req.params.patientId,
+      valid.value,
+      req.user.id,
+    );
 
     return created(res, results, `${results.length}条筛查结果已录入`);
   } catch (err) { next(err); }
@@ -138,15 +80,9 @@ router.post('/screenings/:patientId', auth, async (req, res, next) => {
 // GET /api/infection/monitoring/:year/:month - 获取月度监测报告
 router.get('/monitoring/:year/:month', auth, async (req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT im.*, va.location, va.access_type, p.name as patient_name
-       FROM infection_monitoring im
-       JOIN vascular_accesses va ON im.vascular_access_id = va.id
-       JOIN patients p ON im.patient_id = p.id
-       WHERE im.monitor_year = $1 AND im.monitor_month = $2
-       ORDER BY im.catheter_days DESC`,
-      [parseInt(req.params.year), parseInt(req.params.month)]
-    );
+    const year = parseInt(req.params.year, 10);
+    const month = parseInt(req.params.month, 10);
+    const { rows } = await InfectionService.listMonitoringByMonth(pool, year, month);
     return success(res, rows);
   } catch (err) { next(err); }
 });
@@ -154,86 +90,31 @@ router.get('/monitoring/:year/:month', auth, async (req, res, next) => {
 // POST /api/infection/monitoring - 录入或更新月度导管天数
 router.post('/monitoring', auth, rbac(['admin','head_nurse','nurse']), async (req, res, next) => {
   try {
-    const {
-      patient_id, access_id, vascular_access_id, monitor_year, monitor_month,
-      catheter_days, infection_status, notes,
-    } = req.body;
-
-    const vaId = vascular_access_id || access_id;
-    if (!patient_id || !monitor_year || !monitor_month) {
-      return error(res, '患者ID和月份为必填项');
-    }
-
-    const { rows } = await pool.query(
-      `INSERT INTO infection_monitoring
-         (patient_id, vascular_access_id, monitor_year, monitor_month,
-          catheter_days, infection_status, notes, recorded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (patient_id, monitor_year, monitor_month)
-       DO UPDATE SET catheter_days = $5, infection_status = $6,
-                     notes = $7, vascular_access_id = COALESCE($2, infection_monitoring.vascular_access_id),
-                     updated_at = NOW()
-       RETURNING *`,
-      [patient_id, vaId || null, monitor_year, monitor_month,
-       catheter_days || 0, infection_status || 'none', notes, req.user.id]
-    );
+    const valid = validateMonitoringPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
+    const { rows } = await InfectionService.saveMonitoring(pool, valid.value, req.user.id);
     return created(res, rows[0], '感染监测数据已保存');
   } catch (err) { next(err); }
 });
 
 // POST /api/infection/monitoring/batch - 批量导入月度导管日数据
 router.post('/monitoring/batch', auth, rbac(['admin','head_nurse']), async (req, res, next) => {
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const { year, month, records } = req.body;
-    if (!records || !Array.isArray(records)) return error(res, 'records 字段为数组');
+    const valid = validateMonitoringBatchPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
 
-    let count = 0;
-    for (const r of records) {
-      await client.query(
-        `INSERT INTO infection_monitoring
-           (patient_id, vascular_access_id, monitor_year, monitor_month,
-            catheter_days, infection_status, recorded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (patient_id, monitor_year, monitor_month)
-         DO UPDATE SET catheter_days = $5, updated_at = NOW()`,
-        [r.patient_id, r.vascular_access_id || r.access_id || null, year, month,
-         r.catheter_days || 0, r.infection_status || 'none', req.user.id]
-      );
-      count++;
-    }
-    await client.query('COMMIT');
+    const { count } = await InfectionService.saveMonitoringBatch(pool, valid.value, req.user.id);
     return success(res, { count }, `已录入 ${count} 条导管日记录`);
-  } catch (err) {
-    await client.query('ROLLBACK');
-    next(err);
-  } finally { client.release(); }
+  } catch (err) { next(err); }
 });
 
 // GET /api/infection/buttonhole-monitoring - 扣眼穿刺相关感染监测
 router.get('/buttonhole-monitoring', auth, async (req, res, next) => {
   try {
-    const { patient_id, year, month } = req.query;
-    const conditions = ['va.is_buttonhole = true'];
-    const params = [];
-    let idx = 1;
+    const valid = normalizeButtonholeFilters(req.query);
+    if (!valid.ok) return error(res, valid.message);
 
-    if (patient_id) { conditions.push(`im.patient_id = $${idx++}`); params.push(patient_id); }
-    if (year) { conditions.push(`im.monitor_year = $${idx++}`); params.push(parseInt(year)); }
-    if (month) { conditions.push(`im.monitor_month = $${idx++}`); params.push(parseInt(month)); }
-
-    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-    const { rows } = await pool.query(
-      `SELECT im.*, p.name as patient_name, va.location
-       FROM infection_monitoring im
-       JOIN patients p ON im.patient_id = p.id
-       JOIN vascular_accesses va ON im.vascular_access_id = va.id
-       ${where}
-       ORDER BY im.monitor_year DESC, im.monitor_month DESC
-       LIMIT 200`,
-      params
-    );
+    const { rows } = await InfectionService.listButtonholeMonitoring(pool, valid.value);
     return success(res, rows);
   } catch (err) { next(err); }
 });

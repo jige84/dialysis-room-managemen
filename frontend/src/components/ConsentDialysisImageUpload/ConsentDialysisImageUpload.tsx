@@ -41,7 +41,8 @@ export default function ConsentDialysisImageUpload({
 
   const appendFiles = useCallback(
     (raw: File[]) => {
-      const room = maxCount - list.length;
+      const currentList = fileList ?? [];
+      const room = maxCount - currentList.length;
       if (room <= 0) return;
       const toAdd: UploadFile[] = [];
       for (const file of raw) {
@@ -61,9 +62,9 @@ export default function ConsentDialysisImageUpload({
           originFileObj: file as RcFile,
         });
       }
-      if (toAdd.length) emit([...list, ...toAdd]);
+      if (toAdd.length) emit([...currentList, ...toAdd]);
     },
-    [list, maxCount, emit]
+    [fileList, maxCount, emit]
   );
 
   const resetFileInputForNextOpen = (el: HTMLInputElement) => {

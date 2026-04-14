@@ -12,6 +12,7 @@ const ROLE_LEVELS = {
   quality:    1,   // 质控（只读）
   qc:         1,   // 与 quality 等价（历史种子/账号兼容）
   nurse:      2,   // 护士
+  technician: 2,   // 技师
   doctor:     3,   // 医生
   head_nurse: 4,   // 护士长
   admin:      5,   // 超级管理员

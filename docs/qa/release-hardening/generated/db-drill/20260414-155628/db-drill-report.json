@@ -1,0 +1,32 @@
+{
+  "runId": "20260414-155628",
+  "generatedAt": "2026-04-14T07:56:28.492Z",
+  "status": "failed",
+  "database": "hemodialysis_db",
+  "user": "hd_app",
+  "mode": "schema-level",
+  "limitation": null,
+  "tables": [],
+  "steps": [
+    {
+      "name": "db-backup",
+      "status": "failed",
+      "startedAt": "2026-04-14T07:56:28.540Z",
+      "endedAt": "2026-04-14T07:56:28.541Z",
+      "durationMs": 1,
+      "error": "spawnSync pg_dump EPERM"
+    }
+  ],
+  "rowCounts": {
+    "backup": {},
+    "afterRestore": {}
+  },
+  "rowCountDiff": [],
+  "artifacts": {
+    "backupDump": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155628\\hemodialysis_db-20260414-155628.dump",
+    "backupList": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155628\\hemodialysis_db-20260414-155628.list",
+    "reportJson": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155628\\db-drill-report.json",
+    "reportMd": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-drill\\20260414-155628\\db-drill-report.md"
+  },
+  "error": "Error: spawnSync pg_dump EPERM\n    at Object.spawnSync (node:internal/child_process:1119:20)\n    at spawnSync (node:child_process:911:24)\n    at execOrThrow (E:\\xuetoushiguanli\\backend\\scripts\\db-drill-rehearsal.js:63:15)\n    at E:\\xuetoushiguanli\\backend\\scripts\\db-drill-rehearsal.js:351:7\n    at measureStep (E:\\xuetoushiguanli\\backend\\scripts\\db-drill-rehearsal.js:89:27)\n    at main (E:\\xuetoushiguanli\\backend\\scripts\\db-drill-rehearsal.js:350:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+}
