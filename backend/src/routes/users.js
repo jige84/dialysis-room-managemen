@@ -87,10 +87,29 @@ function menuPermissionsJsonbParam(mp) {
 
 /** 与 POST /api/auth/change-password 强度一致：至少 6 位，仅 ASCII 字母与数字 */
 const PASSWORD_ALLOWED = /^[A-Za-z0-9]+$/;
+const USERNAME_MAX_LENGTH = 50;
+const REAL_NAME_MAX_LENGTH = 50;
 
 function validatePasswordStrength(password) {
   if (!password || password.length < 6) return '密码不能少于6位';
   if (!PASSWORD_ALLOWED.test(password)) return '密码只能包含字母与数字';
+  return null;
+}
+
+function normalizeTextInput(value) {
+  if (value === undefined || value === null) return undefined;
+  return String(value).trim();
+}
+
+function validateUsername(username) {
+  if (!username) return '用户名不能为空';
+  if (username.length > USERNAME_MAX_LENGTH) return `用户名不能超过${USERNAME_MAX_LENGTH}个字符`;
+  return null;
+}
+
+function validateRealName(realName) {
+  if (!realName) return '姓名不能为空';
+  if (realName.length > REAL_NAME_MAX_LENGTH) return `姓名不能超过${REAL_NAME_MAX_LENGTH}个字符`;
   return null;
 }
 
@@ -122,10 +141,16 @@ router.get('/', auth, rbac(['admin']), async (req, res, next) => {
 router.post('/', auth, rbac(['admin']), auditLog('users', 'CREATE'), async (req, res, next) => {
   try {
     const { username, real_name, role, password, menu_permissions: menuPermsBody } = req.body;
+    const normalizedUsername = normalizeTextInput(username);
+    const normalizedRealName = normalizeTextInput(real_name);
 
-    if (!username || !real_name || !role || !password) {
+    if (!normalizedUsername || !normalizedRealName || !role || !password) {
       return error(res, '用户名、姓名、角色、密码均为必填项');
     }
+    const usernameErr = validateUsername(normalizedUsername);
+    if (usernameErr) return error(res, usernameErr);
+    const realNameErr = validateRealName(normalizedRealName);
+    if (realNameErr) return error(res, realNameErr);
     if (!VALID_ROLES.includes(role)) {
       return error(res, `角色必须是以下之一：${VALID_ROLES.join('、')}`);
     }
@@ -139,7 +164,7 @@ router.post('/', auth, rbac(['admin']), auditLog('users', 'CREATE'), async (req,
       `INSERT INTO users (username, real_name, role, password_hash, menu_permissions)
        VALUES ($1, $2, $3, $4, $5::jsonb)
        RETURNING id, username, real_name, role, is_active, menu_permissions, created_at`,
-      [username, real_name, role, hash, menuPermissionsJsonbParam(menu_permissions)]
+      [normalizedUsername, normalizedRealName, role, hash, menuPermissionsJsonbParam(menu_permissions)]
     );
     return created(res, rows[0], '用户创建成功');
   } catch (err) {
@@ -151,8 +176,10 @@ router.post('/', auth, rbac(['admin']), auditLog('users', 'CREATE'), async (req,
 // PUT /api/users/:id
 router.put('/:id', auth, rbac(['admin']), auditLog('users', 'UPDATE'), async (req, res, next) => {
   try {
-    const { real_name, role, menu_permissions: menuPermsBody } = req.body;
+    const { username, real_name, role, menu_permissions: menuPermsBody } = req.body;
     const { id } = req.params;
+    const normalizedUsername = normalizeTextInput(username);
+    const normalizedRealName = normalizeTextInput(real_name);
 
     if (role && !VALID_ROLES.includes(role)) {
       return error(res, `角色无效`);
@@ -174,9 +201,17 @@ router.put('/:id', auth, rbac(['admin']), auditLog('users', 'UPDATE'), async (re
     const params = [];
     let paramIdx = 1;
 
+    if (username !== undefined && username !== null) {
+      const usernameErr = validateUsername(normalizedUsername);
+      if (usernameErr) return error(res, usernameErr);
+      sets.push(`username = $${paramIdx++}`);
+      params.push(normalizedUsername);
+    }
     if (real_name !== undefined && real_name !== null) {
+      const realNameErr = validateRealName(normalizedRealName);
+      if (realNameErr) return error(res, realNameErr);
       sets.push(`real_name = $${paramIdx++}`);
-      params.push(real_name);
+      params.push(normalizedRealName);
     }
     if (role !== undefined && role !== null) {
       sets.push(`role = $${paramIdx++}`);
@@ -219,7 +254,10 @@ router.put('/:id', auth, rbac(['admin']), auditLog('users', 'UPDATE'), async (re
     }
 
     return success(res, row, '用户信息更新成功');
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === '23505') return error(res, '用户名已存在');
+    next(err);
+  }
 });
 
 // PATCH /api/users/:id/toggle-active

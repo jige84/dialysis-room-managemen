@@ -170,29 +170,36 @@ router.get('/recent', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'qua
     const offset = (page - 1) * pageSize;
 
     const { rows } = await pool.query(
-      `SELECT
-        lr.*,
-        p.name AS patient_name,
-        p.gender AS patient_gender,
-        al.id AS recheck_alert_id,
-        al.message AS recheck_alert_message
-      FROM lab_results lr
-      JOIN patients p ON lr.patient_id = p.id
-      LEFT JOIN LATERAL (
-        SELECT a2.id, a2.message
-        FROM alerts a2
-        WHERE a2.patient_id = lr.patient_id
-          AND a2.alert_type = 'lab_review_due'
-          AND a2.alert_rule_id = lr.test_type
-          AND a2.status = 'active'
-        ORDER BY a2.created_at DESC
-        LIMIT 1
-      ) al ON true
-      WHERE p.status = 'active'
-        AND lr.test_date >= $1
-        AND lr.test_date <= $2
-      ORDER BY lr.test_date DESC, lr.created_at DESC
-      LIMIT $3 OFFSET $4`,
+      `WITH latest AS (
+         SELECT DISTINCT ON (lr.patient_id, lr.test_type)
+           lr.*
+         FROM lab_results lr
+         JOIN patients p0 ON p0.id = lr.patient_id
+         WHERE p0.status = 'active'
+           AND lr.test_date >= $1
+           AND lr.test_date <= $2
+         ORDER BY lr.patient_id, lr.test_type, lr.test_date DESC, lr.created_at DESC, lr.id DESC
+       )
+       SELECT
+         latest.*,
+         p.name AS patient_name,
+         p.gender AS patient_gender,
+         al.id AS recheck_alert_id,
+         al.message AS recheck_alert_message
+       FROM latest
+       JOIN patients p ON p.id = latest.patient_id
+       LEFT JOIN LATERAL (
+         SELECT a2.id, a2.message
+         FROM alerts a2
+         WHERE a2.patient_id = latest.patient_id
+           AND a2.alert_type = 'lab_review_due'
+           AND a2.alert_rule_id = latest.test_type
+           AND a2.status = 'active'
+         ORDER BY a2.created_at DESC
+         LIMIT 1
+       ) al ON true
+       ORDER BY latest.test_date DESC, latest.created_at DESC, latest.id DESC
+       LIMIT $3 OFFSET $4`,
       [startStr, endStr, pageSize, offset]
     );
     const withNext = rows.map((r) => {

@@ -130,6 +130,38 @@ interface PatientCategoryGroup {
   categories: { name: string; rows: LabResultListRow[] }[];
 }
 
+/**
+ * 列表防重：后端历史数据可能存在“同患者+同项目+同日期+同结果+同单位”的重复行。
+ * 这里统一在前端展示层去重，并保留排序靠前（通常是最新创建）的一条。
+ */
+function dedupeLabRows(rows: LabResultListRow[]): LabResultListRow[] {
+  const seenId = new Set<string>();
+  const seenBiz = new Set<string>();
+  const out: LabResultListRow[] = [];
+
+  const normalizeValue = (value: unknown): string => {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : String(value ?? '').trim();
+  };
+
+  for (const r of rows) {
+    if (r.id && seenId.has(r.id)) continue;
+    if (r.id) seenId.add(r.id);
+
+    const bizKey = [
+      r.patient_id,
+      r.test_type,
+      String(r.test_date || '').slice(0, 10),
+      normalizeValue(r.value),
+      String(r.unit ?? '').trim().toLowerCase(),
+    ].join('|');
+    if (seenBiz.has(bizKey)) continue;
+    seenBiz.add(bizKey);
+    out.push(r);
+  }
+  return out;
+}
+
 function groupByPatientAndCategory(rows: LabResultListRow[]): PatientCategoryGroup[] {
   const pmap = new Map<
     string,
@@ -427,13 +459,13 @@ export default function LabResultListPage() {
       if (scope === 'all') {
         const res = await labsApi.listGlobal({ page: 1, page_size: 1000 });
         const rows = res.data?.data?.list;
-        setList(Array.isArray(rows) ? rows : []);
+        setList(Array.isArray(rows) ? dedupeLabRows(rows) : []);
         return;
       }
 
       const res = await labsApi.listRecent({ days: 7, page: 1, page_size: 1000 });
       const rows = res.data?.data;
-      setList(Array.isArray(rows) ? rows : []);
+      setList(Array.isArray(rows) ? dedupeLabRows(rows) : []);
     } catch {
       message.error(scope === 'all' ? '加载历史检验结果失败' : '加载近7天检验结果失败');
       setList([]);

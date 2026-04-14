@@ -1,0 +1,29 @@
+{
+  "runId": "20260414-163838",
+  "generatedAt": "2026-04-14T08:38:38.012Z",
+  "status": "failed",
+  "database": "hemodialysis_db",
+  "user": "hd_app",
+  "tempDbName": null,
+  "skipRestoreTest": true,
+  "warning": null,
+  "steps": [
+    {
+      "name": "precheck-pg-tools",
+      "status": "failed",
+      "startedAt": "2026-04-14T08:38:38.062Z",
+      "endedAt": "2026-04-14T08:38:38.063Z",
+      "durationMs": 1,
+      "error": "spawnSync pg_dump EPERM"
+    }
+  ],
+  "tableCount": 0,
+  "rowCountDiff": [],
+  "artifacts": {
+    "backupDump": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-acceptance\\20260414-163838\\hemodialysis_db-20260414-163838.dump",
+    "backupList": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-acceptance\\20260414-163838\\hemodialysis_db-20260414-163838.list",
+    "reportJson": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-acceptance\\20260414-163838\\db-acceptance-report.json",
+    "reportMd": "E:\\xuetoushiguanli\\docs\\qa\\release-hardening\\generated\\db-acceptance\\20260414-163838\\db-acceptance-report.md"
+  },
+  "error": "Error: spawnSync pg_dump EPERM\n    at Object.spawnSync (node:internal/child_process:1119:20)\n    at spawnSync (node:child_process:911:24)\n    at execOrThrow (E:\\xuetoushiguanli\\backend\\scripts\\db-backup-restore-acceptance.js:101:15)\n    at E:\\xuetoushiguanli\\backend\\scripts\\db-backup-restore-acceptance.js:327:7\n    at measureStep (E:\\xuetoushiguanli\\backend\\scripts\\db-backup-restore-acceptance.js:127:27)\n    at main (E:\\xuetoushiguanli\\backend\\scripts\\db-backup-restore-acceptance.js:326:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+}

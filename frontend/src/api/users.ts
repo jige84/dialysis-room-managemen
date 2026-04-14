@@ -27,6 +27,7 @@ export interface CreateUserPayload {
 }
 
 export interface UpdateUserPayload {
+  username?: string;
   real_name?: string;
   role?: SystemUserRole;
   /** 显式传入 null 表示取消限制；不传则不修改 */

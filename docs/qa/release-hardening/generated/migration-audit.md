@@ -1,9 +1,9 @@
 # Migration Audit
 
-- 生成时间：2026-04-14T08:07:38.256Z
-- 总脚本数：58
+- 生成时间：2026-04-14T08:38:52.689Z
+- 总脚本数：59
 - 最小编号：1
-- 最大编号：58
+- 最大编号：59
 
 ## 结果
 
@@ -72,4 +72,5 @@
 056_patients_history_import_nullable.sql
 057_patients_history_import_nullable_demographics.sql
 058_users_role_add_technician.sql
+059_audit_logs_immutable_guard.sql
 ```

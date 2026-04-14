@@ -36,18 +36,41 @@ import { AI_ASSISTANT_FEATURES, AI_ASSISTANT_FEATURE_KEYS } from '../../constant
 
 /** 仅 ASCII 字母与数字 */
 const PASSWORD_ALLOWED = /^[A-Za-z0-9]+$/;
+const USERNAME_MAX_LENGTH = 50;
+const REAL_NAME_MAX_LENGTH = 50;
+
+/**
+ * 用户管理页角色展示文案（仅影响展示，不改变后端 role 值）
+ * 统一编辑弹框、创建弹框、列表表格三处显示，避免文案不一致。
+ */
+const ADMIN_USERS_ROLE_LABELS: Record<string, string> = {
+  ...ROLE_LABELS,
+  head_nurse: '护士长',
+  doctor: '医生',
+  nurse: '护士',
+};
 
 const ROLE_OPTIONS: { value: SystemUserRole; label: string }[] = [
-  { value: 'admin', label: ROLE_LABELS.admin },
-  { value: 'doctor', label: ROLE_LABELS.doctor },
-  { value: 'nurse', label: ROLE_LABELS.nurse },
-  { value: 'technician', label: ROLE_LABELS.technician },
-  { value: 'head_nurse', label: ROLE_LABELS.head_nurse },
-  { value: 'quality', label: ROLE_LABELS.quality },
+  { value: 'admin', label: ADMIN_USERS_ROLE_LABELS.admin },
+  { value: 'doctor', label: ADMIN_USERS_ROLE_LABELS.doctor },
+  { value: 'nurse', label: ADMIN_USERS_ROLE_LABELS.nurse },
+  { value: 'technician', label: ADMIN_USERS_ROLE_LABELS.technician },
+  { value: 'head_nurse', label: ADMIN_USERS_ROLE_LABELS.head_nurse },
+  { value: 'quality', label: ADMIN_USERS_ROLE_LABELS.quality },
+];
+
+const EDIT_ROLE_OPTIONS: { value: SystemUserRole; label: string }[] = [
+  { value: 'admin', label: ADMIN_USERS_ROLE_LABELS.admin },
+  { value: 'head_nurse', label: ADMIN_USERS_ROLE_LABELS.head_nurse },
+  { value: 'doctor', label: ADMIN_USERS_ROLE_LABELS.doctor },
+  { value: 'nurse', label: ADMIN_USERS_ROLE_LABELS.nurse },
+  { value: 'technician', label: ADMIN_USERS_ROLE_LABELS.technician },
+  { value: 'quality', label: ADMIN_USERS_ROLE_LABELS.quality },
 ];
 
 function roleLabel(role: string): string {
-  return ROLE_LABELS[role] ?? role;
+  const normalized = role === 'qc' ? 'quality' : role;
+  return ADMIN_USERS_ROLE_LABELS[normalized] ?? ADMIN_USERS_ROLE_LABELS[role] ?? role;
 }
 
 export default function AdminUsersPage() {
@@ -66,6 +89,7 @@ export default function AdminUsersPage() {
     menu_keys: string[];
   }>();
   const [editForm] = Form.useForm<{
+    username: string;
     real_name: string;
     role: SystemUserRole;
     menu_keys: string[];
@@ -104,6 +128,13 @@ export default function AdminUsersPage() {
   const submitCreate = async () => {
     try {
       const v = await createForm.validateFields();
+      const username = normalizeTextInput(v.username);
+      const realName = normalizeTextInput(v.real_name);
+      const userErr = validateUserBasicInfo(username, realName);
+      if (userErr) {
+        message.error(userErr);
+        return;
+      }
       const pwdErr = validatePassword(v.password);
       if (pwdErr) {
         message.error(pwdErr);
@@ -111,8 +142,8 @@ export default function AdminUsersPage() {
       }
       const unrestricted = isUnrestrictedMenuKeys(v.role, v.menu_keys);
       await usersApi.create({
-        username: v.username,
-        real_name: v.real_name,
+        username,
+        real_name: realName,
         role: v.role,
         password: v.password,
         menu_permissions: unrestricted ? null : v.menu_keys,
@@ -130,6 +161,7 @@ export default function AdminUsersPage() {
     const role = normalizeRoleForForm(r.role);
     const keys = mergePermissionsForForm(role, r.menu_permissions);
     editForm.setFieldsValue({
+      username: r.username,
       real_name: r.real_name,
       role,
       menu_keys: keys,
@@ -141,16 +173,28 @@ export default function AdminUsersPage() {
     if (!editing) return;
     try {
       const v = await editForm.validateFields();
+      const username = normalizeTextInput(v.username);
+      const realName = normalizeTextInput(v.real_name);
+      const userErr = validateUserBasicInfo(username, realName);
+      if (userErr) {
+        message.error(userErr);
+        return;
+      }
       const unrestricted = isUnrestrictedMenuKeys(v.role, v.menu_keys);
-      await usersApi.update(editing.id, {
-        real_name: v.real_name,
+      const res = await usersApi.update(editing.id, {
+        username,
+        real_name: realName,
         role: v.role,
         menu_permissions: unrestricted ? null : v.menu_keys,
       });
+      const updated = res.data.data;
+      if (updated?.id) {
+        setRows(prev => prev.map(item => (item.id === updated.id ? { ...item, ...updated } : item)));
+      }
       message.success('已保存');
       setEditOpen(false);
       setEditing(null);
-      await load();
+      void load();
     } catch (e: unknown) {
       if (isFormValidationError(e)) return;
     }
@@ -330,14 +374,14 @@ export default function AdminUsersPage() {
             label="用户名"
             rules={[{ required: true, message: '请输入用户名' }]}
           >
-            <Input autoComplete="off" />
+            <Input autoComplete="off" maxLength={USERNAME_MAX_LENGTH} />
           </Form.Item>
           <Form.Item
             name="real_name"
             label="姓名"
             rules={[{ required: true, message: '请输入姓名' }]}
           >
-            <Input />
+            <Input maxLength={REAL_NAME_MAX_LENGTH} />
           </Form.Item>
           <Form.Item
             name="role"
@@ -382,19 +426,23 @@ export default function AdminUsersPage() {
       >
         {editing && (
           <Form form={editForm} layout="vertical" style={{ marginTop: 8 }}>
-            <Form.Item label="用户名">
-              <Input value={editing.username} disabled />
+            <Form.Item
+              name="username"
+              label="用户名"
+              rules={[{ required: true, message: '请输入用户名' }]}
+            >
+              <Input autoComplete="off" maxLength={USERNAME_MAX_LENGTH} />
             </Form.Item>
             <Form.Item
               name="real_name"
               label="姓名"
               rules={[{ required: true, message: '请输入姓名' }]}
             >
-              <Input />
+              <Input maxLength={REAL_NAME_MAX_LENGTH} />
             </Form.Item>
             <Form.Item name="role" label="角色" rules={[{ required: true, message: '请选择角色' }]}>
               <Select
-                options={ROLE_OPTIONS}
+                options={EDIT_ROLE_OPTIONS}
                 onChange={r =>
                   editForm.setFieldsValue({
                     menu_keys: menuKeysConfigurableForRole(r as SystemUserRole),
@@ -438,6 +486,18 @@ export default function AdminUsersPage() {
 function validatePassword(password: string): string | null {
   if (!password || password.length < 6) return '密码不能少于6位';
   if (!PASSWORD_ALLOWED.test(password)) return '密码只能包含字母与数字';
+  return null;
+}
+
+function normalizeTextInput(value: string): string {
+  return String(value ?? '').trim();
+}
+
+function validateUserBasicInfo(username: string, realName: string): string | null {
+  if (!username) return '用户名不能为空';
+  if (username.length > USERNAME_MAX_LENGTH) return `用户名不能超过${USERNAME_MAX_LENGTH}个字符`;
+  if (!realName) return '姓名不能为空';
+  if (realName.length > REAL_NAME_MAX_LENGTH) return `姓名不能超过${REAL_NAME_MAX_LENGTH}个字符`;
   return null;
 }
 

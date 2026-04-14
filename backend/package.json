@@ -17,9 +17,14 @@
     "test:schedule": "node scripts/test-dialysis-schedule-expansion.js && node scripts/test-schedule-db-check.js",
     "test:profile-sync": "node scripts/test-patient-prescription-profile-sync.js",
     "test:smoke-readiness": "node scripts/smoke-online-readiness.js",
+    "labs:dedupe:dry-run": "node scripts/lab-results-dedupe-and-guard.js --dry-run",
+    "labs:dedupe:apply": "node scripts/lab-results-dedupe-and-guard.js --apply-cleanup",
+    "labs:guard:add": "node scripts/lab-results-dedupe-and-guard.js --apply-guard --guard=daily_unique",
+    "labs:guard:drop": "node scripts/lab-results-dedupe-and-guard.js --drop-guard",
     "import:patients": "node scripts/import-patients-from-xlsx.js",
     "sync:nurse-users": "node scripts/sync-nurse-users-from-assignment.js",
     "db:drill": "node scripts/db-drill-rehearsal.js",
+    "db:acceptance": "node scripts/db-backup-restore-acceptance.js",
     "observe:daily": "node scripts/generate-post-release-observation.js"
   },
   "keywords": [

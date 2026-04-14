@@ -29,6 +29,8 @@ npm run test:smoke-five-modules
 npm run hardening:baseline
 npm run audit:migrations
 npm run db:drill
+# 生产同构环境建议执行（严格备份恢复验收，默认包含“恢复到临时库并校验行数”）
+npm run db:acceptance
 ```
 
 ### 2.2 数据演练（备份 -> 迁移 -> 回滚 -> 恢复）
