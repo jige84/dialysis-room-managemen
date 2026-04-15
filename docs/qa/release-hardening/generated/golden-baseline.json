@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-04-14T08:07:30.275Z",
+  "generatedAt": "2026-04-15T03:09:43.905Z",
   "git": {
-    "branch": "",
-    "head": "",
-    "statusShort": ""
+    "branch": "master",
+    "head": "b48b6bd",
+    "statusShort": "M backend/package-lock.json\n M frontend/package-lock.json"
   },
   "routes": [
     {
@@ -944,7 +944,8 @@
     "055_water_quality_machine_and_daily_inspections.sql",
     "056_patients_history_import_nullable.sql",
     "057_patients_history_import_nullable_demographics.sql",
-    "058_users_role_add_technician.sql"
+    "058_users_role_add_technician.sql",
+    "059_audit_logs_immutable_guard.sql"
   ],
   "formulaAnchors": [
     {

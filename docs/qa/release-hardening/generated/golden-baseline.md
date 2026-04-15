@@ -1,13 +1,14 @@
 # Golden Baseline
 
-- 生成时间：2026-04-14T08:07:30.275Z
-- 分支：`unknown`
-- HEAD：`unknown`
+- 生成时间：2026-04-15T03:09:43.905Z
+- 分支：`master`
+- HEAD：`b48b6bd`
 
 ## Git Snapshot
 
 ```text
-(clean)
+M backend/package-lock.json
+ M frontend/package-lock.json
 ```
 
 ## Route Inventory
@@ -200,7 +201,7 @@
 
 ## Migrations
 
-总计：58 个迁移脚本
+总计：59 个迁移脚本
 
 ```text
 001_create_users.sql
@@ -261,6 +262,7 @@
 056_patients_history_import_nullable.sql
 057_patients_history_import_nullable_demographics.sql
 058_users_role_add_technician.sql
+059_audit_logs_immutable_guard.sql
 ```
 
 ## Medical Formula Anchors

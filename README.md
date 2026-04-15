@@ -55,6 +55,313 @@ npm run dev
 
 ---
 
+## 生产环境部署
+
+### 前置条件
+- **服务器要求**：Ubuntu 20.04+ / CentOS 8+ / Windows Server 2019+
+- **Node.js**：20.0+ LTS
+- **PostgreSQL**：16+
+- **Redis**：7+（可选，用于JWT黑名单和缓存）
+- **Nginx**：1.20+（反向代理）
+- **PM2**：5.0+（进程管理）
+- **SSL证书**：生产环境必须配置HTTPS
+
+### 生产环境配置
+
+#### 1. 数据库和Redis设置
+```bash
+# 创建生产数据库
+sudo -u postgres psql
+CREATE DATABASE hemodialysis_db;
+CREATE USER hd_app WITH PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE hemodialysis_db TO hd_app;
+\q
+
+# Redis安装（Ubuntu/Debian）
+sudo apt update && sudo apt install redis-server
+sudo systemctl enable redis-server
+sudo systemctl start redis-server
+
+# 设置Redis密码（可选）
+sudo nano /etc/redis/redis.conf
+# 添加：requirepass your_redis_password
+sudo systemctl restart redis-server
+```
+
+#### 2. 应用部署
+```bash
+# 创建部署目录
+sudo mkdir -p /opt/hemodialysis
+sudo chown -R $USER:$USER /opt/hemodialysis
+cd /opt/hemodialysis
+
+# 克隆代码（或上传文件）
+git clone <repository-url> .
+# 或上传dist文件到此目录
+
+# 后端部署
+cd backend
+npm ci --production  # 生产环境安装依赖
+
+# 配置环境变量
+cp .env.example .env
+nano .env  # 编辑生产配置
+```
+
+#### 3. 生产环境变量配置
+```bash
+# .env 生产配置示例
+NODE_ENV=production
+PORT=3080
+
+# 数据库配置
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=hemodialysis_db
+DB_USER=hd_app
+DB_PASSWORD=your_secure_db_password
+DB_POOL_MAX=20
+
+# Redis配置
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password
+
+# JWT配置（生产环境使用强密钥）
+JWT_SECRET=your_64_byte_hex_jwt_secret_here
+JWT_EXPIRES_IN=8h
+
+# 数据加密密钥
+ENCRYPT_KEY=your_32_byte_hex_encrypt_key_here
+
+# 文件上传配置
+UPLOAD_PATH=/opt/hemodialysis/uploads
+MAX_FILE_SIZE=10485760
+
+# 日志配置
+LOG_LEVEL=info
+LOG_FILE=/opt/hemodialysis/logs/app.log
+```
+
+#### 4. 数据库迁移
+```bash
+# 运行数据库迁移
+cd /opt/hemodialysis/backend
+node src/utils/runMigrations.js
+
+# 初始化管理员用户
+node src/utils/initAdminUser.js
+```
+
+#### 5. 前端构建和部署
+```bash
+cd /opt/hemodialysis/frontend
+npm ci
+npm run build
+
+# 构建产物在 dist/ 目录
+# 复制到Nginx服务目录
+sudo cp -r dist/* /var/www/hemodialysis/
+```
+
+#### 6. PM2进程管理
+```bash
+# 全局安装PM2
+sudo npm install -g pm2
+
+# 启动后端服务
+cd /opt/hemodialysis/backend
+pm2 start ecosystem.config.js --env production
+
+# 保存PM2配置
+pm2 save
+pm2 startup
+
+# 查看状态
+pm2 status
+pm2 logs hd-backend
+```
+
+#### 7. Nginx反向代理配置
+```nginx
+# /etc/nginx/sites-available/hemodialysis
+server {
+    listen 80;
+    server_name your-domain.com;
+    
+    # 重定向到HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+    
+    # SSL配置
+    ssl_certificate /path/to/ssl/cert.pem;
+    ssl_certificate_key /path/to/ssl/private.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    
+    # 前端静态文件
+    root /var/www/hemodialysis;
+    index index.html;
+    
+    # API代理到后端
+    location /api/ {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+    
+    # 前端路由处理
+    location / {
+        try_files $uri $uri/ /index.html;
+        
+        # 缓存设置
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    
+    # 日志
+    access_log /var/log/nginx/hemodialysis_access.log;
+    error_log /var/log/nginx/hemodialysis_error.log;
+}
+```
+
+#### 8. 防火墙和安全配置
+```bash
+# UFW防火墙（Ubuntu）
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw --force enable
+
+# SELinux（CentOS/RHEL）
+sudo setsebool -P httpd_can_network_connect 1
+```
+
+### 监控和维护
+
+#### 日志管理
+```bash
+# PM2日志轮转
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+
+# Nginx日志轮转
+sudo nano /etc/logrotate.d/nginx
+# 添加配置...
+```
+
+#### 备份策略
+```bash
+# 数据库备份脚本
+#!/bin/bash
+BACKUP_DIR="/opt/hemodialysis/backups"
+DATE=$(date +%Y%m%d_%H%M%S)
+pg_dump -U hd_app -h localhost hemodialysis_db > $BACKUP_DIR/db_backup_$DATE.sql
+
+# 文件备份
+tar -czf $BACKUP_DIR/uploads_backup_$DATE.tar.gz /opt/hemodialysis/uploads/
+
+# 保留7天备份
+find $BACKUP_DIR -name "*.sql" -mtime +7 -delete
+find $BACKUP_DIR -name "*.tar.gz" -mtime +7 -delete
+```
+
+#### 健康检查
+```bash
+# PM2监控
+pm2 monit
+
+# 应用健康检查端点
+curl http://localhost:3080/api/health
+
+# 数据库连接检查
+psql -U hd_app -d hemodialysis_db -c "SELECT 1;"
+```
+
+### 升级部署流程
+
+1. **备份数据**
+   ```bash
+   # 停止服务
+   pm2 stop hd-backend
+   
+   # 备份数据库和文件
+   ./backup.sh
+   ```
+
+2. **更新代码**
+   ```bash
+   cd /opt/hemodialysis
+   git pull origin main
+   
+   # 或上传新版本文件
+   ```
+
+3. **更新依赖和构建**
+   ```bash
+   cd backend && npm ci --production
+   cd ../frontend && npm ci && npm run build
+   ```
+
+4. **运行迁移**
+   ```bash
+   cd backend
+   node src/utils/runMigrations.js
+   ```
+
+5. **重启服务**
+   ```bash
+   pm2 restart hd-backend
+   sudo systemctl reload nginx
+   ```
+
+6. **验证部署**
+   ```bash
+   # 检查服务状态
+   pm2 status
+   curl -k https://your-domain.com/api/health
+   ```
+
+### 故障排除
+
+#### 常见问题
+- **数据库连接失败**：检查PostgreSQL服务状态和连接参数
+- **Redis连接失败**：系统会自动降级，但建议配置Redis以提升性能
+- **文件上传失败**：检查上传目录权限和磁盘空间
+- **内存不足**：调整PM2的max_memory_restart参数
+
+#### 性能优化
+- 数据库连接池大小根据服务器配置调整
+- 启用Redis缓存以提升响应速度
+- 配置Nginx的gzip压缩
+- 定期清理日志和临时文件
+
+---
+
 ## 功能实现状态
 
 ### ✅ P0 核心功能（已完成）
