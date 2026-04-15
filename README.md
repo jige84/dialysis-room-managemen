@@ -9,7 +9,7 @@
 ### 前置条件
 - Node.js 20+ 已安装
 - PostgreSQL 16 已安装并运行
-- Redis 7（可选，用于 JWT 黑名单/缓存，不可用时系统仍可运行）
+- Redis 7（生产建议必配，用于 JWT 黑名单/缓存；不可用时会降级）
 
 ### 数据库初始化
 
@@ -23,7 +23,7 @@ cd backend
 # 复制配置文件并填写实际密码
 cp .env.example .env
 
-# 运行数据库迁移（创建26张数据表）
+# 运行数据库迁移（按 scripts 与 migrations 持续演进数据库对象）
 node src/utils/runMigrations.js
 
 # 初始化管理员账号
@@ -59,7 +59,7 @@ npm run dev
 
 ### ✅ P0 核心功能（已完成）
 - **用户认证**：JWT 登录/登出，bcrypt 密码哈希，账号锁定
-- **角色权限**：RBAC 中间件（admin / head_nurse / nurse / doctor / qc）
+- **角色权限**：RBAC 中间件（admin / head_nurse / nurse / doctor / quality；兼容历史 qc 账号）
 - **患者档案**：CRUD、状态管理、隔离区分区、手机/身份证 AES-256 加密
 - **透析记录录入**：Kt/V 自动计算（Daugirdas II）、UF 量/UF% 计算
 - **首页仪表盘**：今日透析统计、患者总数、通路类型分布
@@ -138,7 +138,7 @@ npm run dev
 | 前端 | React 19 + TypeScript 5 + Ant Design 6 + Recharts + Zustand |
 | 后端 | Node.js 20+ + Express 4 + node-cron |
 | 数据库 | PostgreSQL 16（由迁移脚本持续演进） |
-| 缓存 | Redis 7（JWT 黑名单，可选） |
+| 缓存 | Redis 7（JWT 黑名单；生产建议必配） |
 | 安全 | JWT + bcrypt + AES-256-GCM |
 | 构建 | Vite 8 |
 | 部署 | PM2 + Nginx |

@@ -13,7 +13,7 @@
 | JWT 吊销与过期校验 | 通过（有降级风险） | 登出/改密写黑名单，鉴权时查黑名单与过期（`auth.js`/`middleware/auth.js`） |
 | RBAC 权限隔离（含 qc/quality 兼容） | 通过 | `rbac` 中间件与等价角色映射；冒烟 28 项全通过 |
 | 审计日志写入 | 通过 | 关键写链路可落 `audit_logs`（`middleware/audit.js`） |
-| 审计不可删 | 待补强 | 当前未发现 DB 级防删约束/触发器 |
+| 审计不可删 | 通过 | `059_audit_logs_immutable_guard.sql` 已落地触发器与权限收敛 |
 | PII 加密存储与响应脱敏 | 通过 | AES-256-GCM + API 返回脱敏字段（`encrypt.js`/`PatientQueryService.js`） |
 | 日志敏感信息脱敏 | 通过 | logger/errorHandler 接入 `redactForLog`，单测覆盖 |
 
@@ -46,20 +46,21 @@
 - `logger.js:30`、`errorHandler.js:15-17`：写日志前统一脱敏
 
 5. 审计日志  
-`backend/src/middleware/audit.js` / `backend/migrations/021_create_audit_alerts.sql`  
+`backend/src/middleware/audit.js` / `backend/migrations/021_create_audit_alerts.sql` / `backend/migrations/059_audit_logs_immutable_guard.sql`  
 - `audit.js:33`：业务成功写入 `audit_logs`  
 - `021_create_audit_alerts.sql:3`：审计表结构已存在  
-- 当前未发现 `audit_logs` 的防删触发器/权限收敛 DDL（需补强）
+- `059_audit_logs_immutable_guard.sql:22-46`：已禁止 `UPDATE/DELETE/TRUNCATE` 且 `REVOKE ALL FROM PUBLIC`
 
 ## 本轮门禁回归结果（2026-04-14）
 
 1. `npm run test:unit`：41/41 通过。  
-2. `npm run test:rbac-matrix`：28 项通过。  
+2. `npm run test:rbac-matrix`：28 项通过（宽松模式，缺少独立 `head_nurse` 账号时自动跳过该角色断言）。  
 3. `npm run test:auth-chain`：通过（登录、鉴权、吊销后401）。  
 4. `npm run test:smoke-readiness`：18 项关键链路通过。  
+5. `node scripts/smoke-five-modules.js`：20 项通过（`technician`/`nurse` 缺账号场景按脚本设计可选跳过）。  
 
 ## 风险与补强建议（不改业务功能）
 
-1. 审计不可删需 DB 级落地：给 `audit_logs` 增加禁止 `UPDATE/DELETE` 触发器或最小权限策略。  
-2. Redis 不可用时当前会降级（黑名单能力变弱）：建议在生产设为“Redis 必须可用”并加告警。  
-3. HTTPS 强制跳转应在网关/反向代理层强制，并留存配置证据纳入上线清单。  
+1. Redis 不可用时当前会降级（黑名单能力变弱）：生产建议设为“Redis 必须可用”并加告警。  
+2. HTTPS 强制跳转应在网关/反向代理层强制，并留存配置证据纳入上线清单。  
+3. 当前 RBAC 冒烟默认宽松模式（账号不齐时可跳过），CI 可按需开启严格模式（`RBAC_STRICT=true`）。  

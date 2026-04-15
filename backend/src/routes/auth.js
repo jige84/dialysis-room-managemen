@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../config/database');
 const { cache } = require('../config/redis');
@@ -104,7 +105,13 @@ router.post('/login', async (req, res, next) => {
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
     const token = jwt.sign(
-      { id: user.id, username: user.username, real_name: user.real_name, role: user.role },
+      {
+        id: user.id,
+        username: user.username,
+        real_name: user.real_name,
+        role: user.role,
+        jti: crypto.randomUUID(),
+      },
       process.env.JWT_SECRET,
       {
         expiresIn: process.env.JWT_EXPIRES_IN || '8h',

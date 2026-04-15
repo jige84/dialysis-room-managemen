@@ -17,7 +17,7 @@ const strict = String(process.env.RBAC_STRICT || '').toLowerCase() === 'true';
 
 const roleCandidates = {
   admin: ['renjige'],
-  head_nurse: ['yangchen'],
+  head_nurse: ['yangchen', 'headnurse01'],
   doctor: ['doctor01'],
   nurse: ['nurse01'],
   quality: ['qc01'],
@@ -55,6 +55,11 @@ async function login(username) {
   };
 }
 
+function roleMatches(expectedRole, actualRole) {
+  const aliases = expectedRole === 'quality' ? ['quality', 'qc'] : [expectedRole];
+  return aliases.includes(actualRole || '');
+}
+
 async function authedRequest(method, path, token, body) {
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -76,7 +81,7 @@ async function resolveRoleTokens() {
   for (const role of requiredRoles) {
     for (const candidate of roleCandidates[role]) {
       const lr = await login(candidate);
-      if (lr.ok) {
+      if (lr.ok && roleMatches(role, lr.role)) {
         roleToken[role] = lr.token;
         roleUser[role] = candidate;
         break;
@@ -100,7 +105,7 @@ async function resolveRoleTokens() {
         const candidateUser = users.find((u) => roleAliases.includes(u.role) && u.is_active !== false && u.username);
         if (!candidateUser) continue;
         const lr = await login(candidateUser.username);
-        if (lr.ok) {
+        if (lr.ok && roleMatches(role, lr.role)) {
           roleToken[role] = lr.token;
           roleUser[role] = candidateUser.username;
         }

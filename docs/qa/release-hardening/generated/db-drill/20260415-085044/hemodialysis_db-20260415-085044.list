@@ -1,0 +1,374 @@
+;
+; Archive created at 2026-04-15 08:50:44
+;     dbname: hemodialysis_db
+;     TOC Entries: 363
+;     Compression: gzip
+;     Dump Version: 1.15-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 16.13
+;     Dumped by pg_dump version: 16.13
+;
+;
+; Selected TOC Entries:
+;
+2; 3079 16410 EXTENSION - uuid-ossp 
+5726; 0 0 COMMENT - EXTENSION "uuid-ossp" 
+277; 1255 19438 FUNCTION public block_audit_logs_mutation() hd_app
+276; 1255 17387 FUNCTION public kb_chunks_tsvector_update() hd_app
+243; 1259 17106 TABLE public alerts hd_app
+242; 1259 17089 TABLE public audit_logs hd_app
+226; 1259 16658 TABLE public complications hd_app
+246; 1259 17178 TABLE public consumable_batches hd_app
+237; 1259 16971 TABLE public consumable_stocks hd_app
+238; 1259 16986 TABLE public consumables hd_app
+239; 1259 17020 TABLE public cqi_records hd_app
+230; 1259 16773 TABLE public cvc_risk_assessments hd_app
+240; 1259 17040 TABLE public defect_reports hd_app
+235; 1259 16935 TABLE public device_maintenance hd_app
+234; 1259 16920 TABLE public devices hd_app
+224; 1259 16576 TABLE public dialysis_records hd_app
+255; 1259 17357 TABLE public guideline_citations hd_app
+261; 1259 17563 TABLE public guideline_documents hd_app
+232; 1259 16844 TABLE public infection_monitoring hd_app
+231; 1259 16818 TABLE public infection_screenings hd_app
+253; 1259 17319 TABLE public kb_chunks hd_app
+252; 1259 17307 TABLE public kb_documents hd_app
+5727; 0 0 COMMENT public COLUMN kb_documents.ai_scenario hd_app
+5728; 0 0 COMMENT public COLUMN kb_documents.ai_subcategory hd_app
+262; 1259 17591 TABLE public kb_save_requests hd_app
+254; 1259 17336 TABLE public kb_usage_log hd_app
+227; 1259 16687 TABLE public lab_results hd_app
+221; 1259 16493 TABLE public long_term_orders hd_app
+245; 1259 17151 TABLE public machine_maintenance hd_app
+223; 1259 16560 TABLE public machines hd_app
+260; 1259 17546 TABLE public medical_sites hd_app
+256; 1259 17368 TABLE public medication_rules hd_app
+250; 1259 17276 TABLE public nurse_schedule hd_app
+264; 1259 17724 TABLE public nurse_schedule_sheet hd_app
+5729; 0 0 COMMENT public TABLE nurse_schedule_sheet hd_app
+222; 1259 16532 TABLE public order_executions hd_app
+249; 1259 17250 TABLE public patient_schedule_rules hd_app
+219; 1259 16433 TABLE public patients hd_app
+5730; 0 0 COMMENT public COLUMN patients.gender hd_app
+5731; 0 0 COMMENT public COLUMN patients.dob hd_app
+5732; 0 0 COMMENT public COLUMN patients.primary_diagnosis hd_app
+5733; 0 0 COMMENT public COLUMN patients.dialysis_start_date hd_app
+5734; 0 0 COMMENT public COLUMN patients.dialysis_schedule_code hd_app
+5735; 0 0 COMMENT public COLUMN patients.dialysis_schedule_notes hd_app
+5736; 0 0 COMMENT public COLUMN patients.responsible_nurse_id hd_app
+5737; 0 0 COMMENT public COLUMN patients.consent_dialysis_image_paths hd_app
+5738; 0 0 COMMENT public COLUMN patients.dialysis_schedule_anchor_date hd_app
+5739; 0 0 COMMENT public COLUMN patients.profile_anticoagulant hd_app
+5740; 0 0 COMMENT public COLUMN patients.profile_heparin_prime_dose hd_app
+5741; 0 0 COMMENT public COLUMN patients.profile_heparin_maintain hd_app
+5742; 0 0 COMMENT public COLUMN patients.profile_dry_weight hd_app
+5743; 0 0 COMMENT public COLUMN patients.profile_dry_weight_date hd_app
+5744; 0 0 COMMENT public COLUMN patients.profile_dry_weight_reason hd_app
+5745; 0 0 COMMENT public COLUMN patients.machine_station hd_app
+220; 1259 16460 TABLE public prescriptions hd_app
+5746; 0 0 COMMENT public COLUMN prescriptions.form_extra hd_app
+241; 1259 17059 TABLE public qc_reports hd_app
+233; 1259 16877 TABLE public schedules hd_app
+5747; 0 0 COMMENT public COLUMN schedules.machine_station hd_app
+217; 1259 16401 TABLE public schema_migrations hd_app
+216; 1259 16400 SEQUENCE public schema_migrations_id_seq hd_app
+5748; 0 0 SEQUENCE OWNED BY public schema_migrations_id_seq hd_app
+244; 1259 17130 TABLE public system_configs hd_app
+229; 1259 16745 TABLE public thrombolysis_records hd_app
+263; 1259 17709 TABLE public user_guideline_notices hd_app
+218; 1259 16421 TABLE public users hd_app
+5749; 0 0 COMMENT public COLUMN users.menu_permissions hd_app
+228; 1259 16717 TABLE public vascular_accesses hd_app
+257; 1259 17390 TABLE public vascular_avf_assessments hd_app
+258; 1259 17416 TABLE public vascular_cvc_assessments hd_app
+259; 1259 17442 TABLE public vascular_punctures hd_app
+225; 1259 16630 TABLE public vital_signs hd_app
+251; 1259 17302 VIEW public vw_shift_staffing hd_app
+265; 1259 17769 TABLE public water_daily_inspections hd_app
+248; 1259 17228 TABLE public water_machine_maintenance hd_app
+247; 1259 17214 TABLE public water_machines hd_app
+236; 1259 16955 TABLE public water_quality_records hd_app
+4940; 2604 16404 DEFAULT public schema_migrations id hd_app
+5698; 0 17106 TABLE DATA public alerts hd_app
+5697; 0 17089 TABLE DATA public audit_logs hd_app
+5681; 0 16658 TABLE DATA public complications hd_app
+5701; 0 17178 TABLE DATA public consumable_batches hd_app
+5692; 0 16971 TABLE DATA public consumable_stocks hd_app
+5693; 0 16986 TABLE DATA public consumables hd_app
+5694; 0 17020 TABLE DATA public cqi_records hd_app
+5685; 0 16773 TABLE DATA public cvc_risk_assessments hd_app
+5695; 0 17040 TABLE DATA public defect_reports hd_app
+5690; 0 16935 TABLE DATA public device_maintenance hd_app
+5689; 0 16920 TABLE DATA public devices hd_app
+5679; 0 16576 TABLE DATA public dialysis_records hd_app
+5709; 0 17357 TABLE DATA public guideline_citations hd_app
+5715; 0 17563 TABLE DATA public guideline_documents hd_app
+5687; 0 16844 TABLE DATA public infection_monitoring hd_app
+5686; 0 16818 TABLE DATA public infection_screenings hd_app
+5707; 0 17319 TABLE DATA public kb_chunks hd_app
+5706; 0 17307 TABLE DATA public kb_documents hd_app
+5716; 0 17591 TABLE DATA public kb_save_requests hd_app
+5708; 0 17336 TABLE DATA public kb_usage_log hd_app
+5682; 0 16687 TABLE DATA public lab_results hd_app
+5676; 0 16493 TABLE DATA public long_term_orders hd_app
+5700; 0 17151 TABLE DATA public machine_maintenance hd_app
+5678; 0 16560 TABLE DATA public machines hd_app
+5714; 0 17546 TABLE DATA public medical_sites hd_app
+5710; 0 17368 TABLE DATA public medication_rules hd_app
+5705; 0 17276 TABLE DATA public nurse_schedule hd_app
+5718; 0 17724 TABLE DATA public nurse_schedule_sheet hd_app
+5677; 0 16532 TABLE DATA public order_executions hd_app
+5704; 0 17250 TABLE DATA public patient_schedule_rules hd_app
+5674; 0 16433 TABLE DATA public patients hd_app
+5675; 0 16460 TABLE DATA public prescriptions hd_app
+5696; 0 17059 TABLE DATA public qc_reports hd_app
+5688; 0 16877 TABLE DATA public schedules hd_app
+5672; 0 16401 TABLE DATA public schema_migrations hd_app
+5699; 0 17130 TABLE DATA public system_configs hd_app
+5684; 0 16745 TABLE DATA public thrombolysis_records hd_app
+5717; 0 17709 TABLE DATA public user_guideline_notices hd_app
+5673; 0 16421 TABLE DATA public users hd_app
+5683; 0 16717 TABLE DATA public vascular_accesses hd_app
+5711; 0 17390 TABLE DATA public vascular_avf_assessments hd_app
+5712; 0 17416 TABLE DATA public vascular_cvc_assessments hd_app
+5713; 0 17442 TABLE DATA public vascular_punctures hd_app
+5680; 0 16630 TABLE DATA public vital_signs hd_app
+5719; 0 17769 TABLE DATA public water_daily_inspections hd_app
+5703; 0 17228 TABLE DATA public water_machine_maintenance hd_app
+5702; 0 17214 TABLE DATA public water_machines hd_app
+5691; 0 16955 TABLE DATA public water_quality_records hd_app
+5750; 0 0 SEQUENCE SET public schema_migrations_id_seq hd_app
+5341; 2606 17117 CONSTRAINT public alerts alerts_pkey hd_app
+5336; 2606 17097 CONSTRAINT public audit_logs audit_logs_pkey hd_app
+5272; 2606 16669 CONSTRAINT public complications complications_pkey hd_app
+5353; 2606 17189 CONSTRAINT public consumable_batches consumable_batches_pkey hd_app
+5355; 2606 17191 CONSTRAINT public consumable_batches consumable_batches_stock_item_id_lot_no_key hd_app
+5318; 2606 16985 CONSTRAINT public consumable_stocks consumable_stocks_item_code_key hd_app
+5320; 2606 16983 CONSTRAINT public consumable_stocks consumable_stocks_pkey hd_app
+5322; 2606 16997 CONSTRAINT public consumables consumables_pkey hd_app
+5326; 2606 17029 CONSTRAINT public cqi_records cqi_records_pkey hd_app
+5289; 2606 16795 CONSTRAINT public cvc_risk_assessments cvc_risk_assessments_pkey hd_app
+5330; 2606 17053 CONSTRAINT public defect_reports defect_reports_pkey hd_app
+5312; 2606 16944 CONSTRAINT public device_maintenance device_maintenance_pkey hd_app
+5308; 2606 16934 CONSTRAINT public devices devices_device_no_key hd_app
+5310; 2606 16932 CONSTRAINT public devices devices_pkey hd_app
+5264; 2606 16596 CONSTRAINT public dialysis_records dialysis_records_pkey hd_app
+5385; 2606 17367 CONSTRAINT public guideline_citations guideline_citations_code_key hd_app
+5387; 2606 17365 CONSTRAINT public guideline_citations guideline_citations_pkey hd_app
+5410; 2606 17578 CONSTRAINT public guideline_documents guideline_documents_pkey hd_app
+5298; 2606 16860 CONSTRAINT public infection_monitoring infection_monitoring_patient_id_monitor_year_monitor_month_key hd_app
+5300; 2606 16858 CONSTRAINT public infection_monitoring infection_monitoring_pkey hd_app
+5295; 2606 16831 CONSTRAINT public infection_screenings infection_screenings_pkey hd_app
+5380; 2606 17328 CONSTRAINT public kb_chunks kb_chunks_pkey hd_app
+5376; 2606 17318 CONSTRAINT public kb_documents kb_documents_pkey hd_app
+5415; 2606 17600 CONSTRAINT public kb_save_requests kb_save_requests_pkey hd_app
+5383; 2606 17345 CONSTRAINT public kb_usage_log kb_usage_log_pkey hd_app
+5278; 2606 16699 CONSTRAINT public lab_results lab_results_pkey hd_app
+5254; 2606 16509 CONSTRAINT public long_term_orders long_term_orders_pkey hd_app
+5351; 2606 17160 CONSTRAINT public machine_maintenance machine_maintenance_pkey hd_app
+5260; 2606 16575 CONSTRAINT public machines machines_machine_no_key hd_app
+5262; 2606 16573 CONSTRAINT public machines machines_pkey hd_app
+5406; 2606 17559 CONSTRAINT public medical_sites medical_sites_pkey hd_app
+5408; 2606 17561 CONSTRAINT public medical_sites medical_sites_site_key_key hd_app
+5390; 2606 17380 CONSTRAINT public medication_rules medication_rules_pkey hd_app
+5370; 2606 17287 CONSTRAINT public nurse_schedule nurse_schedule_nurse_id_duty_date_shift_zone_key hd_app
+5372; 2606 17285 CONSTRAINT public nurse_schedule nurse_schedule_pkey hd_app
+5421; 2606 17732 CONSTRAINT public nurse_schedule_sheet nurse_schedule_sheet_pkey hd_app
+5258; 2606 16542 CONSTRAINT public order_executions order_executions_pkey hd_app
+5367; 2606 17264 CONSTRAINT public patient_schedule_rules patient_schedule_rules_pkey hd_app
+5246; 2606 16451 CONSTRAINT public patients patients_pkey hd_app
+5249; 2606 16481 CONSTRAINT public prescriptions prescriptions_pkey hd_app
+5332; 2606 17076 CONSTRAINT public qc_reports qc_reports_pkey hd_app
+5334; 2606 17078 CONSTRAINT public qc_reports qc_reports_report_year_report_month_key hd_app
+5304; 2606 16892 CONSTRAINT public schedules schedules_machine_id_scheduled_date_shift_key hd_app
+5306; 2606 16890 CONSTRAINT public schedules schedules_pkey hd_app
+5234; 2606 16409 CONSTRAINT public schema_migrations schema_migrations_filename_key hd_app
+5236; 2606 16407 CONSTRAINT public schema_migrations schema_migrations_pkey hd_app
+5346; 2606 17141 CONSTRAINT public system_configs system_configs_config_key_key hd_app
+5348; 2606 17139 CONSTRAINT public system_configs system_configs_pkey hd_app
+5287; 2606 16755 CONSTRAINT public thrombolysis_records thrombolysis_records_pkey hd_app
+5418; 2606 17717 CONSTRAINT public user_guideline_notices user_guideline_notices_pkey hd_app
+5238; 2606 16430 CONSTRAINT public users users_pkey hd_app
+5240; 2606 16432 CONSTRAINT public users users_username_key hd_app
+5283; 2606 16731 CONSTRAINT public vascular_accesses vascular_accesses_pkey hd_app
+5394; 2606 17398 CONSTRAINT public vascular_avf_assessments vascular_avf_assessments_pkey hd_app
+5398; 2606 17424 CONSTRAINT public vascular_cvc_assessments vascular_cvc_assessments_pkey hd_app
+5403; 2606 17453 CONSTRAINT public vascular_punctures vascular_punctures_pkey hd_app
+5270; 2606 16641 CONSTRAINT public vital_signs vital_signs_pkey hd_app
+5425; 2606 17777 CONSTRAINT public water_daily_inspections water_daily_inspections_pkey hd_app
+5364; 2606 17237 CONSTRAINT public water_machine_maintenance water_machine_maintenance_pkey hd_app
+5359; 2606 17227 CONSTRAINT public water_machines water_machines_machine_no_key hd_app
+5361; 2606 17225 CONSTRAINT public water_machines water_machines_pkey hd_app
+5316; 2606 16964 CONSTRAINT public water_quality_records water_quality_records_pkey hd_app
+5342; 1259 17213 INDEX public idx_alerts_machine hd_app
+5343; 1259 17129 INDEX public idx_alerts_patient hd_app
+5344; 1259 17128 INDEX public idx_alerts_status hd_app
+5337; 1259 17104 INDEX public idx_audit_table hd_app
+5338; 1259 17105 INDEX public idx_audit_time hd_app
+5339; 1259 17103 INDEX public idx_audit_user hd_app
+5391; 1259 17414 INDEX public idx_avf_assess_access hd_app
+5392; 1259 17415 INDEX public idx_avf_assess_patient hd_app
+5356; 1259 17202 INDEX public idx_batch_stock_fifo hd_app
+5273; 1259 16685 INDEX public idx_comp_dialysis hd_app
+5274; 1259 16686 INDEX public idx_comp_type hd_app
+5323; 1259 17018 INDEX public idx_consumable_date hd_app
+5324; 1259 17019 INDEX public idx_consumable_stock hd_app
+5327; 1259 17614 INDEX public idx_cqi_records_created_by hd_app
+5328; 1259 17615 INDEX public idx_cqi_records_status hd_app
+5395; 1259 17440 INDEX public idx_cvc_assess_access hd_app
+5396; 1259 17441 INDEX public idx_cvc_assess_patient hd_app
+5290; 1259 16816 INDEX public idx_cvc_risk_access hd_app
+5291; 1259 16817 INDEX public idx_cvc_risk_grade3 hd_app
+5265; 1259 16623 INDEX public idx_dialysis_date hd_app
+5266; 1259 16624 INDEX public idx_dialysis_nurse hd_app
+5267; 1259 16622 INDEX public idx_dialysis_patient_date hd_app
+5255; 1259 16558 INDEX public idx_exec_order hd_app
+5256; 1259 16559 INDEX public idx_exec_patient hd_app
+5411; 1259 17589 INDEX public idx_guideline_doc_type hd_app
+5412; 1259 17590 INDEX public idx_guideline_saved hd_app
+5296; 1259 16876 INDEX public idx_infmon_period hd_app
+5377; 1259 17334 INDEX public idx_kb_chunks_doc hd_app
+5378; 1259 17335 INDEX public idx_kb_chunks_search hd_app
+5373; 1259 17624 INDEX public idx_kb_documents_ai_scenario hd_app
+5374; 1259 17625 INDEX public idx_kb_documents_ai_session_content_unique hd_app
+5413; 1259 17606 INDEX public idx_kb_save_hash hd_app
+5381; 1259 17356 INDEX public idx_kb_usage_patient hd_app
+5275; 1259 16716 INDEX public idx_lab_critical hd_app
+5276; 1259 16715 INDEX public idx_lab_patient_type hd_app
+5250; 1259 17649 INDEX public idx_long_term_orders_parent hd_app
+5349; 1259 17171 INDEX public idx_machine_maint_machine hd_app
+5388; 1259 17386 INDEX public idx_med_rules_active hd_app
+5404; 1259 17562 INDEX public idx_medical_sites_enabled hd_app
+5368; 1259 17293 INDEX public idx_nurse_schedule_date_shift hd_app
+5419; 1259 17738 INDEX public idx_nurse_schedule_sheet_updated hd_app
+5251; 1259 16530 INDEX public idx_orders_patient_status hd_app
+5252; 1259 16531 INDEX public idx_orders_prescription hd_app
+5365; 1259 17275 INDEX public idx_patient_schedule_rules_patient hd_app
+5241; 1259 16459 INDEX public idx_patients_iso hd_app
+5242; 1259 16458 INDEX public idx_patients_name hd_app
+5243; 1259 17631 INDEX public idx_patients_responsible_nurse hd_app
+5244; 1259 16457 INDEX public idx_patients_status hd_app
+5399; 1259 17469 INDEX public idx_puncture_access hd_app
+5400; 1259 17470 INDEX public idx_puncture_patient hd_app
+5401; 1259 17471 INDEX public idx_puncture_result hd_app
+5247; 1259 16492 INDEX public idx_rx_patient hd_app
+5301; 1259 16919 INDEX public idx_schedule_date hd_app
+5302; 1259 16918 INDEX public idx_schedule_patient hd_app
+5292; 1259 16843 INDEX public idx_screening_due hd_app
+5293; 1259 16842 INDEX public idx_screening_patient hd_app
+5284; 1259 16771 INDEX public idx_thrombolysis_access hd_app
+5285; 1259 16772 INDEX public idx_thrombolysis_patient hd_app
+5416; 1259 17723 INDEX public idx_user_guideline_notices_unread hd_app
+5279; 1259 16744 INDEX public idx_vascular_buttonhole hd_app
+5280; 1259 16742 INDEX public idx_vascular_patient hd_app
+5281; 1259 16743 INDEX public idx_vascular_type hd_app
+5268; 1259 16657 INDEX public idx_vitals_dialysis hd_app
+5422; 1259 17788 INDEX public idx_water_daily_inspections_date hd_app
+5423; 1259 17789 INDEX public idx_water_daily_inspections_machine hd_app
+5357; 1259 17248 INDEX public idx_water_machines_no hd_app
+5362; 1259 17249 INDEX public idx_water_maint_machine hd_app
+5313; 1259 16970 INDEX public idx_water_quality_date hd_app
+5314; 1259 17768 INDEX public idx_water_quality_water_machine hd_app
+5524; 2620 19440 TRIGGER public audit_logs trg_audit_logs_block_truncate hd_app
+5525; 2620 19439 TRIGGER public audit_logs trg_audit_logs_block_update_delete hd_app
+5526; 2620 17389 TRIGGER public kb_chunks trg_kb_chunks_tsvector hd_app
+5490; 2606 17123 FK CONSTRAINT public alerts alerts_handled_by_fkey hd_app
+5491; 2606 17208 FK CONSTRAINT public alerts alerts_machine_id_fkey hd_app
+5492; 2606 17118 FK CONSTRAINT public alerts alerts_patient_id_fkey hd_app
+5489; 2606 17098 FK CONSTRAINT public audit_logs audit_logs_user_id_fkey hd_app
+5447; 2606 16670 FK CONSTRAINT public complications complications_dialysis_record_id_fkey hd_app
+5448; 2606 16675 FK CONSTRAINT public complications complications_patient_id_fkey hd_app
+5449; 2606 16680 FK CONSTRAINT public complications complications_recorded_by_fkey hd_app
+5496; 2606 17197 FK CONSTRAINT public consumable_batches consumable_batches_created_by_fkey hd_app
+5497; 2606 17192 FK CONSTRAINT public consumable_batches consumable_batches_stock_item_id_fkey hd_app
+5477; 2606 17173 FK CONSTRAINT public consumable_stocks consumable_stocks_updated_by_fkey hd_app
+5478; 2606 17203 FK CONSTRAINT public consumables consumables_batch_id_fkey hd_app
+5479; 2606 16998 FK CONSTRAINT public consumables consumables_dialysis_record_id_fkey hd_app
+5480; 2606 17013 FK CONSTRAINT public consumables consumables_operated_by_fkey hd_app
+5481; 2606 17008 FK CONSTRAINT public consumables consumables_patient_id_fkey hd_app
+5482; 2606 17003 FK CONSTRAINT public consumables consumables_stock_item_id_fkey hd_app
+5483; 2606 17608 FK CONSTRAINT public cqi_records cqi_records_created_by_fkey hd_app
+5484; 2606 17035 FK CONSTRAINT public cqi_records cqi_records_director_sign_id_fkey hd_app
+5485; 2606 17030 FK CONSTRAINT public cqi_records cqi_records_leader_id_fkey hd_app
+5458; 2606 16811 FK CONSTRAINT public cvc_risk_assessments cvc_risk_assessments_assessed_by_fkey hd_app
+5459; 2606 16806 FK CONSTRAINT public cvc_risk_assessments cvc_risk_assessments_dialysis_record_id_fkey hd_app
+5460; 2606 16801 FK CONSTRAINT public cvc_risk_assessments cvc_risk_assessments_patient_id_fkey hd_app
+5461; 2606 16796 FK CONSTRAINT public cvc_risk_assessments cvc_risk_assessments_vascular_access_id_fkey hd_app
+5486; 2606 17054 FK CONSTRAINT public defect_reports defect_reports_reported_by_fkey hd_app
+5473; 2606 16945 FK CONSTRAINT public device_maintenance device_maintenance_device_id_fkey hd_app
+5474; 2606 16950 FK CONSTRAINT public device_maintenance device_maintenance_performed_by_fkey hd_app
+5439; 2606 16617 FK CONSTRAINT public dialysis_records dialysis_records_double_check_nurse_id_fkey hd_app
+5440; 2606 16607 FK CONSTRAINT public dialysis_records dialysis_records_machine_id_fkey hd_app
+5441; 2606 16612 FK CONSTRAINT public dialysis_records dialysis_records_nurse_id_fkey hd_app
+5442; 2606 16597 FK CONSTRAINT public dialysis_records dialysis_records_patient_id_fkey hd_app
+5443; 2606 16602 FK CONSTRAINT public dialysis_records dialysis_records_prescription_id_fkey hd_app
+5435; 2606 16625 FK CONSTRAINT public order_executions fk_exec_dialysis hd_app
+5517; 2606 17579 FK CONSTRAINT public guideline_documents guideline_documents_superseded_by_fkey hd_app
+5518; 2606 17584 FK CONSTRAINT public guideline_documents guideline_documents_uploaded_by_fkey hd_app
+5464; 2606 16861 FK CONSTRAINT public infection_monitoring infection_monitoring_patient_id_fkey hd_app
+5465; 2606 16871 FK CONSTRAINT public infection_monitoring infection_monitoring_recorded_by_fkey hd_app
+5466; 2606 16866 FK CONSTRAINT public infection_monitoring infection_monitoring_vascular_access_id_fkey hd_app
+5462; 2606 16837 FK CONSTRAINT public infection_screenings infection_screenings_entered_by_fkey hd_app
+5463; 2606 16832 FK CONSTRAINT public infection_screenings infection_screenings_patient_id_fkey hd_app
+5504; 2606 17329 FK CONSTRAINT public kb_chunks kb_chunks_document_id_fkey hd_app
+5503; 2606 17619 FK CONSTRAINT public kb_documents kb_documents_created_by_fkey hd_app
+5519; 2606 17601 FK CONSTRAINT public kb_save_requests kb_save_requests_requested_by_fkey hd_app
+5505; 2606 17351 FK CONSTRAINT public kb_usage_log kb_usage_log_created_by_fkey hd_app
+5506; 2606 17346 FK CONSTRAINT public kb_usage_log kb_usage_log_patient_id_fkey hd_app
+5450; 2606 16705 FK CONSTRAINT public lab_results lab_results_critical_confirmed_by_fkey hd_app
+5451; 2606 16710 FK CONSTRAINT public lab_results lab_results_entered_by_fkey hd_app
+5452; 2606 16700 FK CONSTRAINT public lab_results lab_results_patient_id_fkey hd_app
+5430; 2606 16520 FK CONSTRAINT public long_term_orders long_term_orders_ordered_by_fkey hd_app
+5431; 2606 17644 FK CONSTRAINT public long_term_orders long_term_orders_parent_order_id_fkey hd_app
+5432; 2606 16510 FK CONSTRAINT public long_term_orders long_term_orders_patient_id_fkey hd_app
+5433; 2606 16515 FK CONSTRAINT public long_term_orders long_term_orders_prescription_id_fkey hd_app
+5434; 2606 16525 FK CONSTRAINT public long_term_orders long_term_orders_stopped_by_fkey hd_app
+5494; 2606 17161 FK CONSTRAINT public machine_maintenance machine_maintenance_machine_id_fkey hd_app
+5495; 2606 17166 FK CONSTRAINT public machine_maintenance machine_maintenance_maintained_by_fkey hd_app
+5507; 2606 17381 FK CONSTRAINT public medication_rules medication_rules_citation_id_fkey hd_app
+5502; 2606 17288 FK CONSTRAINT public nurse_schedule nurse_schedule_nurse_id_fkey hd_app
+5521; 2606 17733 FK CONSTRAINT public nurse_schedule_sheet nurse_schedule_sheet_updated_by_fkey hd_app
+5436; 2606 16553 FK CONSTRAINT public order_executions order_executions_executed_by_fkey hd_app
+5437; 2606 16543 FK CONSTRAINT public order_executions order_executions_long_term_order_id_fkey hd_app
+5438; 2606 16548 FK CONSTRAINT public order_executions order_executions_patient_id_fkey hd_app
+5500; 2606 17265 FK CONSTRAINT public patient_schedule_rules patient_schedule_rules_patient_id_fkey hd_app
+5501; 2606 17270 FK CONSTRAINT public patient_schedule_rules patient_schedule_rules_preferred_machine_id_fkey hd_app
+5426; 2606 16452 FK CONSTRAINT public patients patients_created_by_fkey hd_app
+5427; 2606 17626 FK CONSTRAINT public patients patients_responsible_nurse_id_fkey hd_app
+5428; 2606 16482 FK CONSTRAINT public prescriptions prescriptions_patient_id_fkey hd_app
+5429; 2606 16487 FK CONSTRAINT public prescriptions prescriptions_prescribed_by_fkey hd_app
+5487; 2606 17084 FK CONSTRAINT public qc_reports qc_reports_confirmed_by_fkey hd_app
+5488; 2606 17079 FK CONSTRAINT public qc_reports qc_reports_submitted_by_fkey hd_app
+5467; 2606 16908 FK CONSTRAINT public schedules schedules_approved_by_fkey hd_app
+5468; 2606 16913 FK CONSTRAINT public schedules schedules_created_by_fkey hd_app
+5469; 2606 16898 FK CONSTRAINT public schedules schedules_machine_id_fkey hd_app
+5470; 2606 16893 FK CONSTRAINT public schedules schedules_patient_id_fkey hd_app
+5471; 2606 17297 FK CONSTRAINT public schedules schedules_source_rule_id_fkey hd_app
+5472; 2606 16903 FK CONSTRAINT public schedules schedules_swap_from_id_fkey hd_app
+5493; 2606 17142 FK CONSTRAINT public system_configs system_configs_updated_by_fkey hd_app
+5455; 2606 16761 FK CONSTRAINT public thrombolysis_records thrombolysis_records_patient_id_fkey hd_app
+5456; 2606 16766 FK CONSTRAINT public thrombolysis_records thrombolysis_records_performed_by_fkey hd_app
+5457; 2606 16756 FK CONSTRAINT public thrombolysis_records thrombolysis_records_vascular_access_id_fkey hd_app
+5520; 2606 17718 FK CONSTRAINT public user_guideline_notices user_guideline_notices_user_id_fkey hd_app
+5453; 2606 16737 FK CONSTRAINT public vascular_accesses vascular_accesses_created_by_fkey hd_app
+5454; 2606 16732 FK CONSTRAINT public vascular_accesses vascular_accesses_patient_id_fkey hd_app
+5508; 2606 17409 FK CONSTRAINT public vascular_avf_assessments vascular_avf_assessments_assessed_by_fkey hd_app
+5509; 2606 17404 FK CONSTRAINT public vascular_avf_assessments vascular_avf_assessments_patient_id_fkey hd_app
+5510; 2606 17399 FK CONSTRAINT public vascular_avf_assessments vascular_avf_assessments_vascular_access_id_fkey hd_app
+5511; 2606 17435 FK CONSTRAINT public vascular_cvc_assessments vascular_cvc_assessments_assessed_by_fkey hd_app
+5512; 2606 17430 FK CONSTRAINT public vascular_cvc_assessments vascular_cvc_assessments_patient_id_fkey hd_app
+5513; 2606 17425 FK CONSTRAINT public vascular_cvc_assessments vascular_cvc_assessments_vascular_access_id_fkey hd_app
+5514; 2606 17464 FK CONSTRAINT public vascular_punctures vascular_punctures_nurse_id_fkey hd_app
+5515; 2606 17459 FK CONSTRAINT public vascular_punctures vascular_punctures_patient_id_fkey hd_app
+5516; 2606 17454 FK CONSTRAINT public vascular_punctures vascular_punctures_vascular_access_id_fkey hd_app
+5444; 2606 16642 FK CONSTRAINT public vital_signs vital_signs_dialysis_record_id_fkey hd_app
+5445; 2606 16647 FK CONSTRAINT public vital_signs vital_signs_patient_id_fkey hd_app
+5446; 2606 16652 FK CONSTRAINT public vital_signs vital_signs_recorded_by_fkey hd_app
+5522; 2606 17783 FK CONSTRAINT public water_daily_inspections water_daily_inspections_entered_by_fkey hd_app
+5523; 2606 17778 FK CONSTRAINT public water_daily_inspections water_daily_inspections_water_machine_id_fkey hd_app
+5498; 2606 17243 FK CONSTRAINT public water_machine_maintenance water_machine_maintenance_maintained_by_fkey hd_app
+5499; 2606 17238 FK CONSTRAINT public water_machine_maintenance water_machine_maintenance_water_machine_id_fkey hd_app
+5475; 2606 16965 FK CONSTRAINT public water_quality_records water_quality_records_entered_by_fkey hd_app
+5476; 2606 17763 FK CONSTRAINT public water_quality_records water_quality_records_water_machine_id_fkey hd_app

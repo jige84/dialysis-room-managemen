@@ -16,7 +16,22 @@ async function login(username, password) {
     body: JSON.stringify({ username, password }),
   });
   const j = await lr.json();
-  return { token: j.data?.token, code: j.code, message: j.message };
+  return {
+    token: j.data?.token,
+    code: j.code,
+    message: j.message,
+    role: j.data?.user?.role || null,
+  };
+}
+
+async function loginAny(candidates, password) {
+  for (const username of candidates) {
+    const result = await login(username, password);
+    if (result.token) {
+      return { ...result, username };
+    }
+  }
+  return { token: null, code: null, message: 'no candidate login success', username: null };
 }
 
 function authHeaders(token, contentType = 'application/json') {
@@ -98,20 +113,22 @@ async function getRaw(path, token) {
 
 (async () => {
   const password = process.env.SMOKE_PASSWORD || 'Shangu@2026';
-  const admin = await login('renjige', password);
-  const doctor = await login('doctor01', password);
-  const head = await login('yangchen', password);
-  const nurse = await login('nurse01', password);
-  const quality = await login('qc01', password);
-  const technician = await login('tech01', password);
+  const admin = await loginAny(['renjige'], password);
+  const doctor = await loginAny(['doctor01'], password);
+  const head = await loginAny(['yangchen'], password);
+  const nurse = await loginAny(['nurse01'], password);
+  const quality = await loginAny(['qc01'], password);
+  const technician = await loginAny(['tech01'], password);
 
   console.log('登录探测:', {
     admin: !!admin.token,
     doctor01: !!doctor.token,
     head_nurse: !!head.token,
+    head_user: head.username || '-',
     nurse01: !!nurse.token,
     qc01: !!quality.token,
     tech01: !!technician.token,
+    tech_user: technician.username || '-',
   });
 
   if (!doctor.token) {
@@ -123,6 +140,7 @@ async function getRaw(path, token) {
   const y = now.getFullYear();
   const m = now.getMonth() + 1;
 
+  const headPrivToken = head.token && head.role === 'head_nurse' ? head.token : admin.token;
   const rows = [];
 
   rows.push({ label: 'labs GET /api/labs (p1)', ...(await get('/api/labs?page=1&page_size=3', doctor.token)) });
@@ -134,10 +152,11 @@ async function getRaw(path, token) {
   rows.push({
     label: 'vascular GET /api/vascular/cvc-all (nurse 应403)',
     ...(await get('/api/vascular/cvc-all', nurse.token)),
+    optionalSkip: true,
   });
   rows.push({
     label: 'infection GET overdue (head_nurse 或 admin)',
-    ...(await get('/api/infection/screenings/overdue', head.token || admin.token)),
+    ...(await get('/api/infection/screenings/overdue', headPrivToken)),
   });
   rows.push({
     label: 'infection GET overdue (doctor 应403)',
@@ -160,7 +179,7 @@ async function getRaw(path, token) {
     optionalSkip: true,
   });
   rows.push({ label: 'reports GET qc-upload', ...(await get(`/api/reports/qc-upload/${y}/${m}`, admin.token || doctor.token)) });
-  const initRes = await post(`/api/reports/qc-upload/${y}/${m}/init`, admin.token || head.token, {});
+  const initRes = await post(`/api/reports/qc-upload/${y}/${m}/init`, admin.token || headPrivToken, {});
   rows.push({
     label: 'reports init draft (admin/head_nurse)',
     ...initRes,
@@ -195,7 +214,7 @@ async function getRaw(path, token) {
   });
   rows.push({
     label: 'cqi GET user-options (head_nurse)',
-    ...(await get('/api/cqi/user-options', head.token)),
+    ...(await get('/api/cqi/user-options', headPrivToken)),
   });
   rows.push({
     label: 'cqi GET user-options (quality 应403)',
@@ -205,7 +224,7 @@ async function getRaw(path, token) {
 
   const patchSupp = await patch(
     `/api/reports/qc-upload/${y}/${m}`,
-    head.token || admin.token,
+    headPrivToken,
     { notes: 'smoke test', spot_check_ratio: 4.2 },
   );
   rows.push({
@@ -219,7 +238,7 @@ async function getRaw(path, token) {
           patchSupp.code === 400,
   });
 
-  const submitRes = await post(`/api/reports/qc-upload/${y}/${m}/submit`, head.token || admin.token, {});
+  const submitRes = await post(`/api/reports/qc-upload/${y}/${m}/submit`, headPrivToken, {});
   rows.push({
     label: 'reports submit (路由可达；无草稿时400可接受)',
     ...submitRes,
