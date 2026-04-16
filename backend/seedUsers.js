@@ -22,7 +22,11 @@ const pool = new Pool({
 });
 
 async function seed() {
-  const hash = await bcrypt.hash('Shangu@2026', 12);
+  const seedPassword = requiredEnv('SEED_DEFAULT_PASSWORD');
+  if (seedPassword.length < 6 || !/^[A-Za-z0-9]+$/.test(seedPassword)) {
+    throw new Error('SEED_DEFAULT_PASSWORD 必须至少6位，且只能包含字母与数字');
+  }
+  const hash = await bcrypt.hash(seedPassword, 12);
   const users = [
     ['renjige',  hash, '\u4efb\u8ba1\u9601', 'admin'],
     ['yangchen', hash, '\u6768\u6668',         'head_nurse'],

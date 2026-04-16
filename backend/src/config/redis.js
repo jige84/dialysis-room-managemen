@@ -10,6 +10,26 @@ let redisClient = null;
 let redisUnavailable = false;        // 标记 Redis 不可用，避免重复重连
 let redisRetryAt = 0;                // 下次重试时间戳（30秒重试一次）
 const REDIS_RETRY_INTERVAL = 30000;  // 30秒
+const memoryCache = new Map();       // Redis 不可用时的进程内 fallback
+
+function setMemoryValue(key, value, ttlSeconds) {
+  const expiresAt = Date.now() + Math.max(1, ttlSeconds) * 1000;
+  memoryCache.set(key, { value, expiresAt });
+}
+
+function getMemoryValue(key) {
+  const hit = memoryCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+
+function deleteMemoryValue(key) {
+  memoryCache.delete(key);
+}
 
 async function getRedisClient() {
   if (redisClient && redisClient.isOpen) return redisClient;
@@ -63,28 +83,45 @@ const cache = {
   async set(key, value, ttlSeconds = 3600) {
     try {
       const client = await getRedisClient();
-      if (!client) return false;
+      if (!client) {
+        setMemoryValue(key, value, ttlSeconds);
+        return false;
+      }
       await client.setEx(key, ttlSeconds, JSON.stringify(value));
+      deleteMemoryValue(key);
       return true;
-    } catch { return false; }
+    } catch {
+      setMemoryValue(key, value, ttlSeconds);
+      return false;
+    }
   },
 
   async get(key) {
     try {
       const client = await getRedisClient();
-      if (!client) return null;
+      if (!client) return getMemoryValue(key);
       const val = await client.get(key);
-      return val ? JSON.parse(val) : null;
-    } catch { return null; }
+      if (val) return JSON.parse(val);
+      return getMemoryValue(key);
+    } catch {
+      return getMemoryValue(key);
+    }
   },
 
   async del(key) {
     try {
       const client = await getRedisClient();
-      if (!client) return false;
+      if (!client) {
+        deleteMemoryValue(key);
+        return false;
+      }
       await client.del(key);
+      deleteMemoryValue(key);
       return true;
-    } catch { return false; }
+    } catch {
+      deleteMemoryValue(key);
+      return false;
+    }
   },
 
   // 黑名单JWT（退出登录用）

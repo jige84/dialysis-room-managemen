@@ -5,11 +5,36 @@
  */
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');
+const SENSITIVE_KEYS = new Set([
+  'password',
+  'new_password',
+  'old_password',
+  'password_hash',
+  'token',
+  'authorization',
+  'jwt',
+]);
+
+function redactAuditPayload(value) {
+  if (Array.isArray(value)) return value.map(redactAuditPayload);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (SENSITIVE_KEYS.has(String(k).toLowerCase())) {
+        out[k] = '***REDACTED***';
+      } else {
+        out[k] = redactAuditPayload(v);
+      }
+    }
+    return out;
+  }
+  return value;
+}
 
 /** 审计表 new_values 为 JSONB：须为可序列化对象，避免 BigInt/循环引用导致 JSON.stringify 抛错拖垮业务响应 */
 function cloneBodyForAudit(body) {
   try {
-    return JSON.parse(JSON.stringify(body ?? {}));
+    return redactAuditPayload(JSON.parse(JSON.stringify(body ?? {})));
   } catch {
     return { _audit_note: 'request_body_not_serializable' };
   }

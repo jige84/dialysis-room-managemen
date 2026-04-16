@@ -85,14 +85,15 @@ function menuPermissionsJsonbParam(mp) {
   return JSON.stringify(mp);
 }
 
-/** 与 POST /api/auth/change-password 强度一致：至少 6 位，仅 ASCII 字母与数字 */
+/** 与认证策略一致：至少 6 位，仅 ASCII 字母与数字 */
 const PASSWORD_ALLOWED = /^[A-Za-z0-9]+$/;
 const USERNAME_MAX_LENGTH = 50;
 const REAL_NAME_MAX_LENGTH = 50;
 
 function validatePasswordStrength(password) {
-  if (!password || password.length < 6) return '密码不能少于6位';
-  if (!PASSWORD_ALLOWED.test(password)) return '密码只能包含字母与数字';
+  const text = String(password || '');
+  if (text.length < 6) return '密码不能少于6位';
+  if (!PASSWORD_ALLOWED.test(text)) return '密码只能包含字母与数字';
   return null;
 }
 

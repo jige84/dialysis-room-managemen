@@ -20,6 +20,27 @@ const loginAttempts = new Map();
 const LOGIN_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.LOGIN_MAX_ATTEMPTS || '5', 10));
 const LOGIN_LOCK_MINUTES = Math.max(1, parseInt(process.env.LOGIN_LOCK_MINUTES || '30', 10));
 const LOGIN_CACHE_PREFIX = 'login_attempts:';
+const PASSWORD_ALLOWED = /^[A-Za-z0-9]+$/;
+
+function parseExpiresToSeconds(value, fallbackSeconds = 8 * 60 * 60) {
+  if (!value) return fallbackSeconds;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(1, Math.floor(value));
+  const str = String(value).trim();
+  if (/^\d+$/.test(str)) return Math.max(1, parseInt(str, 10));
+  const match = str.match(/^(\d+)\s*([smhd])$/i);
+  if (!match) return fallbackSeconds;
+  const amount = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  const factors = { s: 1, m: 60, h: 3600, d: 86400 };
+  return Math.max(1, amount * (factors[unit] || 1));
+}
+
+function validatePasswordStrength(password) {
+  const text = String(password || '');
+  if (text.length < 6) return '密码不能少于6位';
+  if (!PASSWORD_ALLOWED.test(text)) return '密码只能包含字母与数字';
+  return null;
+}
 
 function loginAttemptKey(username) {
   return `${LOGIN_CACHE_PREFIX}${String(username || '').trim().toLowerCase()}`;
@@ -114,6 +135,7 @@ router.post('/login', async (req, res, next) => {
       },
       process.env.JWT_SECRET,
       {
+        algorithm: 'HS256',
         expiresIn: process.env.JWT_EXPIRES_IN || '8h',
         issuer:    'dialysis-system',
         audience:  'dialysis-app',
@@ -138,8 +160,8 @@ router.post('/login', async (req, res, next) => {
 // POST /api/auth/logout
 router.post('/logout', auth, async (req, res, next) => {
   try {
-    // 将Token加入黑名单（8小时后自动过期，与 JWT_EXPIRES_IN 一致）
-    await cache.blacklistToken(req.token, 28800);
+    const ttlSeconds = parseExpiresToSeconds(process.env.JWT_EXPIRES_IN || '8h', 8 * 60 * 60);
+    await cache.blacklistToken(req.token, ttlSeconds);
     return success(res, null, '已退出登录');
   } catch (err) {
     next(err);
@@ -153,9 +175,8 @@ router.post('/change-password', auth, async (req, res, next) => {
     if (!valid.ok) return error(res, valid.message);
     const { old_password, new_password } = valid.value;
 
-    if (new_password.length < 6 || !/^[A-Za-z0-9]+$/.test(new_password)) {
-      return error(res, '新密码至少6位，且只能包含字母与数字');
-    }
+    const pwdErr = validatePasswordStrength(new_password);
+    if (pwdErr) return error(res, pwdErr);
 
     const { rows } = await pool.query(
       'SELECT password_hash FROM users WHERE id = $1',
@@ -173,8 +194,8 @@ router.post('/change-password', auth, async (req, res, next) => {
       [newHash, req.user.id]
     );
 
-    // 将旧Token加入黑名单，强制重新登录
-    await cache.blacklistToken(req.token, 28800);
+    const ttlSeconds = parseExpiresToSeconds(process.env.JWT_EXPIRES_IN || '8h', 8 * 60 * 60);
+    await cache.blacklistToken(req.token, ttlSeconds);
 
     return success(res, null, '密码修改成功，请重新登录');
   } catch (err) {

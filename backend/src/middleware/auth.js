@@ -24,6 +24,7 @@ module.exports = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: ['HS256'],
       issuer:   'dialysis-system',
       audience: 'dialysis-app',
     });

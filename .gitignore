@@ -27,3 +27,7 @@ out/
 Thumbs.db
 .DS_Store
 
+# Sensitive local medical/source artifacts
+/2026lishshuju/
+*.zip
+

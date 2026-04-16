@@ -1,15 +1,13 @@
--- 种子数据：初始用户
--- 密码 Shangu@2026 对应的bcrypt hash（12轮）
--- 注意：生产环境请在首次登录后立即修改密码
+-- 种子数据：初始用户（仅开发/测试环境）
+-- 安全说明：
+-- 1) 不在仓库中提供可推导的默认明文密码；
+-- 2) 生产环境请改用 seedUsers.js + SEED_DEFAULT_PASSWORD 初始化；
+-- 3) 初始化后必须立即重置账号密码。
 
 INSERT INTO users (username, password_hash, real_name, role) VALUES
-  ('renjige',  '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '任计阁', 'admin'),
-  ('yangchen', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '杨晨',   'head_nurse'),
-  ('nurse01',  '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '护士01', 'nurse'),
-  ('doctor01', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '主治医生01', 'doctor'),
-  ('qc01',     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TsQ8G9gVL7q0CxaUyNPfQ1GVKB3u', '质控员01', 'quality')
+  ('renjige',  '$2a$12$zYNiR4eVjd8Kipes112NY.cESJ80THgSKrKLwrOV6ssPgGk01xojy', '任计阁', 'admin'),
+  ('yangchen', '$2a$12$zYNiR4eVjd8Kipes112NY.cESJ80THgSKrKLwrOV6ssPgGk01xojy', '杨晨',   'head_nurse'),
+  ('nurse01',  '$2a$12$zYNiR4eVjd8Kipes112NY.cESJ80THgSKrKLwrOV6ssPgGk01xojy', '护士01', 'nurse'),
+  ('doctor01', '$2a$12$zYNiR4eVjd8Kipes112NY.cESJ80THgSKrKLwrOV6ssPgGk01xojy', '主治医生01', 'doctor'),
+  ('qc01',     '$2a$12$zYNiR4eVjd8Kipes112NY.cESJ80THgSKrKLwrOV6ssPgGk01xojy', '质控员01', 'quality')
 ON CONFLICT (username) DO NOTHING;
-
--- 注意：上方hash仅为占位符，实际初始化需使用下方脚本生成正确hash:
--- node -e "const b=require('bcryptjs'); b.hash('Shangu@2026', 12).then(console.log)"
--- 然后替换上方所有 $2b$12$... 为实际生成的hash
