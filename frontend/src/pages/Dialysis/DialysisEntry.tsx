@@ -72,6 +72,7 @@ import {
   serializeFormValuesForDraft,
 } from '../../utils/dialysisEntryDraft';
 import { calcSpKtv, calcUrr } from '../../utils/ktv';
+import { isMenuKeyAllowed } from '../../utils/menuAccess';
 
 // ── 演示数据（与透析处方工作台共用） ─────────────────────────
 const PATIENTS_LIST = DIALYSIS_DEMO_PATIENTS;
@@ -1245,6 +1246,16 @@ export default function DialysisEntryPage() {
     [signerLabel],
   );
   const canAnomaly = useAuthStore((s) => s.hasRole(['admin', 'doctor', 'head_nurse']));
+  const currentRole = useAuthStore((s) => s.user?.role);
+  const currentMenuPermissions = useAuthStore((s) => s.user?.menu_permissions);
+  const canWriteDialysis = useMemo(
+    () =>
+      !!currentRole &&
+      ['admin', 'head_nurse', 'nurse'].includes(currentRole) &&
+      isMenuKeyAllowed('/dialysis/entry', currentMenuPermissions, currentRole),
+    [currentMenuPermissions, currentRole],
+  );
+  const isDialysisReadOnly = !canWriteDialysis;
   const [anomalyOpen, setAnomalyOpen] = useState(false);
   const [anomalyCtx, setAnomalyCtx] = useState<{
     anomalyType: AnomalyType;
@@ -2270,6 +2281,9 @@ export default function DialysisEntryPage() {
 
   const handleVitalChange = useCallback(
     (rowId: string, field: string, val: string) => {
+      if (isDialysisReadOnly) {
+        return;
+      }
       setVitalRows((prev) =>
         prev.map((row) => {
           if (row.id !== rowId) return row;
@@ -2284,10 +2298,14 @@ export default function DialysisEntryPage() {
       );
       schedulePersistDialysisDraft();
     },
-    [signerLabel, schedulePersistDialysisDraft],
+    [isDialysisReadOnly, signerLabel, schedulePersistDialysisDraft],
   );
 
   const handleAddVitalRow = () => {
+    if (isDialysisReadOnly) {
+      message.warning('当前账号在透析工作台为只读权限');
+      return;
+    }
     setVitalRows((prev) => [...prev, createVitalSignRow()]);
     schedulePersistDialysisDraft();
   };
@@ -2304,6 +2322,10 @@ export default function DialysisEntryPage() {
   }, [signerLabel, selectedPatient, form]);
 
   const handleRemoveVitalRow = (rowId: string) => {
+    if (isDialysisReadOnly) {
+      message.warning('当前账号在透析工作台为只读权限');
+      return;
+    }
     setVitalRows(prev => {
       if (prev.length <= 1) { message.warning('至少保留 1 条生命体征记录'); return prev; }
       return prev.filter(row => row.id !== rowId);
@@ -2312,12 +2334,20 @@ export default function DialysisEntryPage() {
   };
 
   const handleOrderToggle = (key: string, checked: boolean) => {
+    if (isDialysisReadOnly) {
+      message.warning('当前账号在透析工作台为只读权限');
+      return;
+    }
     setOrders((prev) => ({ ...prev, [key]: checked }));
     schedulePersistDialysisDraft();
   };
 
   /** 组合医嘱：一次勾选同步主药 + 所有子药 */
   const handleComboGroupToggle = (g: DialysisOrderExecGroup, checked: boolean) => {
+    if (isDialysisReadOnly) {
+      message.warning('当前账号在透析工作台为只读权限');
+      return;
+    }
     setOrders((prev) => {
       const next = { ...prev };
       for (const r of g.rows) next[r.key] = checked;
@@ -2327,6 +2357,10 @@ export default function DialysisEntryPage() {
   };
 
   const handleSubmit = async () => {
+    if (isDialysisReadOnly) {
+      message.warning('当前账号在透析工作台为只读权限，无法保存');
+      return;
+    }
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
     // 允许真实患者（有 realPrepareData）或演示患者（有 rxPreview）继续提交
     const hasRealRx = isRealPatientId(selectedPatient) && realPrepareData !== null;
@@ -2545,6 +2579,15 @@ export default function DialysisEntryPage() {
           description={openedRecordDetail ? `记录ID：${openedRecordDetail.id}` : `记录ID：${recordIdFromUrl}`}
         />
       ) : null}
+      {isDialysisReadOnly ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 10 }}
+          message="当前账号在透析工作台为只读权限"
+          description="可查看透析工作台信息，但不可新增、编辑或保存透析记录。"
+        />
+      ) : null}
 
       <div className="hd-filter-bar">
         <div className="hd-filter-bar__left">
@@ -2564,7 +2607,13 @@ export default function DialysisEntryPage() {
           <Button icon={<PrinterOutlined />} onClick={handlePrint}>
             打印记录单
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit}>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={loading}
+            onClick={handleSubmit}
+            disabled={isDialysisReadOnly}
+          >
             {recordIdFromUrl ? '保存为新记录' : '保存记录'}
           </Button>
         </div>
@@ -2574,8 +2623,10 @@ export default function DialysisEntryPage() {
         form={form}
         layout="vertical"
         size="middle"
+        disabled={isDialysisReadOnly}
         initialValues={nurseSignatureInitialValues}
         onValuesChange={() => {
+          if (isDialysisReadOnly) return;
           schedulePersistDialysisDraft();
         }}
       >
@@ -3101,6 +3152,7 @@ export default function DialysisEntryPage() {
                   onClick={handleAddVitalRow}
                   type="primary"
                   ghost
+                  disabled={isDialysisReadOnly}
                 >
                   新增记录
                 </Button>
@@ -3155,6 +3207,8 @@ export default function DialysisEntryPage() {
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
                             placeholder={field === 'signature' ? '录入数据后自动填写' : ''}
+                            readOnly={isDialysisReadOnly}
+                            disabled={isDialysisReadOnly}
                             style={{
                               width: '100%', padding: '4px 6px',
                               border: '1px solid transparent',
@@ -3181,6 +3235,7 @@ export default function DialysisEntryPage() {
                           icon={<DeleteOutlined />}
                           onClick={() => handleRemoveVitalRow(row.id)}
                           type="text"
+                          disabled={isDialysisReadOnly}
                         />
                       </td>
                     </tr>
@@ -3391,6 +3446,10 @@ export default function DialysisEntryPage() {
                         padding: '8px 10px', cursor: 'pointer',
                       }}
                         onClick={() => {
+                          if (isDialysisReadOnly) {
+                            message.warning('当前账号在透析工作台为只读权限');
+                            return;
+                          }
                           if (active) return; // 已选中时只能通过右侧X取消
                           setComplications(prev => [...prev, c.value]);
                           setTreatmentModalTarget(c.value);
@@ -3422,7 +3481,12 @@ export default function DialysisEntryPage() {
                               size="small" type="link"
                               icon={hasFilled ? <EditOutlined /> : <FileTextOutlined />}
                               style={{ padding: '0 4px', fontSize: 12, color: c.emergency ? '#DC2626' : '#0369A1' }}
+                              disabled={isDialysisReadOnly}
                               onClick={() => {
+                                if (isDialysisReadOnly) {
+                                  message.warning('当前账号在透析工作台为只读权限');
+                                  return;
+                                }
                                 setTreatmentModalTarget(c.value);
                                 const base = record ?? { occurrenceTime: dayjs().format('HH:mm') };
                                 const n = String((base as Record<string, unknown>).nurse ?? '').trim();
@@ -3438,7 +3502,12 @@ export default function DialysisEntryPage() {
                               size="small" type="text" danger
                               icon={<CloseOutlined />}
                               style={{ padding: '0 4px', fontSize: 11 }}
+                              disabled={isDialysisReadOnly}
                               onClick={() => {
+                                if (isDialysisReadOnly) {
+                                  message.warning('当前账号在透析工作台为只读权限');
+                                  return;
+                                }
                                 setComplications(prev => prev.filter(x => x !== c.value));
                                 setComplicationRecords(prev => {
                                   const next = { ...prev };
@@ -3936,7 +4005,12 @@ export default function DialysisEntryPage() {
               width={620}
               okText="保存处理记录"
               cancelText="取消"
+              okButtonProps={{ disabled: isDialysisReadOnly }}
               onOk={() => {
+                if (isDialysisReadOnly) {
+                  message.warning('当前账号在透析工作台为只读权限');
+                  return;
+                }
                 treatmentForm.validateFields().then(values => {
                   setComplicationRecords(prev => ({ ...prev, [treatmentModalTarget]: values }));
                   setTreatmentModalTarget(null);
@@ -4124,7 +4198,14 @@ export default function DialysisEntryPage() {
             <Button icon={<PrinterOutlined />} onClick={handlePrint} size="large">
               打印记录单
             </Button>
-            <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSubmit} size="large">
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={loading}
+              onClick={handleSubmit}
+              size="large"
+              disabled={isDialysisReadOnly}
+            >
               保存透析记录
             </Button>
           </div>
