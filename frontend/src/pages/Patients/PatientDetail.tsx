@@ -169,6 +169,8 @@ type TabBasicProps = {
 };
 
 type EditFormValues = {
+  patient_identifier?: string;
+  status?: 'active' | 'suspended' | 'hospitalized' | 'transferred' | 'transplanted' | 'deceased';
   name: string;
   gender?: 'M' | 'F';
   dob?: Dayjs | null;
@@ -884,6 +886,7 @@ function TabCareCoordination({
 const HEADER_STATUS: Record<string, { label: string; color: string; bg: string }> = {
   active: { label: '在透', color: '#059669', bg: '#ECFDF5' },
   suspended: { label: '暂停', color: '#D97706', bg: '#FFFBEB' },
+  hospitalized: { label: '住院', color: '#0369A1', bg: '#F0F9FF' },
   transferred: { label: '转出', color: '#7B92BC', bg: '#F1F5F9' },
   transplanted: { label: '肾移植', color: '#4338CA', bg: '#EEF2FF' },
   deceased: { label: '死亡', color: '#64748B', bg: '#F8FAFC' },
@@ -905,6 +908,7 @@ export default function PatientDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [consentDeleteLoading, setConsentDeleteLoading] = useState<number | null>(null);
   const [editConsentFileList, setEditConsentFileList] = useState<UploadFile[]>([]);
   const [nursingStaff, setNursingStaff] = useState<NursingStaffRow[]>([]);
   const [editForm] = Form.useForm<EditFormValues>();
@@ -1022,6 +1026,8 @@ export default function PatientDetailPage() {
     if (!p) return;
     editForm.setFieldsValue({
       name: p.name,
+      patient_identifier: p.patient_identifier || undefined,
+      status: (p.status as EditFormValues['status']) || 'active',
       gender: p.gender || undefined,
       dob: parseApiDateOnlyNullable(p.dob),
       dialysis_start_date: parseApiDateOnlyNullable(p.dialysis_start_date),
@@ -1089,6 +1095,7 @@ export default function PatientDetailPage() {
         Boolean(values.dialysis_schedule_adjust) || values.dialysis_schedule_code === 'other';
       const updatePayload = {
         name: values.name.trim(),
+        patient_identifier: values.patient_identifier?.trim() || undefined,
         gender: values.gender || undefined,
         dob: values.dob ? values.dob.format('YYYY-MM-DD') : undefined,
         dialysis_start_date: values.dialysis_start_date
@@ -1118,6 +1125,7 @@ export default function PatientDetailPage() {
         consent_cvc_date: values.consent_cvc && values.consent_cvc_date
           ? values.consent_cvc_date.format('YYYY-MM-DD')
           : null,
+        status: values.status ?? undefined,
         family_contact: familyName || familyPhone
           ? {
               ...(familyName ? { name: familyName } : {}),
@@ -1222,6 +1230,29 @@ export default function PatientDetailPage() {
     }
   };
 
+  const handleDeleteConsentImage = async (index: number) => {
+    if (!p || !canEditPatient) return;
+    try {
+      setConsentDeleteLoading(index);
+      const res = await patientsApi.deleteConsentDialysisImage(p.id, index);
+      if (res.data.code !== 200) {
+        message.error(res.data.message || '删除失败');
+        return;
+      }
+      const data = await loadPatientData(p.id);
+      setPatient(data.patient);
+      setInfectionRows(data.infectionRows);
+      setLabRows(data.labRows);
+      setDialysisRows(data.dialysisRows);
+      setRecentLines(data.recentLines);
+      message.success('知情同意书影像已删除');
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setConsentDeleteLoading(null);
+    }
+  };
+
   if (loading) {
     return (
       <PageShell fullWidth>
@@ -1242,7 +1273,7 @@ export default function PatientDetailPage() {
   }
 
   const st = HEADER_STATUS[p.status] || HEADER_STATUS.active;
-  const subtitle = `${formatGender(p.gender)} · ${p.age ?? '—'}岁 · ID: ${p.id} · ${p.primary_diagnosis || '待补全'}${p.ckd_stage ? ` · CKD ${p.ckd_stage} 期` : ''} · 透析龄 ${p.dialysis_age ?? '—'}`;
+  const subtitle = `${formatGender(p.gender)} · ${p.age ?? '—'}岁 · 患者ID: ${p.patient_identifier || '—'} · 档案ID: ${p.id} · ${p.primary_diagnosis || '待补全'}${p.ckd_stage ? ` · CKD ${p.ckd_stage} 期` : ''} · 透析龄 ${p.dialysis_age ?? '—'}`;
 
   return (
     <PageShell fullWidth>
@@ -1322,7 +1353,25 @@ export default function PatientDetailPage() {
             </div>
             <Space wrap size={[8, 8]}>
               {(p.consent_dialysis_image_paths ?? []).map((_, i) => (
-                <PatientConsentDialysisImage key={i} patientId={p.id} index={i} />
+                <Space key={i} size={4} direction="vertical">
+                  <PatientConsentDialysisImage patientId={p.id} index={i} />
+                  {canEditPatient ? (
+                    <Popconfirm
+                      title="确认删除该影像？"
+                      okText="删除"
+                      cancelText="取消"
+                      onConfirm={() => void handleDeleteConsentImage(i)}
+                    >
+                      <Button
+                        size="small"
+                        danger
+                        loading={consentDeleteLoading === i}
+                      >
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  ) : null}
+                </Space>
               ))}
             </Space>
           </div>
@@ -1391,6 +1440,13 @@ export default function PatientDetailPage() {
           <div className="grid-2" style={{ gap: '0 16px' }}>
             <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
               <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item
+              name="patient_identifier"
+              label="患者ID（真实ID）"
+              rules={[{ required: true, message: '请填写患者真实ID' }]}
+            >
+              <Input maxLength={64} />
             </Form.Item>
             <Form.Item name="gender" label="性别">
               <Select allowClear options={[{ value: 'M', label: '男' }, { value: 'F', label: '女' }]} />
@@ -1473,6 +1529,18 @@ export default function PatientDetailPage() {
             </Form.Item>
             <Form.Item name="dialysis_schedule_code" label="透析时间">
               <Select allowClear placeholder="请选择透析频次与时段" options={[...DIALYSIS_SCHEDULE_OPTIONS]} />
+            </Form.Item>
+            <Form.Item name="status" label="透析状态">
+              <Select
+                options={[
+                  { value: 'active', label: '在透' },
+                  { value: 'suspended', label: '暂停' },
+                  { value: 'hospitalized', label: '住院' },
+                  { value: 'transferred', label: '转出' },
+                  { value: 'transplanted', label: '肾移植' },
+                  { value: 'deceased', label: '死亡' },
+                ]}
+              />
             </Form.Item>
             <Form.Item
               name="dialysis_schedule_adjust"

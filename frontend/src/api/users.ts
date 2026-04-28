@@ -57,8 +57,8 @@ export const usersApi = {
   toggleActive: (id: string) =>
     request.patch<ApiResponse<UserRow>>(`/users/${id}/toggle-active`),
 
-  resetPassword: (id: string, new_password: string) =>
-    request.patch<ApiResponse<{ id: string; username: string }>>(`/users/${id}/password`, {
+  resetPassword: (id: string, new_password?: string) =>
+    request.patch<ApiResponse<{ id: string; username: string; temporary_password?: string }>>(`/users/${id}/password`, {
       new_password,
     }),
 

@@ -75,6 +75,8 @@ export const LAB_TYPE_LABELS: Record<string, string> = {
   sf:   '血清铁蛋白',tsat: '转铁蛋白饱和度',
   ipth: '全段甲状旁腺激素', b2mg: 'β2微球蛋白',
   bun:  '血尿素氮', cr:   '血肌酐',
+  glu:  '血糖', tc: '总胆固醇', tg: '甘油三酯', ldl_c: '低密度脂蛋白', hdl_c: '高密度脂蛋白', plt: '血小板',
+  ktv: 'Kt/V',
   hbsag:'乙肝表面抗原', hcv: '丙肝抗体',
   hiv:  'HIV抗体',  tp:   '梅毒',
 };

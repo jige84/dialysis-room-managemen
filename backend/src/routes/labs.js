@@ -28,7 +28,38 @@ const LAB_TARGETS = {
   // PDF 中 iPTH 控制目标常用范围：150～300pg/mL
   ipth:    { low: 150, high: 300, unit: 'pg/mL' },
   b2mg:    { high: 25, unit: 'mg/L' },
+  glu:     { low: 3.9, high: 7.8, unit: 'mmol/L', critical_low: 2.8, critical_high: 16.7 },
+  tc:      { high: 5.2, unit: 'mmol/L' },
+  tg:      { high: 1.7, unit: 'mmol/L' },
+  ldl_c:   { high: 3.4, unit: 'mmol/L' },
+  hdl_c:   { low: 1.0, unit: 'mmol/L' },
+  plt:     { low: 100, high: 300, unit: '10^9/L', critical_low: 30 },
+  ktv:     { low: 1.2, unit: '' },
 };
+
+function normalizeLabTestType(raw) {
+  const text = String(raw || '').trim().toLowerCase();
+  const compact = text.replace(/[\s/_-]/g, '');
+  const aliases = {
+    ktv: 'ktv',
+    spktv: 'ktv',
+    glucose: 'glu',
+    bloodglucose: 'glu',
+    glu: 'glu',
+    tc: 'tc',
+    cholesterol: 'tc',
+    totalcholesterol: 'tc',
+    tg: 'tg',
+    triglyceride: 'tg',
+    triglycerides: 'tg',
+    ldlc: 'ldl_c',
+    hdlc: 'hdl_c',
+    plt: 'plt',
+    platelet: 'plt',
+    platelets: 'plt',
+  };
+  return aliases[compact] || text;
+}
 
 // 化验项目复查周期（用于“下次复查时间”的默认值）
 const LAB_REVIEW_CYCLE_DAYS = {
@@ -46,6 +77,13 @@ const LAB_REVIEW_CYCLE_DAYS = {
   hco3: 30,
   bun:  90,
   cr:   90,
+  glu:  30,
+  tc:   90,
+  tg:   90,
+  ldl_c: 90,
+  hdl_c: 90,
+  plt:  30,
+  ktv:  90,
   // 传染病筛查：每6个月复查（约180天）
   hbsag: 180,
   hcv:   180,
@@ -80,7 +118,7 @@ router.get('/', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'quality']
     }
     if (test_type) {
       conditions.push(`lr.test_type = $${idx++}`);
-      params.push(String(test_type).trim());
+      params.push(normalizeLabTestType(test_type));
     }
     if (is_critical === 'true') {
       conditions.push('lr.is_critical = true');
@@ -202,7 +240,17 @@ router.get('/recent', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'qua
        LIMIT $3 OFFSET $4`,
       [startStr, endStr, pageSize, offset]
     );
-    const withNext = rows.map((r) => {
+    const dedupedRows = [];
+    const seenRecent = new Set();
+    for (const row of rows) {
+      const normalizedType = normalizeLabTestType(row.test_type);
+      const key = `${row.patient_id}:${normalizedType}`;
+      if (seenRecent.has(key)) continue;
+      seenRecent.add(key);
+      dedupedRows.push({ ...row, test_type: normalizedType });
+    }
+
+    const withNext = dedupedRows.map((r) => {
       const extractDueDateFromMessage = (msg) => {
         if (!msg) return null;
         const m = String(msg).match(/\b(\d{4}-\d{2}-\d{2})\b/);
@@ -259,14 +307,15 @@ router.get('/review-due-soon', auth, rbac(['admin', 'doctor', 'nurse', 'head_nur
 
     const list = [];
     for (const row of rows) {
-      const cycleDays = LAB_REVIEW_CYCLE_DAYS[row.test_type] ?? DEFAULT_REVIEW_CYCLE_DAYS;
+      const normalizedType = normalizeLabTestType(row.test_type);
+      const cycleDays = LAB_REVIEW_CYCLE_DAYS[normalizedType] ?? DEFAULT_REVIEW_CYCLE_DAYS;
       const dueStr = addDaysToDate(row.test_date, cycleDays);
       const due = new Date(`${dueStr}T00:00:00`);
       if (due >= lower && due <= upper) {
         list.push({
           patient_id: row.patient_id,
           patient_name: row.patient_name,
-          test_type: row.test_type,
+          test_type: normalizedType,
           test_date: formatDate(row.test_date),
           due_date: dueStr,
         });
@@ -342,6 +391,7 @@ router.patch('/recheck', auth, rbac(['admin', 'doctor']), async (req, res, next)
   try {
     const { patient_id, test_type, due_date } = req.body || {};
     if (!patient_id || !test_type || !due_date) return error(res, 'patient_id、test_type、due_date 为必填项', 400);
+    const normalizedTestType = normalizeLabTestType(test_type);
 
     const due = new Date(due_date);
     if (Number.isNaN(due.getTime())) return error(res, 'due_date 格式无效（需为 YYYY-MM-DD）', 400);
@@ -350,14 +400,14 @@ router.patch('/recheck', auth, rbac(['admin', 'doctor']), async (req, res, next)
     const { rows: pRows } = await pool.query('SELECT name FROM patients WHERE id=$1', [patient_id]);
     const pname = pRows[0]?.name || patient_id;
 
-      const cycleDays = LAB_REVIEW_CYCLE_DAYS[test_type] ?? DEFAULT_REVIEW_CYCLE_DAYS;
+    const cycleDays = LAB_REVIEW_CYCLE_DAYS[normalizedTestType] ?? DEFAULT_REVIEW_CYCLE_DAYS;
     const daysFromNow = Math.floor((due.getTime() - Date.now()) / 86400000);
     // 当前 alerts 表结构使用 severity（且限制了枚举值），这里把原先的 low/medium 映射到允许值。
     const severity = daysFromNow < 0 ? 'critical' : daysFromNow <= 7 ? 'warning' : 'info';
 
     const title = `化验复查计划：${pname}`;
     // 在 message 内嵌入可解析标记，供 `GET /recent` 覆盖默认复查周期。
-      const message = `患者 ${pname} 的 ${String(test_type).toUpperCase()} 计划复查于 ${dueStr}（周期${cycleDays}天），due_date=${dueStr}`;
+    const message = `患者 ${pname} 的 ${normalizedTestType.toUpperCase()} 计划复查于 ${dueStr}（周期${cycleDays}天），due_date=${dueStr}`;
 
     const { rows: aRows } = await pool.query(
       `SELECT id
@@ -367,7 +417,7 @@ router.patch('/recheck', auth, rbac(['admin', 'doctor']), async (req, res, next)
          AND alert_rule_id = $2
          AND status = 'active'
        LIMIT 1`,
-      [patient_id, test_type]
+      [patient_id, normalizedTestType]
     );
 
     let updated;
@@ -391,7 +441,7 @@ router.patch('/recheck', auth, rbac(['admin', 'doctor']), async (req, res, next)
            status
          ) VALUES ($1, $2, 'lab_review_due', $3, $4, $5, 'active')
          RETURNING id`,
-        [patient_id, test_type, severity, title, message]
+        [patient_id, normalizedTestType, severity, title, message]
       );
       updated = iRows;
     }
@@ -412,7 +462,7 @@ router.get('/:patientId', auth, async (req, res, next) => {
     const params = [req.params.patientId];
     let idx = 2;
 
-    if (test_type)   { conditions.push(`test_type = $${idx++}`);            params.push(test_type); }
+    if (test_type)   { conditions.push(`test_type = $${idx++}`);            params.push(normalizeLabTestType(test_type)); }
     if (start_date)  { conditions.push(`test_date >= $${idx++}`);           params.push(start_date); }
     if (end_date)    { conditions.push(`test_date <= $${idx++}`);           params.push(end_date); }
 
@@ -446,7 +496,15 @@ router.get('/:patientId/latest', auth, async (req, res, next) => {
        ORDER BY test_type, test_date DESC`,
       [req.params.patientId]
     );
-    return success(res, rows);
+    const latestByType = new Map();
+    for (const row of rows) {
+      const normalizedType = normalizeLabTestType(row.test_type);
+      const current = latestByType.get(normalizedType);
+      if (!current || new Date(row.test_date) > new Date(current.test_date)) {
+        latestByType.set(normalizedType, { ...row, test_type: normalizedType });
+      }
+    }
+    return success(res, Array.from(latestByType.values()));
   } catch (err) { next(err); }
 });
 
@@ -456,7 +514,7 @@ router.get('/:patientId/trends', auth, async (req, res, next) => {
     const { types } = req.query;
     if (!types) return error(res, '请提供 types 参数（如：k,hb,p）');
 
-    const typeList = String(types).split(',').map(t => t.trim());
+    const typeList = String(types).split(',').map(t => normalizeLabTestType(t));
     const { rows } = await pool.query(
       `SELECT test_type, test_date, value, unit, target_low, target_high
        FROM lab_results
@@ -487,11 +545,18 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
       /* eslint-disable no-await-in-loop */
       const { test_type, value, unit, test_date, notes } = item;
       if (!test_type || value === undefined) continue;
+      const normalizedTestType = normalizeLabTestType(test_type);
 
-      const target = LAB_TARGETS[test_type] || {};
-      const is_abnormal = (target.low && value < target.low) || (target.high && value > target.high);
-      const is_critical = (target.critical_low && value < target.critical_low) ||
-                          (target.critical_high && value > target.critical_high);
+      const target = LAB_TARGETS[normalizedTestType] || {};
+      const numericValue = Number(value);
+      const is_abnormal = Boolean(
+        (target.low != null && numericValue < target.low)
+        || (target.high != null && numericValue > target.high),
+      );
+      const is_critical = Boolean(
+        (target.critical_low != null && numericValue < target.critical_low)
+        || (target.critical_high != null && numericValue > target.critical_high),
+      );
       const is_above_target = is_abnormal;
 
       const { rows } = await pool.query(
@@ -503,7 +568,7 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          RETURNING id, test_type, value, is_critical`,
         [
-          req.params.patientId, test_type, value,
+          req.params.patientId, normalizedTestType, value,
           unit || target.unit || '',
           test_date || formatDate(new Date()),
           target.low || null, target.high || null,
@@ -513,6 +578,21 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
         ]
       );
       results.push(rows[0]);
+      if (is_critical) {
+        const patientNameRes = await pool.query('SELECT name FROM patients WHERE id = $1', [req.params.patientId]);
+        const patientName = patientNameRes.rows[0]?.name || '患者';
+        const testLabel = normalizedTestType.toUpperCase();
+        await pool.query(
+          `INSERT INTO alerts (patient_id, alert_rule_id, alert_type, severity, title, message, status)
+           VALUES ($1, $2, 'lab_critical', 'critical', $3, $4, 'active')`,
+          [
+            req.params.patientId,
+            rows[0].id,
+            `检验危急值：${patientName}`,
+            `${patientName} ${testLabel}=${value}${unit || target.unit || ''}，请立即处理`,
+          ],
+        );
+      }
     }
 
     return created(res, results, `${results.length}条检验结果录入成功`);

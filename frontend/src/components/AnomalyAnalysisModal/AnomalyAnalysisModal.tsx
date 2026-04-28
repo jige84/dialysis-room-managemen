@@ -1,6 +1,6 @@
 /**
  * 异常分析 Modal：调用 /api/ai/anomaly-analysis
- * 保存检索片段：阅读结果后由用户确认，调用 /api/ai/anomaly-analysis/save-kb（服务端按类型重新检索，不提交 AI 正文）
+ * 保存资料摘要：阅读结果后由用户确认，调用 /api/ai/anomaly-analysis/save-kb（服务端按类型重新检索并整理总结，不提交 AI 正文）
  */
 import { useEffect, useState } from 'react';
 import { Modal, Spin, Typography, Alert, List, Button, Space, message } from 'antd';
@@ -35,19 +35,19 @@ function kbSaveHint(kb: AiKbSaveResult | undefined) {
           overviewLine ? (
             <span style={{ fontSize: 12 }}>{overviewLine}</span>
           ) : (
-            '本地资料库中无匹配片段，无法保存检索原文。'
+            '本地资料库中无匹配片段，无法整理入库。'
           )
         }
       />
     );
   }
-  if (kb.error === 'persist_failed') {
+  if (kb.error === 'persist_failed' || kb.error === 'summary_failed' || kb.error === 'summary_empty') {
     return (
       <Alert
         type="warning"
         style={{ marginTop: 12 }}
         message="保存到本地知识库失败"
-        description="请稍后重试或联系管理员。"
+        description="整理总结或写入失败，请稍后重试或联系管理员。"
       />
     );
   }
@@ -72,12 +72,12 @@ function kbSaveHint(kb: AiKbSaveResult | undefined) {
       <Alert
         type="success"
         style={{ marginTop: 12 }}
-        message="已保存检索片段到本地知识库"
+        message="已保存整理总结到本地知识库"
         description={
           overviewLine ? (
             <span style={{ fontSize: 12 }}>{overviewLine}</span>
           ) : (
-            '入库正文为资料原文拼接，非上方 AI 解读。'
+            '入库正文为检索资料的整理总结，非上方 AI 解读。'
           )
         }
       />
@@ -274,7 +274,7 @@ export default function AnomalyAnalysisModal({
               disabled={evidencePatientMismatch}
               onClick={() => void saveToKb()}
             >
-              保存检索片段到本地知识库
+              保存整理总结到本地知识库
             </Button>
             <Button
               onClick={() => {
@@ -286,7 +286,7 @@ export default function AnomalyAnalysisModal({
             </Button>
           </Space>
           <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-            入库为当前异常类型下检索到的资料原文，非上方 AI 解读正文；无片段时不写入。
+            入库为当前异常类型下检索资料的整理总结，非上方 AI 解读正文；无片段时不写入。
           </Text>
         </>
       ) : null}

@@ -32,7 +32,6 @@ import {
   MinusCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { useNavigate } from 'react-router-dom';
 import PageShell from '../../components/PageShell/PageShell';
 import { PageEmpty } from '../../components/PageStates/PageStates';
 import LabOcrModal from '../../components/LabOcrModal/LabOcrModal';
@@ -150,7 +149,7 @@ function dedupeLabRows(rows: LabResultListRow[]): LabResultListRow[] {
 
     const bizKey = [
       r.patient_id,
-      r.test_type,
+      String(r.test_type || '').toLowerCase(),
       String(r.test_date || '').slice(0, 10),
       normalizeValue(r.value),
       String(r.unit ?? '').trim().toLowerCase(),
@@ -385,7 +384,6 @@ export default function LabResultListPage() {
   const hasLabWrite = useAuthStore((s) => s.hasRole(['admin', 'doctor', 'head_nurse']));
   const canSetRecheckByRole = useAuthStore((s) => s.hasRole(['admin', 'doctor']));
   const canSetRecheck = canSetRecheckByRole;
-  const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
   const [list, setList] = useState<LabResultListRow[]>([]);
@@ -409,6 +407,8 @@ export default function LabResultListPage() {
     next_review_date?: string;
   } | null>(null);
   const [recheckDate, setRecheckDate] = useState<dayjs.Dayjs | null>(null);
+  const [criticalHandleTarget, setCriticalHandleTarget] = useState<LabResultListRow | null>(null);
+  const [criticalHandleSaving, setCriticalHandleSaving] = useState(false);
 
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('全部类别');
@@ -589,8 +589,23 @@ export default function LabResultListPage() {
     : '—';
   const uncompletedCount = monthCompletion?.uncompleted_patients.length ?? 0;
 
-  const handleCriticalNavigate = () => {
-    navigate('/alerts?level=critical&status=active');
+  const openCriticalHandle = (row: LabResultListRow) => {
+    setCriticalHandleTarget(row);
+  };
+
+  const confirmCriticalHandle = async () => {
+    if (!criticalHandleTarget) return;
+    setCriticalHandleSaving(true);
+    try {
+      await labsApi.confirmCritical(criticalHandleTarget.id);
+      message.success('危急值已确认处理');
+      setCriticalHandleTarget(null);
+      await loadLabRecords(recordScope);
+    } catch {
+      message.error('危急值处理失败');
+    } finally {
+      setCriticalHandleSaving(false);
+    }
   };
 
   const handleDueSoonOpen = async () => {
@@ -723,6 +738,14 @@ export default function LabResultListPage() {
     setTimeout(() => recordsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
 
+  const handleCriticalFilter = () => {
+    setSearch('');
+    setCategory('全部类别');
+    setStatusFilter('critical');
+    setViewMode('table');
+    setTimeout(() => recordsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+
   return (
     <PageShell
       fullWidth
@@ -733,9 +756,9 @@ export default function LabResultListPage() {
           className="hd-stat-card red"
           role="button"
           tabIndex={0}
-          onClick={handleCriticalNavigate}
+          onClick={handleCriticalFilter}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') handleCriticalNavigate();
+            if (e.key === 'Enter' || e.key === ' ') handleCriticalFilter();
           }}
           style={{ cursor: 'pointer' }}
           aria-label="查看危急值预警"
@@ -929,7 +952,7 @@ export default function LabResultListPage() {
               {firstCritical.unit}
             </div>
           </div>
-          <Button danger size="small">
+          <Button danger size="small" onClick={() => openCriticalHandle(firstCritical)}>
             立即处理
           </Button>
         </div>
@@ -1274,6 +1297,33 @@ export default function LabResultListPage() {
             )}
           </Form.List>
         </Form>
+      </Modal>
+
+      <Modal
+        title="处理检验危急值"
+        open={!!criticalHandleTarget}
+        onOk={() => void confirmCriticalHandle()}
+        onCancel={() => setCriticalHandleTarget(null)}
+        okText="确认已处理"
+        cancelText="取消"
+        confirmLoading={criticalHandleSaving}
+        width={520}
+      >
+        {criticalHandleTarget ? (
+          <div>
+            <Typography.Paragraph>
+              患者：<b>{criticalHandleTarget.patient_name}</b>
+            </Typography.Paragraph>
+            <Typography.Paragraph>
+              项目：<b>{LAB_TYPE_LABELS[criticalHandleTarget.test_type] ?? criticalHandleTarget.test_type}</b>
+              {' = '}
+              <b>{criticalHandleTarget.value}{criticalHandleTarget.unit}</b>
+            </Typography.Paragraph>
+            <Typography.Text type="secondary">
+              请确认已通知医生并完成相应处置后再点击确认。确认后该检验危急值会标记为已处理。
+            </Typography.Text>
+          </div>
+        ) : null}
       </Modal>
 
       {anomalyCtx ? (

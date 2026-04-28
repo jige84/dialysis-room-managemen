@@ -5,6 +5,7 @@
  */
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
@@ -100,6 +101,15 @@ function validatePasswordStrength(password) {
 function normalizeTextInput(value) {
   if (value === undefined || value === null) return undefined;
   return String(value).trim();
+}
+
+function generateTemporaryPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < 10; i += 1) {
+    out += chars[crypto.randomInt(0, chars.length)];
+  }
+  return out;
 }
 
 function validateUsername(username) {
@@ -282,11 +292,12 @@ router.patch('/:id/toggle-active', auth, rbac(['admin']), auditLog('users', 'UPD
   } catch (err) { next(err); }
 });
 
-// PATCH /api/users/:id/password — 管理员重置他人密码（不落审计明文密码）
+// PATCH /api/users/:id/password — 管理员重置他人密码（未传 new_password 时自动生成临时密码）
 router.patch('/:id/password', auth, rbac(['admin']), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { new_password: newPassword } = req.body;
+    const inputPassword = normalizeTextInput(req.body?.new_password);
+    const newPassword = inputPassword || generateTemporaryPassword();
 
     const pwdErr = validatePasswordStrength(newPassword);
     if (pwdErr) return error(res, pwdErr);
@@ -320,7 +331,11 @@ router.patch('/:id/password', auth, rbac(['admin']), async (req, res, next) => {
       // 审计失败不阻断业务
     }
 
-    return success(res, { id: rows[0].id, username: rows[0].username }, '密码已重置');
+    return success(
+      res,
+      { id: rows[0].id, username: rows[0].username, temporary_password: newPassword },
+      '密码已重置（系统生成密码仅本次返回）',
+    );
   } catch (err) { next(err); }
 });
 

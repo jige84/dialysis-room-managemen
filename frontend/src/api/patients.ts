@@ -14,11 +14,12 @@ export interface Patient {
   primary_diagnosis?: string | null;
   dialysis_start_date?: string | null;
   dialysis_age?: string | null;
-  status: 'active' | 'suspended' | 'transferred' | 'transplanted' | 'deceased';
+  status: 'active' | 'suspended' | 'hospitalized' | 'transferred' | 'transplanted' | 'deceased';
   isolation_zone: 'normal' | 'hbv' | 'hcv' | 'observation' | 'last_shift';
   comorbidities?: string[];
   phone?: string;
   id_card?: string;
+  patient_identifier?: string | null;
   access_type?: string;
   access_location?: string;
   ckd_stage?: number | null;
@@ -175,6 +176,7 @@ export interface CreatePatientPayload {
   present_illness?: string;
   past_history?: string;
   id_card?: string;
+  patient_identifier?: string;
   phone?: string;
   family_contact?: { name?: string; phone?: string };
   address?: string;
@@ -188,6 +190,7 @@ export interface CreatePatientPayload {
   profile_dry_weight_date?: string;
   profile_dry_weight_reason?: string | null;
   isolation_zone?: 'normal' | 'hbv' | 'hcv' | 'observation' | 'last_shift';
+  status?: 'active' | 'suspended' | 'hospitalized' | 'transferred' | 'transplanted' | 'deceased';
   consent_dialysis?: boolean;
   consent_dialysis_date?: string | null;
   consent_cvc?: boolean;
@@ -371,6 +374,11 @@ export const patientsApi = {
       { timeout: 120000 },
     );
   },
+
+  deleteConsentDialysisImage: (patientId: string, index: number) =>
+    request.delete<ApiResponse<{ consent_dialysis_image_paths: string[]; removed_index: number }>>(
+      `/patients/${patientId}/consent-dialysis-image/${index}`,
+    ),
 
   searchByKeyword: (keyword: string) =>
     request.get<ApiResponse<PagedData<Patient>>>('/patients', {

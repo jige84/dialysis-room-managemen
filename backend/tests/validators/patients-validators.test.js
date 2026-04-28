@@ -17,6 +17,7 @@ test('patientsValidators: create required fields and qod anchor', () => {
     dob: '1990-01-01',
     dialysis_start_date: '2020-01-01',
     primary_diagnosis: 'CKD',
+    patient_identifier: 'HD-001',
   });
   assert.equal(ok.ok, true);
 

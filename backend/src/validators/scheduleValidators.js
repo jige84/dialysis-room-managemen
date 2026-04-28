@@ -18,6 +18,9 @@ function validateCreateSlotPayload(body) {
   if (!patient_id || !scheduled_date || !shift || !machine_id) {
     return { ok: false, message: 'patient_id、scheduled_date、shift、machine_id 为必填项' };
   }
+  if (!DATE_PARAM_RE.test(String(scheduled_date))) {
+    return { ok: false, message: 'scheduled_date 须为 YYYY-MM-DD', statusCode: 400 };
+  }
   if (!isValidUuid(patient_id) || !isValidUuid(machine_id)) {
     return { ok: false, message: 'ID 格式无效', statusCode: 400 };
   }

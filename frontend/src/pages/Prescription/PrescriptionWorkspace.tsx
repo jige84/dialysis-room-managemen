@@ -62,6 +62,7 @@ const MODE_OPTIONS = [
   { value: 'HD', label: 'HD（血液透析）' },
   { value: 'HDF', label: 'HDF（血液透析滤过）' },
   { value: 'HD_HP', label: 'HD+HP（血液透析+灌流）' },
+  { value: 'HD_HP_800', label: 'HD+HP +800 IU' },
   { value: 'other', label: '其他' },
 ] as const;
 
@@ -118,6 +119,7 @@ const UF_MODE_EXTRA_ML: Record<string, number> = {
   HD: 200,
   HDF: 200,
   HD_HP: 500,
+  HD_HP_800: 500,
 };
 
 /**
@@ -144,6 +146,7 @@ function computeUltrafiltrationMl(
 function computeLmwhFamilyFirstDoseIU(coreIU: number, mode: string | undefined, anticoagulant: string | undefined): number {
   if (!LMWH_FAMILY.has(anticoagulant ?? '')) return coreIU;
   if (mode === 'HDF') return coreIU + 200;
+  if (mode === 'HD_HP_800') return coreIU + 800;
   if (mode === 'HD_HP') return coreIU + 500;
   return coreIU;
 }
@@ -179,6 +182,7 @@ type BasicParamsStored = Partial<{
   preAssessEdemaSite: string;
   preAssessBleeding: string;
   preAssessBleedingDesc: string;
+  citrateDetail: string;
   /** HDF：pre / post / both */
   hdfReplacementMode: string;
   hdfReplacementVolumeL: number;
@@ -218,6 +222,7 @@ const BASIC_PARAM_KEYS = [
   'preAssessEdemaSite',
   'preAssessBleeding',
   'preAssessBleedingDesc',
+  'citrateDetail',
   'hdfReplacementMode',
   'hdfReplacementVolumeL',
   'notes',
@@ -406,6 +411,7 @@ function mapFormModeToHemodialysisModality(mode: string | undefined, modeOther: 
     return t || 'HD';
   }
   if (mode === 'HDF' || mode === 'HD_HP' || mode === 'HD') return mode;
+  if (mode === 'HD_HP_800') return 'HD_HP';
   return 'HD';
 }
 
@@ -480,8 +486,18 @@ function applyHeparinCoreFromLoadedRx(
   if (!LMWH_FAMILY.has(anticoagulant ?? '')) return first;
   let core = first;
   if (hemoMode === 'HDF') core -= 200;
+  if (hemoMode === 'HD_HP_800') core -= 800;
   if (hemoMode === 'HD_HP') core -= 500;
   return Math.max(0, core);
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /** 医生签名为空时填入当前登录用户（优先 real_name，否则 username；可修改） */
@@ -616,6 +632,7 @@ export default function PrescriptionWorkspacePage() {
   const naCurveEndWatched = Form.useWatch('naCurveEnd', form);
   const preAssessEdemaSiteWatched = Form.useWatch('preAssessEdemaSite', form);
   const preAssessBleedingDescWatched = Form.useWatch('preAssessBleedingDesc', form);
+  const citrateDetailWatched = Form.useWatch('citrateDetail', form);
 
   const patientInfo = PATIENTS.find((p) => p.value === selectedPatient);
 
@@ -1268,6 +1285,33 @@ export default function PrescriptionWorkspacePage() {
     }
   };
 
+  const handlePrintPrescription = () => {
+    const values = form.getFieldsValue();
+    const patientName = confirmPatientDisplayName;
+    const gender = selectedRealPatient?.gender === 'F' ? '女' : selectedRealPatient?.gender === 'M' ? '男' : '—';
+    const mode = dialysisModeLabel(values.mode as string, values.modeOther as string | undefined);
+    const uf = values.ultrafiltrationMl != null ? `${values.ultrafiltrationMl} mL` : '—';
+    const anticoagulant = ANTICOAGULANT_OPTIONS.find((o) => o.value === values.anticoagulant)?.label || '—';
+    const anticoagulantDose = `首剂 ${values.heparinFirst ?? '—'} IU；追加 ${values.heparinMaint ?? '—'} IU/h`;
+    const sodiumCurve = formatSodiumCurveSummary({
+      sodiumCurve: values.sodiumCurve,
+      sodiumCurveCustom: values.sodiumCurveCustom,
+      naCurveStart: values.naCurveStart,
+      naCurveEnd: values.naCurveEnd,
+    });
+    const notes = typeof values.notes === 'string' && values.notes.trim() ? values.notes.trim() : '—';
+    const html = `<html><head><meta charset="utf-8"><title>透析处方打印</title></head><body style="font-family:Arial,'Microsoft YaHei',sans-serif;padding:16px;"><h3>透析处方摘要</h3><p>姓名：${escapeHtml(patientName)}</p><p>性别：${escapeHtml(gender)}</p><p>透析模式：${escapeHtml(mode)}</p><p>超滤量：${escapeHtml(uf)}</p><p>抗凝方案及用量：${escapeHtml(anticoagulant)}；${escapeHtml(anticoagulantDose)}</p><p>可调钠曲线：${escapeHtml(sodiumCurve || '—')}</p><p>处方备注：${escapeHtml(notes)}</p></body></html>`;
+    const w = window.open('', '_blank', 'width=840,height=700');
+    if (!w) {
+      message.error('无法打开打印窗口，请检查浏览器弹窗拦截');
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+
   return (
     <PageShell fullWidth>
       <div className="hd-page-intro">
@@ -1298,6 +1342,9 @@ export default function PrescriptionWorkspacePage() {
         <div className="hd-filter-bar__right">
           <Button icon={<HistoryOutlined />} onClick={() => setShowHistory(true)} disabled={!selectedPatient}>
             处方历史
+          </Button>
+          <Button onClick={handlePrintPrescription} disabled={!selectedPatient}>
+            打印摘要
           </Button>
           <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} disabled={!selectedPatient}>
             保存处方
@@ -1611,6 +1658,9 @@ export default function PrescriptionWorkspacePage() {
                       />
                       <RxReadonlyValue label="钠曲线" value={sodiumCurveLine} />
                       <RxReadonlyValue label="抗凝方案" value={anticoagulantLabel} />
+                      {anticoagulantWatched === 'citrate' ? (
+                        <RxReadonlyValue label="枸橼酸细则" value={String(citrateDetailWatched || '—')} />
+                      ) : null}
                       <RxReadonlyValue
                         label="首剂"
                         value={heparinFirstWatched != null ? `${heparinFirstWatched} IU` : '—'}
@@ -1789,13 +1839,23 @@ export default function PrescriptionWorkspacePage() {
                 <Select options={[...ANTICOAGULANT_OPTIONS]} />
               </Form.Item>
             </div>
+            {anticoagulantWatched === 'citrate' && (
+              <Form.Item
+                label="枸橼酸抗凝细则"
+                name="citrateDetail"
+                style={{ marginBottom: 16 }}
+                rules={[{ required: true, message: '选择枸橼酸抗凝时请填写细则' }]}
+              >
+                <Input.TextArea rows={3} placeholder="如：A液/B液比例、补钙策略、监测频次与异常处理要点" maxLength={1200} showCount />
+              </Form.Item>
+            )}
             <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
               <Form.Item
                 label="首剂"
                 name="heparinFirst"
                 extra={
                   LMWH_FAMILY.has(anticoagulantWatched ?? '')
-                    ? '低分子肝素类：HDF 在基础首剂上 +200 IU，HD+HP +500 IU（可改）'
+                    ? '低分子肝素类：HDF 在基础首剂上 +200 IU，HD+HP +500 IU；HD+HP +800 方案为 +800 IU（可改）'
                     : undefined
                 }
               >

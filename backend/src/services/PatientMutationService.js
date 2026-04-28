@@ -42,6 +42,15 @@ async function replaceConsentDialysisImages(db, patientId, rels) {
   return { found: true, oldPaths };
 }
 
+async function getConsentDialysisImagePaths(db, patientId) {
+  const { rows } = await PatientsRepository.getConsentDialysisImagePaths(db, patientId);
+  if (rows.length === 0) return { found: false, paths: [] };
+  return {
+    found: true,
+    paths: Array.isArray(rows[0].consent_dialysis_image_paths) ? rows[0].consent_dialysis_image_paths : [],
+  };
+}
+
 async function updatePatientStatus(db, patientId, status, statusNote, statusChangedAt) {
   return PatientsRepository.updatePatientStatus(db, patientId, status, statusNote, statusChangedAt);
 }
@@ -58,6 +67,7 @@ module.exports = {
   syncDryWeightProfile,
   syncMachineStation,
   replaceConsentDialysisImages,
+  getConsentDialysisImagePaths,
   updatePatientStatus,
   updatePatientIsolation,
 };

@@ -70,6 +70,7 @@ function toPatientRow(p: Patient): PatientRow {
 const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
   active: { label: '在透', color: '#059669', bg: '#ECFDF5' },
   suspended: { label: '暂停', color: '#D97706', bg: '#FFFBEB' },
+  hospitalized: { label: '住院', color: '#0369A1', bg: '#F0F9FF' },
   transferred: { label: '转出', color: '#7B92BC', bg: '#F1F5F9' },
   transplanted: { label: '肾移植', color: '#4338CA', bg: '#EEF2FF' },
   deceased: { label: '死亡', color: '#64748B', bg: '#F8FAFC' },
@@ -311,6 +312,7 @@ export default function PatientListPage() {
             options={[
               { value: 'active', label: '在透' },
               { value: 'suspended', label: '暂停' },
+              { value: 'hospitalized', label: '住院' },
               { value: 'transferred', label: '转出' },
               { value: 'transplanted', label: '肾移植' },
               { value: 'deceased', label: '死亡' },

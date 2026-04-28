@@ -10,9 +10,10 @@ function validateCreatePatientRequiredFields(body) {
     dob,
     dialysis_start_date,
     primary_diagnosis,
+    patient_identifier,
   } = payload;
-  if (!name || !gender || !dob || !dialysis_start_date || !primary_diagnosis) {
-    return { ok: false, message: '姓名、性别、出生日期、开始透析日期、诊断为必填项' };
+  if (!name || !gender || !dob || !dialysis_start_date || !primary_diagnosis || !String(patient_identifier || '').trim()) {
+    return { ok: false, message: '姓名、患者真实ID、性别、出生日期、开始透析日期、诊断为必填项' };
   }
   return { ok: true };
 }

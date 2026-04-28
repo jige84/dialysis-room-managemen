@@ -148,25 +148,25 @@ export default function AlertCenterPage() {
     <PageShell fullWidth>
       {/* 概览 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
-        <div className="hd-stat-card red">
+        <div className="hd-stat-card red" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter('emergency'); setStatusFilter('active'); }}>
           <div className="hd-stat-icon">⚡</div>
           <div className="hd-stat-label">急危重症</div>
           <div className="hd-stat-value num" style={{ color: '#BE123C' }}>{summary.emergency}</div>
           <div className="hd-stat-meta">需立即处理</div>
         </div>
-        <div className="hd-stat-card amber">
+        <div className="hd-stat-card amber" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter('critical'); setStatusFilter('active'); }}>
           <div className="hd-stat-icon">🔴</div>
           <div className="hd-stat-label">危急值</div>
           <div className="hd-stat-value num" style={{ color: '#C2410C' }}>{summary.critical}</div>
           <div className="hd-stat-meta">今日处理</div>
         </div>
-        <div className="hd-stat-card blue">
+        <div className="hd-stat-card blue" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter('warning'); setStatusFilter('active'); }}>
           <div className="hd-stat-icon">🟡</div>
           <div className="hd-stat-label">警告</div>
           <div className="hd-stat-value num" style={{ color: '#1D4ED8' }}>{summary.warning}</div>
           <div className="hd-stat-meta">近期处理</div>
         </div>
-        <div className="hd-stat-card teal">
+        <div className="hd-stat-card teal" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter(''); setStatusFilter('active'); }}>
           <div className="hd-stat-icon">✅</div>
           <div className="hd-stat-label">未处理总数</div>
           <div className="hd-stat-value num">{summary.total}</div>

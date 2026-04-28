@@ -172,8 +172,9 @@ async function startServer() {
     process.exit(1);
   }
 
-  app.listen(PORT, () => {
-    console.log(`✅ 服务已启动：http://localhost:${PORT}`);
+  const host = process.env.HOST || (isProduction ? '0.0.0.0' : '127.0.0.1');
+  app.listen(PORT, host, () => {
+    console.log(`✅ 服务已启动：http://${host === '0.0.0.0' ? 'localhost' : host}:${PORT}`);
     console.log(`📋 环境：${process.env.NODE_ENV || 'development'}`);
     console.log(`🔑 JWT过期时间：${process.env.JWT_EXPIRES_IN || '8h'}`);
     if (isProduction) {

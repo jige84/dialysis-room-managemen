@@ -228,6 +228,7 @@ export default function SchedulePage() {
   const [patientSearchOptions, setPatientSearchOptions] = useState<{ value: string; label: string; zone: string }[]>([]);
   const [weekPatientAdjustOpen, setWeekPatientAdjustOpen] = useState(false);
   const [addScheduleRemark, setAddScheduleRemark] = useState('');
+  const [addIsTempDialysis, setAddIsTempDialysis] = useState(true);
   const [addSessionDialysisMode, setAddSessionDialysisMode] = useState<string>('HD');
   /** 点击姓名：编辑本条透析模式与备注（默认 HD、备注空） */
   const [slotHemoModalOpen, setSlotHemoModalOpen] = useState(false);
@@ -372,6 +373,7 @@ export default function SchedulePage() {
     setAddMachineId(undefined);
     setAddScheduleRemark('');
     setAddSessionDialysisMode('HD');
+    setAddIsTempDialysis(true);
     setPatientSearchOptions([]);
     setCellModalOpen(true);
   };
@@ -558,14 +560,16 @@ export default function SchedulePage() {
         shift: cellCtx.shiftKey,
         machine_id: addMachineId,
         session_dialysis_mode: addSessionDialysisMode || 'HD',
+        is_temp: addIsTempDialysis,
         ...(remarkTrim ? { schedule_remark: remarkTrim } : {}),
       });
-      message.success('已添加排班');
+      message.success(addIsTempDialysis ? '已添加临时加透排班' : '已添加排班');
       setAddPatientId(undefined);
       setAddPatientIsolation(undefined);
       setAddMachineId(undefined);
       setAddScheduleRemark('');
       setAddSessionDialysisMode('HD');
+      setAddIsTempDialysis(true);
       setPatientSearchOptions([]);
       loadWeek(currentWeek);
     } catch (e: unknown) {
@@ -861,7 +865,7 @@ export default function SchedulePage() {
                                   style={{ padding: 0, height: 'auto', fontSize: 12 }}
                                   onClick={() => openCellModal(date, shiftKey)}
                                 >
-                                  患者排班
+                                  临时加透/患者排班
                                 </Button>
                               </div>
                             )}
@@ -1017,7 +1021,7 @@ export default function SchedulePage() {
         destroyOnClose
       >
         <p style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>
-          点击患者姓名设置本条透析模式（HD/HDF/HD+HP）与备注。排班可提前一周维护；<strong>仅当本条排班日期为「上机当日」</strong>时才会写入透析处方；其他日期仅保存在排班中。可调整机位或删除排班。
+          点击患者姓名设置本条透析模式（HD/HDF/HD+HP）与备注。新增患者默认按<strong>临时加透</strong>保存；如患者或机位冲突，系统会阻止提交并提示更换机位或调整班次。排班可提前一周维护；<strong>仅当本条排班日期为「上机当日」</strong>时才会写入透析处方；其他日期仅保存在排班中。
         </p>
         <Table<PatientSlot>
           size="small"
@@ -1039,6 +1043,7 @@ export default function SchedulePage() {
                   onClick={() => cellCtx && openSlotHemoModal(row, cellCtx.date)}
                 >
                   {name}
+                  {row.isTemp ? <Tag color="orange" style={{ marginLeft: 6 }}>临时加透</Tag> : null}
                 </Button>
               ),
             },
@@ -1087,7 +1092,7 @@ export default function SchedulePage() {
             },
           ]}
         />
-        <Card size="small" title="新增本班次患者" style={{ marginTop: 16 }} styles={{ body: { paddingBottom: 12 } }}>
+        <Card size="small" title="临时加透 / 新增本班次患者" style={{ marginTop: 16 }} styles={{ body: { paddingBottom: 12 } }}>
           <Space wrap align="start">
             <Select
               showSearch
@@ -1124,19 +1129,31 @@ export default function SchedulePage() {
             />
             <Input.TextArea
               rows={1}
-              placeholder="本条备注（可选）"
+              placeholder="本条备注（可选，如临时加透原因）"
               style={{ minWidth: 200, maxWidth: 280 }}
               value={addScheduleRemark}
               onChange={(e) => setAddScheduleRemark(e.target.value)}
+            />
+            <Select
+              style={{ minWidth: 130 }}
+              value={addIsTempDialysis ? 'temp' : 'regular'}
+              options={[
+                { value: 'temp', label: '临时加透' },
+                { value: 'regular', label: '普通排班' },
+              ]}
+              onChange={(v) => setAddIsTempDialysis(v === 'temp')}
             />
             <Button
               type="primary"
               onClick={handleAddSlot}
               disabled={!addPatientId || !addMachineId}
             >
-              添加到本班次
+              {addIsTempDialysis ? '添加临时加透' : '添加到本班次'}
             </Button>
           </Space>
+          <div style={{ marginTop: 8, color: '#64748B', fontSize: 12 }}>
+            可选机位已按患者隔离分区过滤，并排除本班次已占用机位；若当天人数超过可用机器数，请调整班次或先删除/改派冲突排班。
+          </div>
         </Card>
       </Modal>
 

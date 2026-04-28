@@ -171,8 +171,31 @@ function buildKbSaveOverview(kbSnippets, opts = {}) {
   return out;
 }
 
+async function summarizeKbSnippetsForPersist({ persistText, scenario, subcategory, title }) {
+  const source = String(persistText || '').trim();
+  if (!source) return '';
+  const result = await callQwen({
+    systemPrompt:
+      '你是血液透析室知识库资料整理助手。请把检索到的资料片段整理为可入库的中文知识摘要，禁止新增未在原文出现的事实，禁止保留患者姓名、身份证、手机号等敏感信息。',
+    userPrompt:
+      `请围绕场景「${scenario || '通用'}」${subcategory ? `、子类「${subcategory}」` : ''}整理以下资料。` +
+      `标题建议：${title || 'AI资料整理'}。\n\n` +
+      '输出要求：\n' +
+      '1. 用 3-6 条要点总结核心信息。\n' +
+      '2. 保留关键阈值、适用条件、处理建议和来源线索。\n' +
+      '3. 删除重复、碎片化和无关内容。\n' +
+      '4. 不输出内部片段编号。\n\n' +
+      `资料片段：\n${source.slice(0, 30000)}`,
+    context: null,
+    useBaseClinicalPrompt: false,
+    appendDisclaimer: false,
+    taskType: 'long_summary',
+  });
+  return String(result.content || '').trim();
+}
+
 /**
- * 用户勾选「保存到本地知识库」时写入 kb_*：正文为检索片段原文，非模型输出；默认不保存
+ * 用户勾选「保存到本地知识库」时写入 kb_*：先将检索片段整理总结，再保存摘要；默认不保存
  * @param {object} p
  * @param {boolean} p.saveToKb
  * @param {string|null} p.userId
@@ -196,20 +219,6 @@ async function persistAiKbIfRequested({
     return { kb_save: { skipped: true } };
   }
   const persistText = formatKbSnippetsForPersist(kbSnippets || []);
-  const auditHashSource =
-    persistText.trim() || `${scenario || ''}|${subcategory || ''}|${title || ''}|${kbQuery || ''}`;
-  let saveRequestId = null;
-  try {
-    saveRequestId = await KnowledgeBaseService.recordSaveRequest({
-      contentHash: crypto.createHash('sha256').update(auditHashSource).digest('hex'),
-      title,
-      sourceTier: 1,
-      userId,
-      decision: 'approved',
-    });
-  } catch (e) {
-    logger.warn('[AiAnalysisService] recordSaveRequest failed', { message: e.message });
-  }
   if (!persistText.trim()) {
     return {
       kb_save: {
@@ -221,11 +230,52 @@ async function persistAiKbIfRequested({
     };
   }
   const overview = buildKbSaveOverview(kbSnippets || [], overviewMeta);
+  let summarizedPersistText = '';
+  try {
+    summarizedPersistText = await summarizeKbSnippetsForPersist({
+      persistText,
+      scenario,
+      subcategory,
+      title,
+    });
+  } catch (e) {
+    logger.warn('[AiAnalysisService] summarizeKbSnippetsForPersist failed', { message: e.message });
+    return {
+      kb_save: {
+        skipped: false,
+        saved: false,
+        error: 'summary_failed',
+        overview,
+      },
+    };
+  }
+  if (!summarizedPersistText.trim()) {
+    return {
+      kb_save: {
+        skipped: false,
+        saved: false,
+        error: 'summary_empty',
+        overview,
+      },
+    };
+  }
+  let saveRequestId = null;
+  try {
+    saveRequestId = await KnowledgeBaseService.recordSaveRequest({
+      contentHash: crypto.createHash('sha256').update(summarizedPersistText).digest('hex'),
+      title,
+      sourceTier: 1,
+      userId,
+      decision: 'approved',
+    });
+  } catch (e) {
+    logger.warn('[AiAnalysisService] recordSaveRequest failed', { message: e.message });
+  }
   try {
     const tags = [scenario, subcategory].filter(Boolean).join(' ').trim();
     const r = await KnowledgeBaseService.recordSessionSummary({
       title,
-      summaryText: persistText,
+      summaryText: summarizedPersistText,
       tags,
       scenario,
       subcategory,
@@ -282,14 +332,40 @@ const DEFAULT_QWEN_BASE_URL =
 /**
  * 解析 AI 调用配置：优先 QWEN_*，与 backend/.env.example 中 AI_API_KEY 等兼容。
  */
-function resolveAiConfig() {
+function resolveAiConfig(taskType = 'general') {
+  const route = {
+    long_summary: 'kimi',
+    guideline_note: 'kimi',
+    medical_qa_cn: 'zhipu',
+    nlp_query: 'zhipu',
+    anomaly_reasoning: 'deepseek',
+    qc_reasoning: 'deepseek',
+  };
+  const provider = route[taskType] || 'default';
+  if (provider === 'kimi' && process.env.KIMI_API_KEY) {
+    return {
+      apiKey: process.env.KIMI_API_KEY,
+      baseUrl: process.env.KIMI_BASE_URL || 'https://api.moonshot.cn/v1/chat/completions',
+      model: process.env.KIMI_MODEL || 'moonshot-v1-8k',
+    };
+  }
+  if (provider === 'zhipu' && process.env.ZHIPU_API_KEY) {
+    return {
+      apiKey: process.env.ZHIPU_API_KEY,
+      baseUrl: process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+      model: process.env.ZHIPU_MODEL || 'glm-4-flash',
+    };
+  }
+  if (provider === 'deepseek' && process.env.DEEPSEEK_API_KEY) {
+    return {
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/chat/completions',
+      model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+    };
+  }
   const apiKey = process.env.QWEN_API_KEY || process.env.AI_API_KEY || '';
-  const baseUrl =
-    process.env.QWEN_BASE_URL ||
-    process.env.AI_BASE_URL ||
-    DEFAULT_QWEN_BASE_URL;
-  const model =
-    process.env.QWEN_MODEL || process.env.AI_MODEL || 'qwen3-max';
+  const baseUrl = process.env.QWEN_BASE_URL || process.env.AI_BASE_URL || DEFAULT_QWEN_BASE_URL;
+  const model = process.env.QWEN_MODEL || process.env.AI_MODEL || 'qwen3-max';
   return { apiKey, baseUrl, model };
 }
 
@@ -348,6 +424,7 @@ async function safeQuery(sql, params) {
  * @param {string} options.userPrompt   - 用户提问或任务描述
  * @param {object} [options.context]    - 附带的结构化 JSON 上下文
  * @param {boolean} [options.useBaseClinicalPrompt=true] - 是否拼接 CLINICAL_BASE_SYSTEM_PROMPT
+ * @param {boolean} [options.appendDisclaimer=true] - 是否在返回 content 中追加 AI 免责声明
  */
 async function callQwen({
   systemPrompt,
@@ -355,8 +432,10 @@ async function callQwen({
   context,
   contextClosingHint,
   useBaseClinicalPrompt = true,
+  appendDisclaimer = true,
+  taskType = 'general',
 }) {
-  const { apiKey, baseUrl, model } = resolveAiConfig();
+  const { apiKey, baseUrl, model } = resolveAiConfig(taskType);
   if (!apiKey) {
     const err = new Error(
       'AI 服务未配置：请设置 QWEN_API_KEY 或 AI_API_KEY（见 backend/.env.example）',
@@ -444,7 +523,7 @@ async function callQwen({
           throw new Error('AI 服务暂时不可用，请稍后重试');
         }
         const data2 = await res2.json();
-        return packageQwenContent(data2, model);
+        return packageQwenContent(data2, model, { appendDisclaimer });
       }
       logger.error('[AiAnalysisService] Qwen API 响应异常', {
         status: res.status,
@@ -454,7 +533,7 @@ async function callQwen({
     }
 
     const data = await res.json();
-    return packageQwenContent(data, model);
+    return packageQwenContent(data, model, { appendDisclaimer });
   } catch (err) {
     if (err.name === 'AbortError') {
       logger.warn('[AiAnalysisService] Qwen 请求超时');
@@ -470,13 +549,14 @@ async function callQwen({
   }
 }
 
-function packageQwenContent(data, model) {
+function packageQwenContent(data, model, { appendDisclaimer = true } = {}) {
   const raw =
     data?.choices?.[0]?.message?.content || 'AI 分析结果为空，请稍后重试。';
   const generatedAt = new Date().toISOString();
   const disclaimer = buildFullDisclaimer(generatedAt);
-  const content =
-    `${raw.trim()}\n\n---\n${disclaimer}\n---`;
+  const content = appendDisclaimer
+    ? `${raw.trim()}\n\n---\n${disclaimer}\n---`
+    : raw.trim();
   return {
     content,
     ai_disclaimer: disclaimer,
@@ -639,6 +719,7 @@ class AiAnalysisService {
       systemPrompt,
       userPrompt,
       context: payload,
+      taskType: 'long_summary',
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -671,6 +752,7 @@ class AiAnalysisService {
       systemPrompt,
       userPrompt,
       context: payload,
+      taskType: 'medical_qa_cn',
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -702,6 +784,7 @@ class AiAnalysisService {
       systemPrompt,
       userPrompt,
       context: payload,
+      taskType: 'anomaly_reasoning',
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -733,6 +816,7 @@ class AiAnalysisService {
       systemPrompt,
       userPrompt,
       context: payload,
+      taskType: 'anomaly_reasoning',
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -773,6 +857,7 @@ class AiAnalysisService {
       systemPrompt,
       userPrompt,
       context: resolvedContext,
+      taskType: 'nlp_query',
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -818,6 +903,7 @@ class AiAnalysisService {
       systemPrompt,
       userPrompt,
       context,
+      taskType: 'medical_qa_cn',
     });
     const kb = await persistAiKbIfRequested({
       saveToKb,
@@ -860,6 +946,7 @@ class AiAnalysisService {
       userPrompt,
       context: null,
       useBaseClinicalPrompt: true,
+      taskType: 'guideline_note',
     });
     return { ...result, retrieval };
   }
@@ -950,6 +1037,7 @@ class AiAnalysisService {
         '请严格按系统提示的 Markdown 结构输出：数据简要概括 → 分条分析（每条含依据、处理建议、指南/共识与来源，写完整勿中断）→ 指南与来源汇总。' +
         '正文中勿出现 JSON 字段名（如 labs3m、focusLab）；依据与处理建议须用中文可读表述。',
       useBaseClinicalPrompt: false,
+      taskType: 'anomaly_reasoning',
     });
 
     const sanitizedContent = sanitizeAnomalyAnalysisDisplayText(result.content || '');
@@ -1103,6 +1191,7 @@ class AiAnalysisService {
       contextClosingHint:
         '先概括本月五项指标在 evidence.targetMonth 中的数值（照抄数字），再分析趋势与改进方向；勿输出 JSON 字段名。',
       useBaseClinicalPrompt: false,
+      taskType: 'qc_reasoning',
     });
 
     const kb = await persistAiKbIfRequested({
@@ -1193,6 +1282,7 @@ class AiAnalysisService {
       userPrompt,
       context: null,
       useBaseClinicalPrompt: false,
+      taskType: 'long_summary',
     });
     const out = String(result.content || '').trim();
     if (!out) {

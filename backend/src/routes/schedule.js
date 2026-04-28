@@ -793,9 +793,18 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
   try {
     const payloadValid = validateCreateSlotPayload(req.body);
     if (!payloadValid.ok) return error(res, payloadValid.message, payloadValid.statusCode || 400);
-    const { patient_id, scheduled_date, shift, machine_id, schedule_remark, session_dialysis_mode } = payloadValid.value;
+    const {
+      patient_id,
+      scheduled_date,
+      shift,
+      machine_id,
+      schedule_remark,
+      session_dialysis_mode,
+      is_temp,
+    } = payloadValid.value;
     const shiftDb = SHIFT_MAP[shift] || shift;
     if (!shiftDb) return error(res, 'patient_id、scheduled_date、shift、machine_id 为必填项');
+    const isTemp = is_temp === true || is_temp === 1 || is_temp === 'true';
 
     const { rows: pRows } = await pool.query(
       'SELECT id, isolation_zone FROM patients WHERE id = $1 AND status = $2',
@@ -844,9 +853,9 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
       const { rows } = await pool.query(
         `INSERT INTO schedules (
            patient_id, machine_id, scheduled_date, shift, status, is_temp, created_by, schedule_remark, session_dialysis_mode
-         ) VALUES ($1, $2, $3::date, $4, 'planned', false, $5, $6, $7)
+         ) VALUES ($1, $2, $3::date, $4, 'planned', $5, $6, $7, $8)
          RETURNING *`,
-        [patient_id, machine_id, scheduled_date, shiftDb, req.user.id, remarkVal, sessionVal],
+        [patient_id, machine_id, scheduled_date, shiftDb, isTemp, req.user.id, remarkVal, sessionVal],
       );
       insRows = rows;
     } catch (err) {
@@ -855,9 +864,9 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
           const { rows } = await pool.query(
             `INSERT INTO schedules (
                patient_id, machine_id, scheduled_date, shift, status, is_temp, created_by, schedule_remark
-             ) VALUES ($1, $2, $3::date, $4, 'planned', false, $5, $6)
+             ) VALUES ($1, $2, $3::date, $4, 'planned', $5, $6, $7)
              RETURNING *`,
-            [patient_id, machine_id, scheduled_date, shiftDb, req.user.id, remarkVal],
+            [patient_id, machine_id, scheduled_date, shiftDb, isTemp, req.user.id, remarkVal],
           );
           insRows = rows;
           sessionDropped = sessionVal != null;
@@ -866,9 +875,9 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
             const { rows } = await pool.query(
               `INSERT INTO schedules (
                  patient_id, machine_id, scheduled_date, shift, status, is_temp, created_by
-               ) VALUES ($1, $2, $3::date, $4, 'planned', false, $5)
+               ) VALUES ($1, $2, $3::date, $4, 'planned', $5, $6)
                RETURNING *`,
-              [patient_id, machine_id, scheduled_date, shiftDb, req.user.id],
+              [patient_id, machine_id, scheduled_date, shiftDb, isTemp, req.user.id],
             );
             insRows = rows;
             remarkDropped = !!remarkVal;
@@ -899,7 +908,7 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
       /* 未迁移 053 或列不存在：不阻断排班创建 */
     }
 
-    let msg = '排班已创建';
+    let msg = isTemp ? '临时加透排班已创建' : '排班已创建';
     if (remarkDropped) msg = '排班已创建（数据库暂无 schedule_remark 列，备注未保存；请执行迁移 043）';
     if (sessionDropped) msg = `${msg}（本条透析模式未保存；请执行迁移 044）`;
 

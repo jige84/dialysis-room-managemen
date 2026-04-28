@@ -276,6 +276,8 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
       dialysis_start_date, dialysis_mode, isolation_zone,
       consent_dialysis, consent_dialysis_date,
       dialysis_schedule_code,
+      patient_identifier,
+      status,
       responsible_nurse_id,
     } = req.body;
 
@@ -285,6 +287,8 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
     const scheduleValid = normalizeCreateScheduleFields(req.body);
     if (!scheduleValid.ok) return error(res, scheduleValid.message);
     const { scheduleNotes, scheduleAnchorDate } = scheduleValid.value;
+    const validStatuses = ['active', 'suspended', 'hospitalized', 'transferred', 'transplanted', 'deceased'];
+    if (status != null && !validStatuses.includes(status)) return error(res, '无效的患者状态');
 
     const rnResolved = await resolveResponsibleNurseId(pool, responsible_nurse_id);
     if (rnResolved.error) return error(res, rnResolved.error);
@@ -301,6 +305,8 @@ router.post('/', auth, rbac(['admin', 'doctor']), auditLog('patients', 'CREATE')
         primary_diagnosis, present_illness || null, past_history || null, ckd_stage,
         comorbidities || null,
         dialysis_start_date, dialysis_mode || 'HD',
+        patient_identifier ? String(patient_identifier).trim().slice(0, 64) : null,
+        status || 'active',
         isolation_zone || 'normal',
         consent_dialysis || false, consent_dialysis_date || null,
         dialysis_schedule_code || null,
@@ -351,6 +357,37 @@ router.post(
   },
 );
 
+// DELETE /api/patients/:id/consent-dialysis-image/:index — 删除指定序号影像
+router.delete(
+  '/:id/consent-dialysis-image/:index',
+  auth,
+  rbac(['admin', 'doctor']),
+  auditLog('patients', 'UPDATE'),
+  async (req, res, next) => {
+    try {
+      if (!isValidUuid(req.params.id)) return error(res, '患者ID格式无效', 400);
+      const idx = parseInt(req.params.index, 10);
+      if (!Number.isFinite(idx) || idx < 0) return error(res, '无效的图片序号', 400);
+
+      const imageRows = await PatientMutationService.getConsentDialysisImagePaths(pool, req.params.id);
+      if (!imageRows.found) return notFound(res, '患者不存在');
+      const oldPaths = normalizeConsentPaths(imageRows.paths);
+      if (!oldPaths[idx]) return error(res, '该序号图片不存在', 404);
+
+      const removedPath = oldPaths[idx];
+      const nextPaths = oldPaths.filter((_p, i) => i !== idx);
+      await PatientMutationService.replaceConsentDialysisImages(pool, req.params.id, nextPaths);
+      safeUnlinkStoredPath(removedPath);
+
+      return success(
+        res,
+        { consent_dialysis_image_paths: nextPaths, removed_index: idx },
+        '知情同意书影像已删除',
+      );
+    } catch (err) { next(err); }
+  },
+);
+
 // PUT /api/patients/:id
 // patients:update 权限：admin, doctor（规范不含 head_nurse）
 router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE'), async (req, res, next) => {
@@ -361,6 +398,8 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
       name, gender, dob, id_card, phone, family_contact, address,
       primary_diagnosis, present_illness, past_history, ckd_stage, comorbidities, dialysis_mode,
       consent_dialysis, consent_dialysis_date, consent_cvc, consent_cvc_date,
+      patient_identifier,
+      status,
       responsible_nurse_id,
     } = req.body;
 
@@ -391,6 +430,16 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
     const profileDryValid = parseUpdateProfileDryWeight(req.body);
     if (!profileDryValid.ok) return error(res, profileDryValid.message, profileDryValid.statusCode || 400);
     const profileDryParsed = profileDryValid.value;
+    if (
+      Object.prototype.hasOwnProperty.call(req.body, 'patient_identifier')
+      && !String(patient_identifier || '').trim()
+    ) {
+      return error(res, '患者真实ID不能为空');
+    }
+    const validStatuses = ['active', 'suspended', 'hospitalized', 'transferred', 'transplanted', 'deceased'];
+    if (status != null && !validStatuses.includes(status)) {
+      return error(res, '无效的患者状态');
+    }
 
     const { rows } = await PatientMutationService.updatePatientCore(
       pool,
@@ -402,6 +451,9 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
         address, primary_diagnosis, present_illness || null, past_history || null, ckd_stage,
         comorbidities || null,
         dialysis_mode,
+        patient_identifier != null && String(patient_identifier).trim()
+          ? String(patient_identifier).trim().slice(0, 64)
+          : null,
         hasDialysisStartKey,
         dialysisStartVal,
         consent_dialysis ?? null,
@@ -415,6 +467,7 @@ router.put('/:id', auth, rbac(['admin', 'doctor']), auditLog('patients', 'UPDATE
         respNurseId,
         hasRespNurseKey,
         nextAnchor,
+        status ?? null,
         req.params.id
       ],
     );
@@ -460,7 +513,7 @@ router.patch('/:id/status', auth, rbac(['admin', 'doctor']), auditLog('patients'
     if (!isValidUuid(req.params.id)) return error(res, '患者ID格式无效', 400);
 
     const { status, status_note, status_changed_at } = req.body;
-    const validStatuses = ['active', 'suspended', 'transferred', 'transplanted', 'deceased'];
+    const validStatuses = ['active', 'suspended', 'hospitalized', 'transferred', 'transplanted', 'deceased'];
     if (!validStatuses.includes(status)) {
       return error(res, '无效的患者状态');
     }

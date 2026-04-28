@@ -6,13 +6,15 @@ async function createPatient(db, params) {
        family_contact, address,
        primary_diagnosis, present_illness, past_history, ckd_stage, comorbidities,
        dialysis_start_date, dialysis_mode,
+      patient_identifier,
+      status,
        isolation_zone,
        consent_dialysis, consent_dialysis_date,
        dialysis_schedule_code, dialysis_schedule_notes, dialysis_schedule_anchor_date,
        responsible_nurse_id,
        created_by
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
-     RETURNING id, name, gender, dob, primary_diagnosis, status, dialysis_start_date`,
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+    RETURNING id, name, gender, dob, primary_diagnosis, status, dialysis_start_date, patient_identifier`,
     params,
   );
 }
@@ -40,26 +42,28 @@ async function updatePatientCore(db, params) {
        ckd_stage = COALESCE($11, ckd_stage),
        comorbidities = COALESCE($12, comorbidities),
        dialysis_mode = COALESCE($13, dialysis_mode),
-       dialysis_start_date = CASE WHEN $14::boolean THEN $15::date ELSE dialysis_start_date END,
-       consent_dialysis = COALESCE($16, consent_dialysis),
+       patient_identifier = COALESCE($14, patient_identifier),
+       dialysis_start_date = CASE WHEN $15::boolean THEN $16::date ELSE dialysis_start_date END,
+       consent_dialysis = COALESCE($17, consent_dialysis),
        consent_dialysis_date = CASE
-         WHEN $16 = false THEN NULL
-         WHEN $17::date IS NOT NULL THEN $17
+         WHEN $17 = false THEN NULL
+         WHEN $18::date IS NOT NULL THEN $18
          ELSE consent_dialysis_date
        END,
-       consent_cvc = COALESCE($18, consent_cvc),
+       consent_cvc = COALESCE($19, consent_cvc),
        consent_cvc_date = CASE
-         WHEN $18 = false THEN NULL
-         WHEN $19::date IS NOT NULL THEN $19
+         WHEN $19 = false THEN NULL
+         WHEN $20::date IS NOT NULL THEN $20
          ELSE consent_cvc_date
        END,
-       dialysis_schedule_code = CASE WHEN $21::boolean THEN $20::varchar ELSE dialysis_schedule_code END,
-       dialysis_schedule_notes = CASE WHEN $23::boolean THEN $22::text ELSE dialysis_schedule_notes END,
-       responsible_nurse_id = CASE WHEN $25::boolean THEN $24::uuid ELSE responsible_nurse_id END,
-       dialysis_schedule_anchor_date = $26::date,
+       dialysis_schedule_code = CASE WHEN $22::boolean THEN $21::varchar ELSE dialysis_schedule_code END,
+       dialysis_schedule_notes = CASE WHEN $24::boolean THEN $23::text ELSE dialysis_schedule_notes END,
+       responsible_nurse_id = CASE WHEN $26::boolean THEN $25::uuid ELSE responsible_nurse_id END,
+       dialysis_schedule_anchor_date = $27::date,
+       status = COALESCE($28::varchar, status),
        updated_at = NOW()
-     WHERE id = $27
-     RETURNING id, name, gender, status`,
+    WHERE id = $29
+    RETURNING id, name, gender, status, patient_identifier`,
     params,
   );
 }
@@ -148,7 +152,7 @@ async function countPatients(db, whereSql, params) {
 
 async function listPatients(db, whereSql, params, limit, offset) {
   return db.query(
-    `SELECT p.id, p.name, p.gender, p.dob, p.primary_diagnosis, p.status,
+    `SELECT p.id, p.name, p.gender, p.dob, p.primary_diagnosis, p.status, p.patient_identifier,
             p.dialysis_start_date, p.isolation_zone, p.consent_dialysis,
             p.phone_encrypted,
             p.profile_dry_weight,

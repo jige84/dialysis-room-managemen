@@ -80,6 +80,11 @@ export default function AdminUsersPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const [tempPwdModal, setTempPwdModal] = useState<{ open: boolean; username: string; password: string }>({
+    open: false,
+    username: '',
+    password: '',
+  });
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [createForm] = Form.useForm<{
     username: string;
@@ -230,14 +235,25 @@ export default function AdminUsersPage() {
     if (!editing) return;
     try {
       const v = await resetForm.validateFields();
-      const pwdErr = validatePassword(v.new_password);
-      if (pwdErr) {
-        message.error(pwdErr);
-        return;
+      const manualPwd = normalizeTextInput(v.new_password || '');
+      if (manualPwd) {
+        const pwdErr = validatePassword(manualPwd);
+        if (pwdErr) {
+          message.error(pwdErr);
+          return;
+        }
       }
-      await usersApi.resetPassword(editing.id, v.new_password);
+      const res = await usersApi.resetPassword(editing.id, manualPwd || undefined);
+      const tmp = res.data.data?.temporary_password;
       message.success('密码已重置');
       setResetOpen(false);
+      if (tmp) {
+        setTempPwdModal({
+          open: true,
+          username: editing.username,
+          password: tmp,
+        });
+      }
       setEditing(null);
     } catch (e: unknown) {
       if (isFormValidationError(e)) return;
@@ -472,12 +488,31 @@ export default function AdminUsersPage() {
           <Form.Item
             name="new_password"
             label="新密码"
-            rules={[{ required: true, message: '请输入新密码' }]}
             extra="至少 6 位，仅含字母与数字"
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            为空则由系统自动生成临时密码。
+          </Typography.Text>
         </Form>
+      </Modal>
+
+      <Modal
+        title="系统生成临时密码"
+        open={tempPwdModal.open}
+        footer={null}
+        onCancel={() => setTempPwdModal({ open: false, username: '', password: '' })}
+      >
+        <Typography.Paragraph>
+          用户：<b>{tempPwdModal.username}</b>
+        </Typography.Paragraph>
+        <Typography.Paragraph copyable={{ text: tempPwdModal.password }}>
+          临时密码：<b>{tempPwdModal.password}</b>
+        </Typography.Paragraph>
+        <Typography.Text type="secondary">
+          该密码仅本次显示，请通知用户登录后尽快修改。
+        </Typography.Text>
       </Modal>
     </PageShell>
   );

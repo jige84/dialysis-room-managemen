@@ -43,6 +43,8 @@ type FormValues = {
   current_access_type?: 'none' | 'AVF' | 'AVG' | 'TCC' | 'NCC';
   isolation_zone?: CreatePatientPayload['isolation_zone'];
   id_card?: string;
+  patient_identifier?: string;
+  status?: 'active' | 'suspended' | 'hospitalized' | 'transferred' | 'transplanted' | 'deceased';
   phone?: string;
   family_contact_name?: string;
   family_contact_phone?: string;
@@ -59,98 +61,6 @@ type FormValues = {
   responsible_nurse_id?: string;
   /** 知情同意书影像（必填，表单校验） */
   consent_dialysis_image?: UploadFile[];
-};
-
-// 这些代码定义了一些常量数组，用于后续生成患者信息表单的默认选项或模拟数据。
-
-// FAMILY_NAMES 定义了常见的中文姓氏，用于构造虚拟姓名的姓。
-const FAMILY_NAMES = ['赵', '钱', '孙', '李', '周', '吴', '郑', '王', '刘', '陈', '杨', '黄'];
-
-// GIVEN_NAME_PARTS 定义了常见的中文名字中的名字部分，用于组合生成姓名。
-const GIVEN_NAME_PARTS = ['伟', '芳', '娜', '敏', '静', '磊', '洋', '强', '军', '婷', '勇', '倩', '晨', '博'];
-
-// PRIMARY_DIAGNOSIS_OPTIONS 是基础肾病诊断的选项列表，供下拉框选择或数据生成使用。
-const PRIMARY_DIAGNOSIS_OPTIONS = [
-  '慢性肾小球肾炎',
-  '糖尿病肾病',
-  '高血压肾损害',
-  '多囊肾',
-  '梗阻性肾病',
-  '狼疮性肾炎',
-];
-const PRESENT_ILLNESS_TEMPLATES = [
-  '近3个月乏力、纳差，夜尿增多，双下肢间断水肿，门诊复查肌酐持续升高，评估后进入维持性血液透析。',
-  '反复恶心、食欲下降伴活动后气促1月余，化验提示尿毒症相关指标异常，规律透析后症状较前缓解。',
-  '近期体重波动较大，透析间期容量负荷偏高，伴轻度胸闷，调整干体重与超滤策略后症状改善。',
-];
-const PAST_HISTORY_TEMPLATES = [
-  '既往有高血压病史多年，长期口服降压药；否认结核、肝炎等传染病史。',
-  '既往2型糖尿病病史，间断胰岛素治疗；无重大外伤手术史，无药物过敏史。',
-  '既往冠心病病史，规律心内科随访；否认输血不良反应及明显家族遗传病史。',
-];
-
-// COMORBIDITY_OPTIONS 定义了常见合并症的字符串数组，可用于表单复选框等展示。
-const COMORBIDITY_OPTIONS = ['高血压', '2型糖尿病', '冠心病', '高尿酸血症', '甲状旁腺功能亢进', '贫血'];
-
-// CITY_DISTRICTS 是常用的地理区域名称，用于随机生成地址或下拉框选项。
-const CITY_DISTRICTS = ['涉县井店镇', '涉县更乐镇', '涉县河南店镇', '涉县辽城乡', '涉县西达镇'];
-
-// AREA_CODES 存储了一些地区行政区划代码，可用于生成身份证号码。
-const AREA_CODES = ['130426', '130421', '130427', '130400', '130431'];
-
-// ISOLATION_ZONES 定义了隔离分区类型，比如普通区(normal)、乙肝区(hbv)、丙肝区(hcv)等。
-// 这里指定类型为 NonNullable<FormValues['isolation_zone']> 的数组。
-const ISOLATION_ZONES: Array<NonNullable<FormValues['isolation_zone']>> = ['normal', 'normal', 'normal', 'hbv', 'hcv'];
-
-const DIALYSIS_SCHEDULE_CODES = DIALYSIS_SCHEDULE_OPTIONS.map(o => o.value);
-
-const pickOne = <T,>(arr: readonly T[]) => arr[Math.floor(Math.random() * arr.length)];
-const randomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-const randomDateBetween = (start: Dayjs, end: Dayjs) => {
-  const startTs = start.valueOf();
-  const endTs = end.valueOf();
-  const ts = randomInt(startTs, endTs);
-  return dayjs(ts);
-};
-
-const buildVirtualName = () => {
-  const family = pickOne(FAMILY_NAMES);
-  const givenLength = Math.random() > 0.65 ? 2 : 1;
-  let given = '';
-  for (let i = 0; i < givenLength; i += 1) {
-    given += pickOne(GIVEN_NAME_PARTS);
-  }
-  return `${family}${given}`;
-};
-
-const buildVirtualPhone = () => `1${randomInt(30, 99)}${randomInt(1000, 9999)}${randomInt(1000, 9999)}`;
-
-const buildVirtualIdCard = (birthDate: Dayjs, gender: FormValues['gender']) => {
-  const areaCode = pickOne(AREA_CODES);
-  const birth = birthDate.format('YYYYMMDD');
-  const sequenceBase = randomInt(0, 499) * 2;
-  const sequence = (gender === 'M' ? sequenceBase + 1 : sequenceBase)
-    .toString()
-    .padStart(3, '0');
-  const base17 = `${areaCode}${birth}${sequence}`;
-  const weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
-  const checkMap = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'];
-  const sum = base17.split('').reduce((acc, cur, idx) => acc + Number(cur) * weights[idx], 0);
-  const checkCode = checkMap[sum % 11];
-  return `${base17}${checkCode}`;
-};
-
-const buildComorbidities = () => {
-  const count = randomInt(1, 3);
-  const pool = [...COMORBIDITY_OPTIONS];
-  const result: string[] = [];
-  for (let i = 0; i < count && pool.length > 0; i += 1) {
-    const idx = randomInt(0, pool.length - 1);
-    result.push(pool[idx]);
-    pool.splice(idx, 1);
-  }
-  return result;
 };
 
 export default function PatientCreatePage() {
@@ -211,48 +121,6 @@ export default function PatientCreatePage() {
     [nursingStaff],
   );
 
-  const fillVirtualPatient = () => {
-    const gender: FormValues['gender'] = Math.random() > 0.5 ? 'M' : 'F';
-    const dob = randomDateBetween(dayjs('1948-01-01'), dayjs('2005-12-31'));
-    const adultDate = dob.add(18, 'year');
-    const minDialysisDate = adultDate.isAfter(dayjs('2012-01-01')) ? adultDate : dayjs('2012-01-01');
-    const dialysisStartDate = randomDateBetween(
-      minDialysisDate,
-      dayjs().subtract(30, 'day'),
-    );
-    const consentDialysis = Math.random() > 0.15;
-    const consentDate = consentDialysis
-      ? randomDateBetween(dialysisStartDate, dayjs())
-      : null;
-
-    form.setFieldsValue({
-      name: buildVirtualName(),
-      gender,
-      dob,
-      dialysis_start_date: dialysisStartDate,
-      primary_diagnosis: pickOne(PRIMARY_DIAGNOSIS_OPTIONS),
-      present_illness: pickOne(PRESENT_ILLNESS_TEMPLATES),
-      past_history: pickOne(PAST_HISTORY_TEMPLATES),
-      ckd_stage: randomInt(4, 5),
-      comorbidities: buildComorbidities(),
-      isolation_zone: pickOne(ISOLATION_ZONES),
-      current_access_type: 'none',
-      id_card: buildVirtualIdCard(dob, gender),
-      phone: buildVirtualPhone(),
-      family_contact_name: buildVirtualName(),
-      family_contact_phone: buildVirtualPhone(),
-      address: `${pickOne(CITY_DISTRICTS)}${randomInt(1, 12)}号`,
-      consent_dialysis: consentDialysis,
-      consent_dialysis_date: consentDate,
-      dialysis_schedule_code: pickOne(DIALYSIS_SCHEDULE_CODES),
-      dialysis_schedule_adjust: Math.random() > 0.7,
-      dialysis_schedule_notes: Math.random() > 0.5 ? '与排班室约定为固定机位，节假日按科室通知调整。' : undefined,
-      responsible_nurse_id: nursingStaff.length ? pickOne(nursingStaff).id : undefined,
-      consent_dialysis_image: [],
-    });
-    message.success('已生成虚拟数据；责任护士已随机指定，知情同意书影像仍需您上传后保存。');
-  };
-
   const onFinish = async (values: FormValues) => {
     setLoading(true);
     try {
@@ -275,7 +143,9 @@ export default function PatientCreatePage() {
       };
 
       if (values.id_card?.trim()) payload.id_card = values.id_card.trim();
+      if (values.patient_identifier?.trim()) payload.patient_identifier = values.patient_identifier.trim();
       if (values.phone?.trim()) payload.phone = values.phone.trim();
+      if (values.status) payload.status = values.status;
       if (values.address?.trim()) payload.address = values.address.trim();
       if (values.ckd_stage != null && values.ckd_stage >= 1 && values.ckd_stage <= 5) {
         payload.ckd_stage = values.ckd_stage;
@@ -499,6 +369,13 @@ export default function PatientCreatePage() {
               <Input placeholder="患者姓名" maxLength={50} />
             </Form.Item>
             <Form.Item
+              name="patient_identifier"
+              label="患者ID（真实ID）"
+              rules={[{ required: true, message: '请填写患者真实ID' }]}
+            >
+              <Input placeholder="如：HD-2026-001" maxLength={64} />
+            </Form.Item>
+            <Form.Item
               name="gender"
               label="性别"
               rules={[{ required: true, message: '请选择性别' }]}
@@ -625,6 +502,18 @@ export default function PatientCreatePage() {
                 ]}
               />
             </Form.Item>
+            <Form.Item name="status" label="透析状态" initialValue="active">
+              <Select
+                options={[
+                  { value: 'active', label: '在透' },
+                  { value: 'suspended', label: '暂停' },
+                  { value: 'hospitalized', label: '住院' },
+                  { value: 'transferred', label: '转出' },
+                  { value: 'transplanted', label: '肾移植' },
+                  { value: 'deceased', label: '死亡' },
+                ]}
+              />
+            </Form.Item>
             <Form.Item name="id_card" label="身份证号（可选，加密存储）">
               <Input placeholder="选填" maxLength={18} />
             </Form.Item>
@@ -702,7 +591,6 @@ export default function PatientCreatePage() {
 
           <Form.Item style={{ marginBottom: 0 }}>
             <Space>
-              <Button onClick={fillVirtualPatient}>生成虚拟数据</Button>
               <Button type="primary" htmlType="submit" loading={loading}>
                 保存并进入档案
               </Button>

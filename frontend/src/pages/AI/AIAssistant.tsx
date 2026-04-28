@@ -61,20 +61,20 @@ function kbSaveMessage(kb: AiKbSaveResult | undefined) {
           overviewLine ? (
             <span style={{ fontSize: 12 }}>{overviewLine}</span>
           ) : (
-            '仅保存检索原文，不保存 AI 回答；无片段时无法入库。'
+            '入库前会先由 AI 整理总结检索资料；无片段时无法入库。'
           )
         }
       />
     );
   }
-  if (kb.error === 'persist_failed') {
+  if (kb.error === 'persist_failed' || kb.error === 'summary_failed' || kb.error === 'summary_empty') {
     return (
       <Alert
         type="warning"
         showIcon
         style={{ marginBottom: 12 }}
         message="保存到本地知识库失败"
-        description="请稍后重试或联系管理员。"
+        description="整理总结或写入失败，请稍后重试或联系管理员。"
       />
     );
   }
@@ -101,12 +101,12 @@ function kbSaveMessage(kb: AiKbSaveResult | undefined) {
         type="success"
         showIcon
         style={{ marginBottom: 12 }}
-        message="已保存检索片段到本地知识库"
+        message="已保存整理总结到本地知识库"
         description={
           overviewLine ? (
             <span style={{ fontSize: 12 }}>{overviewLine}</span>
           ) : (
-            '按正文去重；入库内容为资料原文，非上方 AI 回答。'
+            '按摘要正文去重；入库内容为检索资料的整理总结，非上方 AI 回答。'
           )
         }
       />
@@ -446,7 +446,7 @@ export default function AIAssistantPage() {
               >
                 <TextArea
                   rows={3}
-                  placeholder='例如："张三最近三个月Kt/V趋势" 或 "上月哪些患者超滤量超标"'
+                  placeholder="可询问医学相关问题。涉及本科室患者数据时建议：请分析患者ID/姓名在近3个月 Kt/V、血红蛋白、血钾和超滤量的趋势，指出异常依据、可能原因和复查建议。"
                 />
               </Form.Item>
             )}
@@ -495,7 +495,7 @@ export default function AIAssistantPage() {
               style={{ marginBottom: 8 }}
             >
               <Checkbox disabled={!canUseAiAssistant || !tabAllowed(effectiveTabKey)}>
-                将本次检索到的本地资料片段保存到知识库（非 AI 回答；无命中片段时不写入；正文相同则去重）
+                将本次检索到的本地资料先整理总结后保存到知识库（非 AI 回答；无命中片段时不写入；正文相同则去重）
               </Checkbox>
             </Form.Item>
 

@@ -198,6 +198,7 @@ export const scheduleApi = {
     machine_id: string;
     schedule_remark?: string | null;
     session_dialysis_mode?: string | null;
+    is_temp?: boolean;
   }) => request.post<ApiResponse<ScheduleSlotRow>>('/schedule/slots', payload),
 
   updateSlot: (

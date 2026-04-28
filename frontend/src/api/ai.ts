@@ -22,7 +22,7 @@ export interface AiKbSaveResult {
   duplicate?: boolean;
   document_id?: string;
   error?: string;
-  /** 本次未命中本地资料片段，未写入（入库仅保存检索原文，不保存 AI 回答） */
+  /** 本次未命中本地资料片段，未写入（入库保存检索资料的整理总结，不保存 AI 回答） */
   reason?: 'no_kb_chunks';
   overview?: AiKbSaveOverview;
 }
