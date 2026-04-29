@@ -34,6 +34,32 @@ const {
   parseUpdateProfileDryWeight,
 } = require('../validators/patientsValidators');
 
+const BACKEND_ROOT_CANDIDATES = [
+  path.join(__dirname, '../..'),
+  process.env.APP_ROOT ? path.join(process.env.APP_ROOT, 'backend') : null,
+  '/opt/hemodialysis/backend',
+  '/www/wwwroot/xuetoushiguanli/backend',
+].filter(Boolean);
+
+function isInsideUploads(normalizedPath, backendRoot) {
+  const uploadsRoot = path.normalize(path.join(backendRoot, 'uploads'));
+  return normalizedPath === uploadsRoot || normalizedPath.startsWith(`${uploadsRoot}${path.sep}`);
+}
+
+function resolveStoredUploadPath(relativePath) {
+  const rel = String(relativePath || '').trim();
+  if (!rel || path.isAbsolute(rel)) return null;
+
+  for (const root of [...new Set(BACKEND_ROOT_CANDIDATES.map((p) => path.normalize(p)))]) {
+    const normalized = path.normalize(path.join(root, rel));
+    if (isInsideUploads(normalized, root) && fs.existsSync(normalized)) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
 const consentUpload = createPatientConsentUploader();
 
 const patientImportUpload = multer({
@@ -220,10 +246,8 @@ router.get('/:id/consent-dialysis-image/:index', auth, async (req, res, next) =>
     const rel = image.path;
     if (!rel) return error(res, '暂无知情同意书影像', 404);
 
-    const abs = path.join(__dirname, '../..', rel);
-    const normalized = path.normalize(abs);
-    const root = path.normalize(path.join(__dirname, '../../uploads'));
-    if (!normalized.startsWith(root)) return error(res, '无效路径', 400);
+    const normalized = resolveStoredUploadPath(rel);
+    if (!normalized) return error(res, '影像文件不存在，请重新上传或检查上传目录', 404);
 
     res.setHeader('Cache-Control', 'private, no-store');
     res.sendFile(normalized, (err) => {
@@ -242,10 +266,8 @@ router.get('/:id/consent-dialysis-image', auth, async (req, res, next) => {
     const rel = image.path;
     if (!rel) return error(res, '暂无知情同意书影像', 404);
 
-    const abs = path.join(__dirname, '../..', rel);
-    const normalized = path.normalize(abs);
-    const root = path.normalize(path.join(__dirname, '../../uploads'));
-    if (!normalized.startsWith(root)) return error(res, '无效路径', 400);
+    const normalized = resolveStoredUploadPath(rel);
+    if (!normalized) return error(res, '影像文件不存在，请重新上传或检查上传目录', 404);
 
     res.setHeader('Cache-Control', 'private, no-store');
     res.sendFile(normalized, (err) => {

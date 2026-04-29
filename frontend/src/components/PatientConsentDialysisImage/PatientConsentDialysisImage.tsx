@@ -3,7 +3,7 @@
  * GET /api/patients/:id/consent-dialysis-image/:index（index 默认 0）
  */
 import { useEffect, useState } from 'react';
-import { Spin } from 'antd';
+import { Image, Spin } from 'antd';
 import { getApiBaseUrl } from '../../config/apiBaseUrl';
 
 type Props = {
@@ -48,13 +48,63 @@ export default function PatientConsentDialysisImage({ patientId, index = 0 }: Pr
     };
   }, [patientId, index]);
 
-  if (loading) return <Spin size="small" />;
-  if (failed || !src) return null;
+  if (loading) {
+    return (
+      <div
+        style={{
+          width: 112,
+          height: 84,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: 8,
+          border: '1px solid #E2E8F0',
+          background: '#F8FAFC',
+        }}
+      >
+        <Spin size="small" />
+      </div>
+    );
+  }
+  if (failed || !src) {
+    return (
+      <div
+        style={{
+          width: 112,
+          height: 84,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          textAlign: 'center',
+          padding: 8,
+          borderRadius: 8,
+          border: '1px dashed #CBD5E1',
+          background: '#F8FAFC',
+          color: '#94A3B8',
+          fontSize: 12,
+          lineHeight: 1.4,
+        }}
+      >
+        影像暂不可预览
+      </div>
+    );
+  }
   return (
-    <img
+    <Image
+      width={112}
+      height={84}
       src={src}
       alt={`透析知情同意书 ${index + 1}`}
-      style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, border: '1px solid #E2E8F0' }}
+      style={{
+        objectFit: 'cover',
+        borderRadius: 8,
+        border: '1px solid #E2E8F0',
+        background: '#F8FAFC',
+      }}
+      preview={{
+        src,
+        mask: '查看原图',
+      }}
     />
   );
 }
