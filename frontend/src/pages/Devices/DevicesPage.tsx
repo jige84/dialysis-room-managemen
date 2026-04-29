@@ -25,6 +25,7 @@ import { SearchOutlined, PlusOutlined, ToolOutlined, EyeOutlined } from '@ant-de
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import { useAuthStore } from '../../stores/authStore';
+import { normalizeMenuPermissions } from '../../utils/menuAccess';
 import {
   devicesApi,
   type MachineRow,
@@ -112,9 +113,15 @@ function buildDailyWaterMetricValue(
 }
 
 export default function DevicesPage() {
-  const { hasRole } = useAuthStore();
+  const hasRole = useAuthStore((s) => s.hasRole);
+  const menuPermissions = useAuthStore((s) => s.user?.menu_permissions);
+  const normalizedMenuPermissions = normalizeMenuPermissions(menuPermissions);
+  const hasDeviceMenuPermission = normalizedMenuPermissions?.includes('/devices') ?? false;
   const canWriteDevice = hasRole(['admin', 'head_nurse']);
+  const canRegisterMachine = canWriteDevice || hasDeviceMenuPermission;
   const canInbound = hasRole(['admin', 'head_nurse', 'nurse']);
+  /** 新建耗材目录：责任护士及以上可维护；仅开通「设备耗材」菜单的用户也可（与后端 requireConsumableCreatePermission 一致） */
+  const canCreateConsumableCatalog = canInbound || hasDeviceMenuPermission;
   const canDeleteDeviceAsset = hasRole(['admin', 'head_nurse', 'technician']);
 
   const [loading, setLoading] = useState(true);
@@ -760,7 +767,7 @@ export default function DevicesPage() {
                         { value: 'hcv', label: '丙肝区' },
                       ]}
                     />
-                    {canWriteDevice && (
+                    {canRegisterMachine && (
                       <div style={{ marginLeft: 'auto' }}>
                         <Button
                           type="primary"
@@ -823,7 +830,7 @@ export default function DevicesPage() {
                         label: '库存总览',
                         children: (
                           <Card style={{ border: '1px solid #DBEAFE' }} styles={{ body: { padding: 0 } }}>
-                            {canInbound && (
+                            {canCreateConsumableCatalog && (
                               <div style={{ padding: 12, display: 'flex', justifyContent: 'flex-end' }}>
                                 <Button
                                   type="primary"

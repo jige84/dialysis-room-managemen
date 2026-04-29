@@ -7,7 +7,8 @@ const router = express.Router();
 const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 const { rbac } = require('../middleware/rbac');
-const { success, created, error, notFound } = require('../utils/response');
+const { fetchMenuPermissionsByUserId, normalizeMenuPermissions } = require('../middleware/menuPermission');
+const { success, created, error, forbidden, notFound } = require('../utils/response');
 const DevicesMachineService = require('../services/DevicesMachineService');
 const {
   validateMachineCreatePayload,
@@ -41,6 +42,29 @@ const {
 const PG_UNDEFINED_COLUMN = '42703';
 const PG_FOREIGN_KEY_VIOLATION = '23503';
 
+async function requireMachineRegistrationPermission(req, res, next) {
+  if (['admin', 'head_nurse'].includes(req.user?.role)) return next();
+  try {
+    const menuPermissions = normalizeMenuPermissions(await fetchMenuPermissionsByUserId(req.user.id));
+    if (Array.isArray(menuPermissions) && menuPermissions.includes('/devices')) return next();
+    return forbidden(res, '您未被授权登记透析机，请联系管理员开通设备耗材管理权限');
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/** 新建耗材目录：与入库/库存调整一致，含责任护士；或为设备耗材菜单权限用户（与登记透析机策略对齐） */
+async function requireConsumableCreatePermission(req, res, next) {
+  if (['admin', 'head_nurse', 'nurse'].includes(req.user?.role)) return next();
+  try {
+    const menuPermissions = normalizeMenuPermissions(await fetchMenuPermissionsByUserId(req.user.id));
+    if (Array.isArray(menuPermissions) && menuPermissions.includes('/devices')) return next();
+    return forbidden(res, '您未被授权新建耗材目录，请联系管理员开通设备耗材管理权限');
+  } catch (err) {
+    return next(err);
+  }
+}
+
 // ── 透析机 ────────────────────────────────────────────────
 
 router.get('/machines', auth, async (req, res, next) => {
@@ -50,7 +74,7 @@ router.get('/machines', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/machines', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.post('/machines', auth, requireMachineRegistrationPermission, async (req, res, next) => {
   try {
     const valid = validateMachineCreatePayload(req.body);
     if (!valid.ok) return error(res, valid.message);
@@ -307,7 +331,7 @@ router.get('/consumables', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/consumables', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.post('/consumables', auth, requireConsumableCreatePermission, async (req, res, next) => {
   try {
     const valid = validateConsumableCreatePayload(req.body);
     if (!valid.ok) return error(res, valid.message);
