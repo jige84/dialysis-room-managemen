@@ -2,6 +2,23 @@ function hasOwn(body, key) {
   return Object.prototype.hasOwnProperty.call(body || {}, key);
 }
 
+const CUSTOM_SCHEDULE_NOTE_PREFIX = '[自定排班] ';
+
+function isValidCustomScheduleNotes(notes) {
+  if (!notes || typeof notes !== 'string' || !notes.startsWith(CUSTOM_SCHEDULE_NOTE_PREFIX)) return false;
+  try {
+    const raw = JSON.parse(notes.slice(CUSTOM_SCHEDULE_NOTE_PREFIX.length));
+    const isWeek = (week) => (
+      Array.isArray(week?.weekdays)
+      && week.weekdays.some((d) => Number.isInteger(Number(d)) && Number(d) >= 0 && Number(d) <= 6)
+      && ['morning', 'afternoon', 'evening'].includes(String(week?.shift))
+    );
+    return isWeek(raw.week1) && isWeek(raw.week2);
+  } catch (_) {
+    return false;
+  }
+}
+
 function validateCreatePatientRequiredFields(body) {
   const payload = body || {};
   const {
@@ -30,6 +47,9 @@ function normalizeCreateScheduleFields(body) {
 
   if (payload.dialysis_schedule_code === 'qod' && !anchorStr) {
     return { ok: false, message: '选择隔日透析时请填写隔日锚点日期' };
+  }
+  if (payload.dialysis_schedule_code === 'custom_cycle' && !isValidCustomScheduleNotes(scheduleNotes)) {
+    return { ok: false, message: '自定排班方案不完整，请选择两周内的透析日和时段' };
   }
 
   return {
@@ -78,6 +98,10 @@ function normalizeUpdateScheduleFields(body, existingPatient) {
 
   if (nextDialysisCode === 'qod' && !nextAnchor) {
     return { ok: false, message: '选择隔日透析时请填写隔日锚点日期' };
+  }
+  const nextNotes = hasDialysisNotesKey ? dialysisNotesVal : existing.dialysis_schedule_notes;
+  if (nextDialysisCode === 'custom_cycle' && !isValidCustomScheduleNotes(nextNotes)) {
+    return { ok: false, message: '自定排班方案不完整，请选择两周内的透析日和时段' };
   }
 
   return {

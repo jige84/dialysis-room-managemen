@@ -2,7 +2,7 @@
  * 预警中心页
  * 对接 alertsApi 真实 API，severity 使用 emergency/critical/warning/info。
  */
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Card, Button, Select, Input, Modal, Form, message, Spin } from 'antd';
 import { SearchOutlined, CheckOutlined, ReloadOutlined } from '@ant-design/icons';
 import PageShell from '../../components/PageShell/PageShell';
@@ -55,6 +55,8 @@ export default function AlertCenterPage() {
   const [handleModal, setHandleModal] = useState<AlertItem | null>(null);
   const [handleForm] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const urgentSectionRef = useRef<HTMLDivElement | null>(null);
+  const normalSectionRef = useRef<HTMLDivElement | null>(null);
 
   const [anomalyOpen, setAnomalyOpen] = useState(false);
   const [anomalyCtx, setAnomalyCtx] = useState<{
@@ -124,6 +126,19 @@ export default function AlertCenterPage() {
 
   const handleAck = (a: AlertItem) => setHandleModal(a);
 
+  const scrollToSection = (target: 'urgent' | 'normal') => {
+    window.setTimeout(() => {
+      const el = target === 'urgent' ? urgentSectionRef.current : normalSectionRef.current;
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
+
+  const handleSummaryCardClick = (severity: string, target: 'urgent' | 'normal') => {
+    setSeverityFilter(severity);
+    setStatusFilter('active');
+    scrollToSection(target);
+  };
+
   const confirmHandle = async () => {
     if (!handleModal) return;
     try {
@@ -148,25 +163,25 @@ export default function AlertCenterPage() {
     <PageShell fullWidth>
       {/* 概览 */}
       <div className="grid-4" style={{ marginBottom: 20 }}>
-        <div className="hd-stat-card red" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter('emergency'); setStatusFilter('active'); }}>
+        <div className="hd-stat-card red" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('emergency', 'urgent')}>
           <div className="hd-stat-icon">⚡</div>
           <div className="hd-stat-label">急危重症</div>
           <div className="hd-stat-value num" style={{ color: '#BE123C' }}>{summary.emergency}</div>
           <div className="hd-stat-meta">需立即处理</div>
         </div>
-        <div className="hd-stat-card amber" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter('critical'); setStatusFilter('active'); }}>
+        <div className="hd-stat-card amber" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('critical', 'urgent')}>
           <div className="hd-stat-icon">🔴</div>
           <div className="hd-stat-label">危急值</div>
           <div className="hd-stat-value num" style={{ color: '#C2410C' }}>{summary.critical}</div>
           <div className="hd-stat-meta">今日处理</div>
         </div>
-        <div className="hd-stat-card blue" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter('warning'); setStatusFilter('active'); }}>
+        <div className="hd-stat-card blue" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('warning', 'normal')}>
           <div className="hd-stat-icon">🟡</div>
           <div className="hd-stat-label">警告</div>
           <div className="hd-stat-value num" style={{ color: '#1D4ED8' }}>{summary.warning}</div>
           <div className="hd-stat-meta">近期处理</div>
         </div>
-        <div className="hd-stat-card teal" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => { setSeverityFilter(''); setStatusFilter('active'); }}>
+        <div className="hd-stat-card teal" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('', 'urgent')}>
           <div className="hd-stat-icon">✅</div>
           <div className="hd-stat-label">未处理总数</div>
           <div className="hd-stat-value num">{summary.total}</div>
@@ -205,7 +220,7 @@ export default function AlertCenterPage() {
       {/* 双栏分级展示 */}
       <Spin spinning={loading}>
         <div className="grid-2" style={{ gap: 20 }}>
-          <div>
+          <div ref={urgentSectionRef}>
             {[...emergencies, ...criticals].length === 0 ? (
               <Card style={{ border: '1px solid #DBEAFE', textAlign: 'center', padding: '40px 20px' }}>
                 <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
@@ -221,7 +236,7 @@ export default function AlertCenterPage() {
               </Card>
             )}
           </div>
-          <div>
+          <div ref={normalSectionRef}>
             {[...warnings, ...infos].length === 0 ? (
               <Card style={{ border: '1px solid #DBEAFE', textAlign: 'center', padding: '40px 20px' }}>
                 <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>

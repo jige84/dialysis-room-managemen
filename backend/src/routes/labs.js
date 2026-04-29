@@ -583,6 +583,15 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
         const patientName = patientNameRes.rows[0]?.name || '患者';
         const testLabel = normalizedTestType.toUpperCase();
         await pool.query(
+          `UPDATE alerts
+           SET status = 'auto_closed'
+           WHERE patient_id = $1
+             AND alert_type = 'lab_critical'
+             AND alert_rule_id = $2
+             AND status = 'active'`,
+          [req.params.patientId, rows[0].id],
+        );
+        await pool.query(
           `INSERT INTO alerts (patient_id, alert_rule_id, alert_type, severity, title, message, status)
            VALUES ($1, $2, 'lab_critical', 'critical', $3, $4, 'active')`,
           [
@@ -605,10 +614,22 @@ router.patch('/:id/critical-confirm', auth, rbac(['admin','head_nurse','doctor',
     const { rows } = await pool.query(
       `UPDATE lab_results
        SET critical_confirmed = true, critical_confirmed_by = $1, critical_confirmed_at = NOW()
-       WHERE id = $2 RETURNING id, test_type, value, unit`,
+       WHERE id = $2 RETURNING id, patient_id, test_type, value, unit`,
       [req.user.id, req.params.id]
     );
     if (rows.length === 0) return notFound(res, '检验记录不存在');
+    await pool.query(
+      `UPDATE alerts
+       SET status = 'handled',
+           handled_by = $1,
+           handled_at = NOW(),
+           handle_notes = COALESCE(handle_notes, '检验危急值已在检验结果管理中确认处理')
+       WHERE patient_id = $2
+         AND alert_rule_id = $3
+         AND alert_type = 'lab_critical'
+         AND status = 'active'`,
+      [req.user.id, rows[0].patient_id, rows[0].id],
+    );
     return success(res, rows[0], '危急值已确认处理');
   } catch (err) { next(err); }
 });

@@ -28,7 +28,13 @@ import { patientsApi, type CreatePatientPayload } from '../../api/patients';
 import { usersApi, type NursingStaffRow } from '../../api/users';
 import vascularApi from '../../api/vascular';
 import { useAuthStore } from '../../stores/authStore';
-import { DIALYSIS_SCHEDULE_OPTIONS } from '../../constants/dialysisSchedule';
+import {
+  DIALYSIS_SCHEDULE_OPTIONS,
+  DIALYSIS_SHIFT_OPTIONS,
+  WEEKDAY_OPTIONS,
+  serializeCustomCyclePlan,
+  type DialysisShift,
+} from '../../constants/dialysisSchedule';
 
 type FormValues = {
   name: string;
@@ -57,6 +63,10 @@ type FormValues = {
   dialysis_schedule_anchor_date?: Dayjs | null;
   /** 是否补充/手动调整透析时间规则说明 */
   dialysis_schedule_adjust?: boolean;
+  custom_week1_days?: number[];
+  custom_week1_shift?: DialysisShift;
+  custom_week2_days?: number[];
+  custom_week2_shift?: DialysisShift;
   /** 责任护士（本科室护士/护士长账号，表单校验必填） */
   responsible_nurse_id?: string;
   /** 知情同意书影像（必填，表单校验） */
@@ -162,7 +172,20 @@ export default function PatientCreatePage() {
 
       const code = values.dialysis_schedule_code?.trim();
       if (code) payload.dialysis_schedule_code = code;
-      const notes = values.dialysis_schedule_notes?.trim();
+      let notes = values.dialysis_schedule_notes?.trim();
+      if (code === 'custom_cycle') {
+        const week1Days = values.custom_week1_days ?? [];
+        const week2Days = values.custom_week2_days ?? [];
+        if (!week1Days.length || !values.custom_week1_shift || !week2Days.length || !values.custom_week2_shift) {
+          message.error('自定方案需完整选择第一周、第二周的透析日和时段');
+          setLoading(false);
+          return;
+        }
+        notes = serializeCustomCyclePlan({
+          week1: { weekdays: week1Days, shift: values.custom_week1_shift },
+          week2: { weekdays: week2Days, shift: values.custom_week2_shift },
+        });
+      }
       if (notes) payload.dialysis_schedule_notes = notes;
       if (code === 'qod' && values.dialysis_schedule_anchor_date) {
         payload.dialysis_schedule_anchor_date = values.dialysis_schedule_anchor_date.format('YYYY-MM-DD');
@@ -354,6 +377,8 @@ export default function PatientCreatePage() {
             isolation_zone: 'normal',
             consent_dialysis: false,
             dialysis_schedule_adjust: false,
+            custom_week1_shift: 'morning',
+            custom_week2_shift: 'morning',
             consent_dialysis_image: [],
           }}
         >
@@ -479,6 +504,43 @@ export default function PatientCreatePage() {
                   showCount
                 />
               </Form.Item>
+            ) : null}
+            {watchDialysisScheduleCode === 'custom_cycle' ? (
+              <div style={{ gridColumn: 'span 2' }}>
+                <div style={{ fontSize: 12, color: '#64748B', marginBottom: 8 }}>
+                  自定方案按自然周两周一轮生成排班：第一周、第二周分别选择周几和上午/下午/晚上。
+                </div>
+                <div className="grid-2" style={{ gap: '0 16px' }}>
+                  <Form.Item
+                    name="custom_week1_days"
+                    label="第一周透析日"
+                    rules={[{ required: true, message: '请选择第一周透析日' }]}
+                  >
+                    <Select mode="multiple" options={[...WEEKDAY_OPTIONS]} placeholder="选择周几" />
+                  </Form.Item>
+                  <Form.Item
+                    name="custom_week1_shift"
+                    label="第一周时段"
+                    rules={[{ required: true, message: '请选择第一周时段' }]}
+                  >
+                    <Select options={DIALYSIS_SHIFT_OPTIONS} />
+                  </Form.Item>
+                  <Form.Item
+                    name="custom_week2_days"
+                    label="第二周透析日"
+                    rules={[{ required: true, message: '请选择第二周透析日' }]}
+                  >
+                    <Select mode="multiple" options={[...WEEKDAY_OPTIONS]} placeholder="选择周几" />
+                  </Form.Item>
+                  <Form.Item
+                    name="custom_week2_shift"
+                    label="第二周时段"
+                    rules={[{ required: true, message: '请选择第二周时段' }]}
+                  >
+                    <Select options={DIALYSIS_SHIFT_OPTIONS} />
+                  </Form.Item>
+                </div>
+              </div>
             ) : null}
             {watchDialysisScheduleCode === 'qod' ? (
               <Form.Item

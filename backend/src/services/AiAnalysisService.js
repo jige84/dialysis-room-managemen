@@ -52,10 +52,10 @@ function isoTimestampZh(iso) {
   }
 }
 
-function buildFullDisclaimer(isoTime) {
+function buildFullDisclaimer(isoTime, model = 'qwen3-max') {
   const t = isoTimestampZh(isoTime);
   return (
-    '⚠️【AI 辅助分析声明】本内容由通义千问（qwen3-max）大模型辅助生成，' +
+    `⚠️【AI 辅助分析声明】本内容由 ${model || 'AI'} 大模型辅助生成，` +
     '仅供具有执业资质的医护人员参考，不构成医疗诊断建议，不能替代临床判断。' +
     '最终治疗方案须由主治医师结合患者实际情况决定。' +
     ` 生成时间：${t}`
@@ -63,7 +63,7 @@ function buildFullDisclaimer(isoTime) {
 }
 
 /**
- * 检索本地资料片段；命中不足时附加已启用的专业网站元数据（不爬取）
+ * 检索本地资料片段；命中不足时附加已启用的专业网站元数据，并尽量抓取公开摘要
  * @param {string} scenarioKey - buildSearchQueryForScenario 的键
  */
 async function retrieveKbAndMedicalSites(scenarioKey) {
@@ -75,11 +75,17 @@ async function retrieveKbAndMedicalSites(scenarioKey) {
     logger.warn('[AiAnalysisService] searchChunks failed', { message: e.message });
   }
   let sites = [];
+  let siteExcerpts = [];
   if (chunks.length < 2) {
     try {
       sites = await MedicalSiteService.listEnabledSitesForPrompt(8);
     } catch (e) {
       logger.warn('[AiAnalysisService] listEnabledSitesForPrompt failed', { message: e.message });
+    }
+    try {
+      siteExcerpts = await MedicalSiteService.fetchEnabledSiteExcerpts(q, 3);
+    } catch (e) {
+      logger.warn('[AiAnalysisService] fetchEnabledSiteExcerpts failed', { message: e.message });
     }
   }
   const kbSnippets = chunks.map((c, i) => ({
@@ -93,14 +99,17 @@ async function retrieveKbAndMedicalSites(scenarioKey) {
       kb_query: q,
       medical_site_keys: sites.map((s) => s.site_key),
       medical_site_names: sites.map((s) => s.display_name),
+      medical_site_excerpt_names: siteExcerpts.map((s) => s.display_name),
+      web_excerpt_count: siteExcerpts.length,
       used_web_fallback: false,
     },
     kbSnippets,
     medicalSites: sites,
+    medicalSiteExcerpts: siteExcerpts,
   };
 }
 
-function formatKbAndSitesForSystem(kbSnippets, medicalSites) {
+function formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts = []) {
   let s = '';
   if (kbSnippets.length) {
     s +=
@@ -117,6 +126,13 @@ function formatKbAndSitesForSystem(kbSnippets, medicalSites) {
           (m) =>
             `- ${m.display_name}：${m.guidelines_url || m.base_url || ''}`,
         )
+        .join('\n');
+  }
+  if (medicalSiteExcerpts.length) {
+    s +=
+      '\n\n【🌐 专业网站公开摘要】（可引用为 [🌐 专业网站: 名称]）：\n' +
+      medicalSiteExcerpts
+        .map((item) => `[🌐 专业网站: ${item.display_name}] ${item.excerpt}`)
         .join('\n');
   }
   return s;
@@ -342,26 +358,41 @@ function resolveAiConfig(taskType = 'general') {
     qc_reasoning: 'deepseek',
   };
   const provider = route[taskType] || 'default';
-  if (provider === 'kimi' && process.env.KIMI_API_KEY) {
-    return {
+  const providerConfigs = {
+    kimi: () => process.env.KIMI_API_KEY && ({
       apiKey: process.env.KIMI_API_KEY,
       baseUrl: process.env.KIMI_BASE_URL || 'https://api.moonshot.cn/v1/chat/completions',
       model: process.env.KIMI_MODEL || 'moonshot-v1-8k',
-    };
-  }
-  if (provider === 'zhipu' && process.env.ZHIPU_API_KEY) {
-    return {
+    }),
+    zhipu: () => process.env.ZHIPU_API_KEY && ({
       apiKey: process.env.ZHIPU_API_KEY,
       baseUrl: process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
       model: process.env.ZHIPU_MODEL || 'glm-4-flash',
-    };
-  }
-  if (provider === 'deepseek' && process.env.DEEPSEEK_API_KEY) {
-    return {
+    }),
+    deepseek: () => process.env.DEEPSEEK_API_KEY && ({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/chat/completions',
       model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
-    };
+    }),
+    doubao: () => process.env.DOUBAO_API_KEY && ({
+      apiKey: process.env.DOUBAO_API_KEY,
+      baseUrl: process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+      model: process.env.DOUBAO_MODEL || 'doubao-1-5-pro-32k',
+    }),
+    openai: () => process.env.OPENAI_API_KEY && ({
+      apiKey: process.env.OPENAI_API_KEY,
+      baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    }),
+  };
+  const selected = providerConfigs[provider]?.();
+  if (selected) return selected;
+  const fallbackProvider = String(process.env.AI_FALLBACK_PROVIDER || '').trim().toLowerCase();
+  const fallbackSelected = providerConfigs[fallbackProvider]?.();
+  if (fallbackSelected) return fallbackSelected;
+  for (const key of ['deepseek', 'zhipu', 'kimi', 'doubao', 'openai']) {
+    const cfg = providerConfigs[key]?.();
+    if (cfg) return cfg;
   }
   const apiKey = process.env.QWEN_API_KEY || process.env.AI_API_KEY || '';
   const baseUrl = process.env.QWEN_BASE_URL || process.env.AI_BASE_URL || DEFAULT_QWEN_BASE_URL;
@@ -438,7 +469,7 @@ async function callQwen({
   const { apiKey, baseUrl, model } = resolveAiConfig(taskType);
   if (!apiKey) {
     const err = new Error(
-      'AI 服务未配置：请设置 QWEN_API_KEY 或 AI_API_KEY（见 backend/.env.example）',
+      'AI 服务未配置：请设置 QWEN_API_KEY、AI_API_KEY 或任一模型提供商 API_KEY（见 backend/.env.example）',
     );
     err.statusCode = 503;
     throw err;
@@ -553,14 +584,15 @@ function packageQwenContent(data, model, { appendDisclaimer = true } = {}) {
   const raw =
     data?.choices?.[0]?.message?.content || 'AI 分析结果为空，请稍后重试。';
   const generatedAt = new Date().toISOString();
-  const disclaimer = buildFullDisclaimer(generatedAt);
+  const displayModel = model || 'qwen3-max';
+  const disclaimer = buildFullDisclaimer(generatedAt, displayModel);
   const content = appendDisclaimer
     ? `${raw.trim()}\n\n---\n${disclaimer}\n---`
     : raw.trim();
   return {
     content,
     ai_disclaimer: disclaimer,
-    model: model || 'qwen3-max',
+    model: displayModel,
     generated_at: generatedAt,
   };
 }
@@ -708,9 +740,9 @@ class AiAnalysisService {
     const saveToKb = Boolean(opts.saveToKb);
     const userId = opts.userId || null;
     const payload = await this.buildDialysisTrendPayload(patientId, months);
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('patient_trend');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const systemPrompt =
       '你是血液透析领域的临床质控助手，负责解读透析充分性与容量管理趋势。' + kbBlock;
     const userPrompt =
@@ -740,9 +772,9 @@ class AiAnalysisService {
     const saveToKb = Boolean(opts.saveToKb);
     const userId = opts.userId || null;
     const payload = await this.buildLabPanelPayload(patientId);
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('labs_analysis');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const systemPrompt =
       '你是一名熟悉血液透析患者检验指标的临床决策支持助手，了解 KDIGO 与国内相关指南的目标范围。' +
       kbBlock;
@@ -773,9 +805,9 @@ class AiAnalysisService {
     const saveToKb = Boolean(opts.saveToKb);
     const userId = opts.userId || null;
     const payload = await this.buildKtvRootCausePayload(dialysisRecordId);
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('ktv_root_cause');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const systemPrompt =
       '你是血液透析充分性评估助手，擅长根据透析参数分析 Kt/V 不达标的可能原因。' + kbBlock;
     const userPrompt =
@@ -805,9 +837,9 @@ class AiAnalysisService {
     const saveToKb = Boolean(opts.saveToKb);
     const userId = opts.userId || null;
     const payload = await this.buildCvcRiskPayload(assessmentId);
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('cvc_risk');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const systemPrompt =
       '你是血液透析导管感染预防助手，熟悉 CRBSI 相关指南与风险评估方法。' + kbBlock;
     const userPrompt =
@@ -843,16 +875,33 @@ class AiAnalysisService {
       resolvedContext = planned.context;
       queryExecution = planned.meta;
     }
-    const { retrieval, kbSnippets, medicalSites } =
+    const queryMode = queryExecution?.query_mode || resolvedContext?.query_execution?.query_mode || 'medical_qa';
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('nlp_query');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
+    const modePromptMap = {
+      structured_query:
+        '当前模式为结构化查询解读。你只能基于 query_execution 与 result_rows/result_summary 回答，不得补充未提供的数据。',
+      medical_qa:
+        '当前模式为通用医学问答。可结合知识库与公开医学资料做原理解释，但不得虚构患者具体检验值或病历事实。',
+      patient_context_qa:
+        '当前模式为患者相关问答兜底。若缺少可核验的患者结构化数据，需先说明数据边界，再给通用临床思路与补充信息建议。',
+      unsupported_sensitive:
+        '当前模式为安全拦截。请不要输出患者结论，先明确缺少可核验患者标识，并指导用户补充患者 ID 或完整姓名后再查询。',
+    };
     const systemPrompt =
       '你是血液透析室的数据解读助手，会结合系统统计结果，用自然语言向医护人员解释情况。' +
-      '若上下文包含 query_execution，请先严格依据其中的查询范围、命中结果和统计摘要作答，不得编造额外数据。' +
+      (modePromptMap[queryMode] || modePromptMap.medical_qa) +
       kbBlock;
+    const safeQueryForPrompt =
+      queryMode === 'structured_query'
+        ? queryExecution?.summary || '结构化查询解读'
+        : queryMode === 'unsupported_sensitive'
+          ? '患者相关查询（患者标识不足、未匹配或存在歧义）'
+          : query;
     const userPrompt =
       '以下是医护人员的自然语言查询，请结合提供的结构化统计结果，用简洁的简体中文回答，并避免编造未在数据中出现的信息。\n\n查询：' +
-      query;
+      safeQueryForPrompt;
     const result = await callQwen({
       systemPrompt,
       userPrompt,
@@ -868,7 +917,12 @@ class AiAnalysisService {
       kbSnippets,
       kbQuery: retrieval.kb_query,
     });
-    return { ...result, retrieval, query_execution: queryExecution, ...kb };
+    return {
+      ...result,
+      retrieval: { ...retrieval, query_mode: queryMode },
+      query_execution: queryExecution,
+      ...kb,
+    };
   }
 
   /**
@@ -883,9 +937,9 @@ class AiAnalysisService {
     const { rows: citations } = await pool.query(
       `SELECT code, title, source_name, excerpt_text FROM guideline_citations ORDER BY code`,
     );
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('medication_advice');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const systemPrompt =
       '你是血液透析患者药物管理辅助助手，只能根据下方「规则要点」与「指南摘录」给出需关注点，不得给出具体处方或剂量；禁止引用未提供的条文。' +
       kbBlock;
@@ -929,9 +983,9 @@ class AiAnalysisService {
       err.statusCode = 400;
       throw err;
     }
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('guideline_note');
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const systemPrompt =
       '你是血液净化领域指南解读助手，须按用户要求的固定结构输出读书笔记，不得编造指南条文。' +
       kbBlock;
@@ -1154,10 +1208,10 @@ class AiAnalysisService {
         '上述数值均为系统已写入 qc_reports 的字段。输出中不得改写、重算或编造新数值；引用时须与 JSON 完全一致。',
     };
 
-    const { retrieval, kbSnippets, medicalSites } =
+    const { retrieval, kbSnippets, medicalSites, medicalSiteExcerpts } =
       await retrieveKbAndMedicalSites('qc_monthly_insight');
 
-    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites);
+    const kbBlock = formatKbAndSitesForSystem(kbSnippets, medicalSites, medicalSiteExcerpts);
     const chunkIds = kbSnippets.map((c) => c.id);
 
     await KnowledgeBaseService.logUsage({

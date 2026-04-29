@@ -123,18 +123,22 @@ step "步骤 4/7: 执行数据库迁移..."
 
 cd $APP_DIR/backend
 
-# 检查是否有新的迁移文件
-if [ -d "migrations" ]; then
-    MIGRATION_COUNT=$(ls -1 migrations/*.sql 2>/dev/null | wc -l)
-    log "发现 $MIGRATION_COUNT 个迁移文件"
-    
-    # 执行迁移（如果有迁移脚本）
-    if [ -f "package.json" ] && grep -q "migrate" package.json; then
-        log "执行数据库迁移..."
-        npm run migrate || warn "数据库迁移失败，请手动检查"
-    else
-        log "未配置迁移命令，跳过"
+# 检查是否有新的迁移文件。默认 code 模式只更新功能代码，不触碰现有数据。
+if [ "$UPDATE_MODE" = "migrate" ] || [ "$UPDATE_MODE" = "full" ]; then
+    if [ -d "migrations" ]; then
+        MIGRATION_COUNT=$(ls -1 migrations/*.sql 2>/dev/null | wc -l)
+        log "发现 $MIGRATION_COUNT 个迁移文件"
+
+        # 执行迁移（如果有迁移脚本）
+        if [ -f "package.json" ] && grep -q "migrate" package.json; then
+            log "执行数据库迁移..."
+            npm run migrate || warn "数据库迁移失败，请手动检查"
+        else
+            log "未配置迁移命令，跳过"
+        fi
     fi
+else
+    log "跳过数据库迁移（当前模式: $UPDATE_MODE；如需迁移请使用 migrate 或 full 模式）"
 fi
 
 # ==================== 步骤 5: 更新配置 ====================

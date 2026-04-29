@@ -50,6 +50,21 @@ function extractPatientKeyword(query) {
   return { type: 'name', value: anchored[1].trim() };
 }
 
+function hasPatientMention(query) {
+  const q = String(query || '');
+  return /患者|病人|ID|id|姓名/.test(q);
+}
+
+function redactQueryIdentifier(query, patient) {
+  let text = String(query || '').trim();
+  if (!text) return '';
+  text = text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '[患者ID]');
+  if (patient?.name) {
+    text = text.split(String(patient.name)).join('[患者]');
+  }
+  return text;
+}
+
 async function resolvePatient(query) {
   const keyword = extractPatientKeyword(query);
   if (!keyword) {
@@ -84,6 +99,7 @@ async function resolvePatient(query) {
 async function buildPatientTrendQueryContext(question, metric) {
   const patient = await resolvePatient(question);
   const months = parseMonths(question);
+  const redactedQuestion = redactQueryIdentifier(question, patient);
   const sql = `
     SELECT session_date, ktv, urr, uf_volume, uf_pct_of_dry_weight,
            pre_weight, post_weight, actual_duration, blood_flow_rate
@@ -107,9 +123,10 @@ async function buildPatientTrendQueryContext(question, metric) {
     context: {
       query_execution: {
         planner: 'template_sql',
+        query_mode: 'structured_query',
         query_type: 'patient_metric_trend',
-        question,
-        patient,
+        question: redactedQuestion,
+        patient: { id: patient.id },
         metric: metric.label,
         period_months: months,
         sql_scope: ['patients', 'dialysis_records'],
@@ -125,10 +142,11 @@ async function buildPatientTrendQueryContext(question, metric) {
     },
     meta: {
       planner: 'template_sql',
+      query_mode: 'structured_query',
       query_type: 'patient_metric_trend',
       sql_scope: ['patients', 'dialysis_records'],
       result_count: rows.length,
-      summary: `患者 ${patient.name} 近 ${months} 个月 ${metric.label} 趋势`,
+      summary: `已匹配患者，近 ${months} 个月 ${metric.label} 趋势`,
     },
   };
 }
@@ -168,6 +186,7 @@ async function buildUfExceedContext(question) {
     context: {
       query_execution: {
         planner: 'template_sql',
+        query_mode: 'structured_query',
         query_type: 'uf_exceed_patient_list',
         question,
         threshold_pct: threshold,
@@ -179,6 +198,7 @@ async function buildUfExceedContext(question) {
     },
     meta: {
       planner: 'template_sql',
+      query_mode: 'structured_query',
       query_type: 'uf_exceed_patient_list',
       sql_scope: ['patients', 'dialysis_records', 'system_configs'],
       result_count: rows.length,
@@ -197,12 +217,54 @@ async function executeQuery(question) {
 
   const metric = detectTrendMetric(q);
   if (metric && /趋势|最近|近|变化/.test(q)) {
-    return buildPatientTrendQueryContext(q, metric);
+    try {
+      return await buildPatientTrendQueryContext(q, metric);
+    } catch (err) {
+      if (err && err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+        return {
+          context: {
+            query_execution: {
+              planner: 'template_sql',
+              query_mode: 'unsupported_sensitive',
+              query_type: 'patient_metric_trend',
+              question: q,
+              reason: err.message,
+              guidance: '请补充准确患者 ID，或在问题中使用完整姓名并限定时间范围。',
+            },
+          },
+          meta: {
+            planner: 'template_sql',
+            query_mode: 'unsupported_sensitive',
+            query_type: 'patient_metric_trend',
+            result_count: 0,
+            summary: err.message,
+          },
+        };
+      }
+      throw err;
+    }
   }
 
-  throw makeError(
-    '当前自然语言查询暂支持：1）带患者姓名/ID的 Kt/V、URR、超滤趋势；2）上月/近30天超滤量超标患者名单。其余问法请先补充结构化查询能力。',
-  );
+  return {
+    context: {
+      query_execution: {
+        planner: 'medical_qa',
+        query_mode: hasPatientMention(q) ? 'patient_context_qa' : 'medical_qa',
+        query_type: 'medical_question',
+        question: q,
+        note: hasPatientMention(q)
+          ? '问题疑似涉及患者上下文，当前未形成可安全执行的结构化查询，将按通用医学知识回答，不引用未核验患者数据。'
+          : '通用医学问答（无患者结构化数据查询）。',
+      },
+    },
+    meta: {
+      planner: 'medical_qa',
+      query_mode: hasPatientMention(q) ? 'patient_context_qa' : 'medical_qa',
+      query_type: 'medical_question',
+      result_count: 0,
+      summary: hasPatientMention(q) ? '已切换为患者相关通用问答模式' : '已切换为通用医学问答模式',
+    },
+  };
 }
 
 module.exports = {

@@ -30,6 +30,7 @@ export const LAB_TARGETS_META: Record<string, LabTargetMeta> = {
   tsat: { low: 20, high: 50, unit: '%' },
   ipth: { low: 150, high: 300, unit: 'pg/mL' },
   b2mg: { high: 25, unit: 'mg/L' },
+  plt: { low: 100, high: 300, unit: '10^9/L' },
   bun: { unit: 'mmol/L' },
   cr: { unit: 'μmol/L' },
   hbsag: { unit: '' },
@@ -46,6 +47,7 @@ const CATEGORY_BY_TYPE: Record<string, string> = {
   hco3: '电解质',
   hb: '贫血',
   hct: '贫血',
+  plt: '贫血',
   sf: '贫血',
   tsat: '贫血',
   bun: '生化',
@@ -61,6 +63,11 @@ const CATEGORY_BY_TYPE: Record<string, string> = {
 
 export function getCategoryForTestType(testType: string): string {
   return CATEGORY_BY_TYPE[testType] ?? '其他';
+}
+
+export function requiresSampleTiming(testType: string | undefined): boolean {
+  if (!testType) return false;
+  return getCategoryForTestType(testType) === '生化' || testType === 'b2mg';
 }
 
 interface PatternDef {

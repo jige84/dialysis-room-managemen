@@ -62,8 +62,12 @@ const MODE_OPTIONS = [
   { value: 'HD', label: 'HD（血液透析）' },
   { value: 'HDF', label: 'HDF（血液透析滤过）' },
   { value: 'HD_HP', label: 'HD+HP（血液透析+灌流）' },
-  { value: 'HD_HP_800', label: 'HD+HP +800 IU' },
   { value: 'other', label: '其他' },
+] as const;
+
+const HD_HP_HEPARIN_EXTRA_OPTIONS = [
+  { value: 500, label: '+500 IU' },
+  { value: 800, label: '+800 IU' },
 ] as const;
 
 /** HDF 置换方式（与 prescriptions.hdf_replacement_mode 一致） */
@@ -82,6 +86,40 @@ const HDF_REPLACEMENT_MODE_LABEL: Record<string, string> = {
 const YES_NO_ASSESS_OPTIONS = [
   { value: 'no', label: '无' },
   { value: 'yes', label: '有' },
+] as const;
+
+const CITRATE_ANTICOAGULATION_MODE_OPTIONS = [
+  { value: 'single_stage', label: '单段式（动脉端）' },
+  { value: 'two_stage', label: '两段式（动脉端 + 静脉壶前）' },
+] as const;
+
+const CITRATE_DIALYSATE_CALCIUM_OPTIONS = [
+  { value: 1.25, label: '1.25 mmol/L' },
+  { value: 1.5, label: '1.50 mmol/L（普通含钙透析液常用）' },
+  { value: 1.75, label: '1.75 mmol/L' },
+] as const;
+
+const CITRATE_CALCIUM_SUPPLEMENT_OPTIONS = [
+  { value: 'no', label: '否' },
+  { value: 'yes', label: '是' },
+  { value: 'individualized', label: '个体化' },
+] as const;
+
+const CITRATE_TARGET_ICA_OPTIONS = [
+  { value: '0.25-0.35', label: '0.25-0.35 mmol/L' },
+  { value: '0.20-0.40', label: '0.20-0.40 mmol/L' },
+  { value: 'custom', label: '自定义' },
+] as const;
+
+const CITRATE_MONITOR_POINT_OPTIONS = [
+  { value: 'pre', label: '透前' },
+  { value: '2h', label: '透析2h' },
+  { value: 'end', label: '透析结束' },
+] as const;
+
+const CITRATE_COAGULATION_SITE_OPTIONS = [
+  { value: 'dialyzer', label: '透析器' },
+  { value: 'venous_chamber', label: '静脉壶' },
 ] as const;
 
 const TIME_HM_FORMAT = 'HH:mm';
@@ -119,7 +157,6 @@ const UF_MODE_EXTRA_ML: Record<string, number> = {
   HD: 200,
   HDF: 200,
   HD_HP: 500,
-  HD_HP_800: 500,
 };
 
 /**
@@ -143,11 +180,15 @@ function computeUltrafiltrationMl(
   return Math.round(diffMl + extra);
 }
 
-function computeLmwhFamilyFirstDoseIU(coreIU: number, mode: string | undefined, anticoagulant: string | undefined): number {
+function computeLmwhFamilyFirstDoseIU(
+  coreIU: number,
+  mode: string | undefined,
+  anticoagulant: string | undefined,
+  hdHpHeparinExtraIU: number | undefined,
+): number {
   if (!LMWH_FAMILY.has(anticoagulant ?? '')) return coreIU;
   if (mode === 'HDF') return coreIU + 200;
-  if (mode === 'HD_HP_800') return coreIU + 800;
-  if (mode === 'HD_HP') return coreIU + 500;
+  if (mode === 'HD_HP') return coreIU + (hdHpHeparinExtraIU ?? 500);
   return coreIU;
 }
 
@@ -157,6 +198,7 @@ type BasicParamsStored = Partial<{
   duration: number;
   mode: string;
   modeOther: string;
+  hpHeparinExtraIU: number;
   dialyzer: string;
   bloodFlow: number;
   dialysateFlow: number;
@@ -183,6 +225,19 @@ type BasicParamsStored = Partial<{
   preAssessBleeding: string;
   preAssessBleedingDesc: string;
   citrateDetail: string;
+  citrateMode: string;
+  citrateConcentration: number;
+  citrateArterialPumpRate: number;
+  citrateVenousPumpRate: number;
+  citrateBloodFlowRate: number;
+  citrateDialysateFlowRate: number;
+  citrateDialysateCalcium: number;
+  citrateCalciumSupplement: string;
+  citratePostFilterICa: number;
+  citrateTargetPostFilterICa: string;
+  citrateTargetPostFilterICaCustom: string;
+  citrateMonitorPoints: string[];
+  citrateCoagulationSites: string[];
   /** HDF：pre / post / both */
   hdfReplacementMode: string;
   hdfReplacementVolumeL: number;
@@ -199,6 +254,7 @@ const BASIC_PARAM_KEYS = [
   'duration',
   'mode',
   'modeOther',
+  'hpHeparinExtraIU',
   'dialyzer',
   'bloodFlow',
   'dialysateFlow',
@@ -223,6 +279,19 @@ const BASIC_PARAM_KEYS = [
   'preAssessBleeding',
   'preAssessBleedingDesc',
   'citrateDetail',
+  'citrateMode',
+  'citrateConcentration',
+  'citrateArterialPumpRate',
+  'citrateVenousPumpRate',
+  'citrateBloodFlowRate',
+  'citrateDialysateFlowRate',
+  'citrateDialysateCalcium',
+  'citrateCalciumSupplement',
+  'citratePostFilterICa',
+  'citrateTargetPostFilterICa',
+  'citrateTargetPostFilterICaCustom',
+  'citrateMonitorPoints',
+  'citrateCoagulationSites',
   'hdfReplacementMode',
   'hdfReplacementVolumeL',
   'notes',
@@ -231,7 +300,11 @@ const BASIC_PARAM_KEYS = [
 ] as const satisfies readonly (keyof BasicParamsStored)[];
 
 function loadStoredBasicParams(patientId?: string): BasicParamsStored {
-  return loadPrescriptionBasicParamsFromStorage(patientId) as BasicParamsStored;
+  const stored = loadPrescriptionBasicParamsFromStorage(patientId) as BasicParamsStored;
+  if (stored.mode === 'HD_HP_800') {
+    return { ...stored, mode: 'HD_HP', hpHeparinExtraIU: 800 };
+  }
+  return stored;
 }
 
 function pickBasicParams(values: Record<string, unknown>): BasicParamsStored {
@@ -394,7 +467,7 @@ function hemoModalityFromApi(raw: string | null | undefined): { mode: string; mo
   const u = s.toUpperCase().replace(/\+/g, '_');
   if (u === 'HD') return { mode: 'HD', modeOther: '' };
   if (u === 'HDF') return { mode: 'HDF', modeOther: '' };
-  if (u === 'HD_HP' || u === 'HDHP') return { mode: 'HD_HP', modeOther: '' };
+  if (u === 'HD_HP' || u === 'HDHP' || u === 'HD_HP_800') return { mode: 'HD_HP', modeOther: '' };
   return { mode: 'other', modeOther: s };
 }
 
@@ -411,7 +484,6 @@ function mapFormModeToHemodialysisModality(mode: string | undefined, modeOther: 
     return t || 'HD';
   }
   if (mode === 'HDF' || mode === 'HD_HP' || mode === 'HD') return mode;
-  if (mode === 'HD_HP_800') return 'HD_HP';
   return 'HD';
 }
 
@@ -466,6 +538,12 @@ function mapCurrentPrescriptionToFormValues(rx: PrescriptionRecord): Record<stri
   const dialysateNa = rx.dialysate_na != null ? Number(rx.dialysate_na) : 138;
   return {
     ...m,
+    hpHeparinExtraIU:
+      m.mode === 'HD_HP' && (m.hpHeparinExtraIU === 800 || m.hpHeparinExtraIU === 500)
+        ? m.hpHeparinExtraIU
+        : formExtra.mode === 'HD_HP_800'
+          ? 800
+        : 500,
     sodiumCurve: typeof m.sodiumCurve === 'string' && m.sodiumCurve ? m.sodiumCurve : 'fixed',
     sodiumCurveCustom: typeof m.sodiumCurveCustom === 'string' ? m.sodiumCurveCustom : '',
     naCurveStart:
@@ -481,13 +559,13 @@ function applyHeparinCoreFromLoadedRx(
   hemoMode: string,
   anticoagulant: string | undefined,
   heparinFirst: number | undefined,
+  hdHpHeparinExtraIU?: number,
 ): number {
   const first = heparinFirst ?? 0;
   if (!LMWH_FAMILY.has(anticoagulant ?? '')) return first;
   let core = first;
   if (hemoMode === 'HDF') core -= 200;
-  if (hemoMode === 'HD_HP_800') core -= 800;
-  if (hemoMode === 'HD_HP') core -= 500;
+  if (hemoMode === 'HD_HP') core -= hdHpHeparinExtraIU ?? 500;
   return Math.max(0, core);
 }
 
@@ -498,6 +576,49 @@ function escapeHtml(value: unknown): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function optionLabel<T extends { value: string | number; label: string }>(
+  options: readonly T[],
+  value: unknown,
+): string {
+  const found = options.find((o) => o.value === value);
+  return found?.label ?? (value == null || value === '' ? '—' : String(value));
+}
+
+function optionLabels<T extends { value: string | number; label: string }>(
+  options: readonly T[],
+  value: unknown,
+): string {
+  if (!Array.isArray(value) || value.length === 0) return '—';
+  return value.map((item) => optionLabel(options, item)).join('、');
+}
+
+function buildCitrateDetailSummary(values: Record<string, unknown>): string {
+  if (values.anticoagulant !== 'citrate') return '';
+  const target =
+    values.citrateTargetPostFilterICa === 'custom'
+      ? String(values.citrateTargetPostFilterICaCustom ?? '').trim() || '自定义'
+      : optionLabel(CITRATE_TARGET_ICA_OPTIONS, values.citrateTargetPostFilterICa);
+  const lines = [
+    `抗凝方式：${optionLabel(CITRATE_ANTICOAGULATION_MODE_OPTIONS, values.citrateMode)}`,
+    `枸橼酸浓度：${values.citrateConcentration ?? '—'}%`,
+    `动脉端泵速：${values.citrateArterialPumpRate ?? '—'} mL/h`,
+  ];
+  if (values.citrateMode === 'two_stage') {
+    lines.push(`静脉壶前泵速：${values.citrateVenousPumpRate ?? '—'} mL/h`);
+  }
+  lines.push(
+    `血流速：${values.citrateBloodFlowRate ?? '—'} mL/min`,
+    `透析液流速：${values.citrateDialysateFlowRate ?? '—'} mL/min`,
+    `透析液钙浓度：${optionLabel(CITRATE_DIALYSATE_CALCIUM_OPTIONS, values.citrateDialysateCalcium)}`,
+    `是否额外补钙：${optionLabel(CITRATE_CALCIUM_SUPPLEMENT_OPTIONS, values.citrateCalciumSupplement)}`,
+    `滤器后游离钙监测：${values.citratePostFilterICa ?? '—'} mmol/L`,
+    `目标滤器后 iCa：${target}`,
+    `监测时间点：${optionLabels(CITRATE_MONITOR_POINT_OPTIONS, values.citrateMonitorPoints)}`,
+    `凝血观察部位：${optionLabels(CITRATE_COAGULATION_SITE_OPTIONS, values.citrateCoagulationSites)}`,
+  );
+  return lines.join('；');
 }
 
 /** 医生签名为空时填入当前登录用户（优先 real_name，否则 username；可修改） */
@@ -556,6 +677,7 @@ export default function PrescriptionWorkspacePage() {
 
   const frequencyPreset = Form.useWatch('frequencyPreset', form);
   const modeWatched = Form.useWatch('mode', form);
+  const hpHeparinExtraIUWatched = Form.useWatch('hpHeparinExtraIU', form);
   const dryWeightWatched = Form.useWatch('dryWeight', form);
   const preMachineWeightWatched = Form.useWatch('preMachineWeight', form);
   const anticoagulantWatched = Form.useWatch('anticoagulant', form);
@@ -633,6 +755,19 @@ export default function PrescriptionWorkspacePage() {
   const preAssessEdemaSiteWatched = Form.useWatch('preAssessEdemaSite', form);
   const preAssessBleedingDescWatched = Form.useWatch('preAssessBleedingDesc', form);
   const citrateDetailWatched = Form.useWatch('citrateDetail', form);
+  const citrateModeWatched = Form.useWatch('citrateMode', form);
+  const citrateTargetPostFilterICaWatched = Form.useWatch('citrateTargetPostFilterICa', form);
+  const citrateConcentrationWatched = Form.useWatch('citrateConcentration', form);
+  const citrateArterialPumpRateWatched = Form.useWatch('citrateArterialPumpRate', form);
+  const citrateVenousPumpRateWatched = Form.useWatch('citrateVenousPumpRate', form);
+  const citrateBloodFlowRateWatched = Form.useWatch('citrateBloodFlowRate', form);
+  const citrateDialysateFlowRateWatched = Form.useWatch('citrateDialysateFlowRate', form);
+  const citrateDialysateCalciumWatched = Form.useWatch('citrateDialysateCalcium', form);
+  const citrateCalciumSupplementWatched = Form.useWatch('citrateCalciumSupplement', form);
+  const citratePostFilterICaWatched = Form.useWatch('citratePostFilterICa', form);
+  const citrateTargetPostFilterICaCustomWatched = Form.useWatch('citrateTargetPostFilterICaCustom', form);
+  const citrateMonitorPointsWatched = Form.useWatch('citrateMonitorPoints', form);
+  const citrateCoagulationSitesWatched = Form.useWatch('citrateCoagulationSites', form);
 
   const patientInfo = PATIENTS.find((p) => p.value === selectedPatient);
 
@@ -750,6 +885,42 @@ export default function PrescriptionWorkspacePage() {
 
   const anticoagulantLabel =
     ANTICOAGULANT_OPTIONS.find((o) => o.value === anticoagulantWatched)?.label ?? '—';
+  const citrateDetailDisplay = useMemo(() => {
+    if (anticoagulantWatched !== 'citrate') return '—';
+    const summary = buildCitrateDetailSummary({
+      anticoagulant: anticoagulantWatched,
+      citrateMode: citrateModeWatched,
+      citrateConcentration: citrateConcentrationWatched,
+      citrateArterialPumpRate: citrateArterialPumpRateWatched,
+      citrateVenousPumpRate: citrateVenousPumpRateWatched,
+      citrateBloodFlowRate: citrateBloodFlowRateWatched,
+      citrateDialysateFlowRate: citrateDialysateFlowRateWatched,
+      citrateDialysateCalcium: citrateDialysateCalciumWatched,
+      citrateCalciumSupplement: citrateCalciumSupplementWatched,
+      citratePostFilterICa: citratePostFilterICaWatched,
+      citrateTargetPostFilterICa: citrateTargetPostFilterICaWatched,
+      citrateTargetPostFilterICaCustom: citrateTargetPostFilterICaCustomWatched,
+      citrateMonitorPoints: citrateMonitorPointsWatched,
+      citrateCoagulationSites: citrateCoagulationSitesWatched,
+    });
+    return summary || String(citrateDetailWatched || '—');
+  }, [
+    anticoagulantWatched,
+    citrateDetailWatched,
+    citrateModeWatched,
+    citrateTargetPostFilterICaWatched,
+    citrateConcentrationWatched,
+    citrateArterialPumpRateWatched,
+    citrateVenousPumpRateWatched,
+    citrateBloodFlowRateWatched,
+    citrateDialysateFlowRateWatched,
+    citrateDialysateCalciumWatched,
+    citrateCalciumSupplementWatched,
+    citratePostFilterICaWatched,
+    citrateTargetPostFilterICaCustomWatched,
+    citrateMonitorPointsWatched,
+    citrateCoagulationSitesWatched,
+  ]);
   const dialyzerShort = String(dialyzerWatched ?? '').replace(/^透析器\s*/, '') || '—';
 
   const applyPatientFormValues = useCallback(
@@ -836,6 +1007,7 @@ export default function PrescriptionWorkspacePage() {
             coreMode,
             mapped.anticoagulant as string | undefined,
             mapped.heparinFirst as number | undefined,
+            mapped.hpHeparinExtraIU as number | undefined,
           );
           form.setFieldsValue(mapped);
         } else {
@@ -880,6 +1052,7 @@ export default function PrescriptionWorkspacePage() {
             coreMode,
             fromProfile.anticoagulant,
             fromProfile.heparinFirst,
+            500,
           );
           form.setFieldsValue({
             frequencyPreset: 'weekly_3',
@@ -1055,7 +1228,14 @@ export default function PrescriptionWorkspacePage() {
 
   useEffect(() => {
     heparinUserEditedRef.current = false;
-  }, [modeWatched, anticoagulantWatched]);
+  }, [modeWatched, anticoagulantWatched, hpHeparinExtraIUWatched]);
+
+  useEffect(() => {
+    if (skipPersistRef.current) return;
+    if (modeWatched === 'HD_HP' && hpHeparinExtraIUWatched == null) {
+      form.setFieldValue('hpHeparinExtraIU', 500);
+    }
+  }, [modeWatched, hpHeparinExtraIUWatched, form]);
 
   useEffect(() => {
     if (skipPersistRef.current) return;
@@ -1064,14 +1244,49 @@ export default function PrescriptionWorkspacePage() {
   }, [modeWatched, form]);
 
   useEffect(() => {
+    if (anticoagulantWatched !== 'citrate') return;
+    const current = form.getFieldsValue([
+      'citrateMode',
+      'citrateConcentration',
+      'citrateBloodFlowRate',
+      'citrateDialysateFlowRate',
+      'citrateDialysateCalcium',
+      'citrateCalciumSupplement',
+      'citrateTargetPostFilterICa',
+      'citrateMonitorPoints',
+      'citrateCoagulationSites',
+    ]);
+    const defaults: Record<string, unknown> = {};
+    if (!current.citrateMode) defaults.citrateMode = 'two_stage';
+    if (current.citrateConcentration == null) defaults.citrateConcentration = 4;
+    if (current.citrateBloodFlowRate == null && bloodFlowWatched != null) defaults.citrateBloodFlowRate = bloodFlowWatched;
+    if (current.citrateDialysateFlowRate == null && dialysateFlowWatched != null) defaults.citrateDialysateFlowRate = dialysateFlowWatched;
+    if (current.citrateDialysateCalcium == null) defaults.citrateDialysateCalcium = 1.5;
+    if (!current.citrateCalciumSupplement) defaults.citrateCalciumSupplement = 'no';
+    if (!current.citrateTargetPostFilterICa) defaults.citrateTargetPostFilterICa = '0.25-0.35';
+    if (!Array.isArray(current.citrateMonitorPoints) || current.citrateMonitorPoints.length === 0) {
+      defaults.citrateMonitorPoints = ['pre', '2h', 'end'];
+    }
+    if (!Array.isArray(current.citrateCoagulationSites) || current.citrateCoagulationSites.length === 0) {
+      defaults.citrateCoagulationSites = ['dialyzer', 'venous_chamber'];
+    }
+    if (Object.keys(defaults).length > 0) form.setFieldsValue(defaults);
+  }, [anticoagulantWatched, bloodFlowWatched, dialysateFlowWatched, form]);
+
+  useEffect(() => {
     if (heparinUserEditedRef.current) return;
-    const v = computeLmwhFamilyFirstDoseIU(heparinCoreIURef.current, modeWatched, anticoagulantWatched);
+    const v = computeLmwhFamilyFirstDoseIU(
+      heparinCoreIURef.current,
+      modeWatched,
+      anticoagulantWatched,
+      hpHeparinExtraIUWatched,
+    );
     heparinProgrammaticRef.current = true;
     form.setFieldValue('heparinFirst', v);
     window.setTimeout(() => {
       heparinProgrammaticRef.current = false;
     }, 0);
-  }, [modeWatched, anticoagulantWatched, form]);
+  }, [modeWatched, anticoagulantWatched, hpHeparinExtraIUWatched, form]);
 
   const persistBasicParamsFromForm = useCallback(() => {
     if (skipPersistRef.current) return;
@@ -1136,7 +1351,12 @@ export default function PrescriptionWorkspacePage() {
           typeof v.dryWeightChangeReason === 'string' && v.dryWeightChangeReason.trim()
             ? v.dryWeightChangeReason.trim()
             : undefined;
-        const formExtraPayload = pickBasicParams(v as Record<string, unknown>);
+        const rawFormValues = v as Record<string, unknown>;
+        const citrateDetail = buildCitrateDetailSummary(rawFormValues);
+        const formExtraPayload = pickBasicParams({
+          ...rawFormValues,
+          citrateDetail,
+        });
         const saveResp = await prescriptionsApi.create(selectedPatient, {
           frequency_per_week: frequencyPresetToPerWeek(v.frequencyPreset as string | undefined),
           duration_hours: Number(v.duration) || 4,
@@ -1203,6 +1423,7 @@ export default function PrescriptionWorkspacePage() {
               coreModeLoaded,
               mapped.anticoagulant as string | undefined,
               mapped.heparinFirst as number | undefined,
+              mapped.hpHeparinExtraIU as number | undefined,
             );
             form.setFieldsValue(mapped);
             const todayStr = dayjs().format('YYYY-MM-DD');
@@ -1292,7 +1513,10 @@ export default function PrescriptionWorkspacePage() {
     const mode = dialysisModeLabel(values.mode as string, values.modeOther as string | undefined);
     const uf = values.ultrafiltrationMl != null ? `${values.ultrafiltrationMl} mL` : '—';
     const anticoagulant = ANTICOAGULANT_OPTIONS.find((o) => o.value === values.anticoagulant)?.label || '—';
-    const anticoagulantDose = `首剂 ${values.heparinFirst ?? '—'} IU；追加 ${values.heparinMaint ?? '—'} IU/h`;
+    const anticoagulantDose =
+      values.anticoagulant === 'citrate'
+        ? buildCitrateDetailSummary(values)
+        : `首剂 ${values.heparinFirst ?? '—'} IU；追加 ${values.heparinMaint ?? '—'} IU/h`;
     const sodiumCurve = formatSodiumCurveSummary({
       sodiumCurve: values.sodiumCurve,
       sodiumCurveCustom: values.sodiumCurveCustom,
@@ -1625,6 +1849,9 @@ export default function PrescriptionWorkspacePage() {
                     <RxGrid cols={3} gap={10}>
                       <RxReadonlyValue label="透析频次" value={frequencyLabel} />
                       <RxReadonlyValue label="透析模式" value={modeDisplay} />
+                      {modeWatched === 'HD_HP' && (
+                        <RxReadonlyValue label="HD+HP 附加剂量" value={`+${hpHeparinExtraIUWatched ?? 500} IU`} />
+                      )}
                       {modeWatched === 'HDF' && (
                         <>
                           <RxReadonlyValue
@@ -1659,7 +1886,7 @@ export default function PrescriptionWorkspacePage() {
                       <RxReadonlyValue label="钠曲线" value={sodiumCurveLine} />
                       <RxReadonlyValue label="抗凝方案" value={anticoagulantLabel} />
                       {anticoagulantWatched === 'citrate' ? (
-                        <RxReadonlyValue label="枸橼酸细则" value={String(citrateDetailWatched || '—')} />
+                        <RxReadonlyValue label="枸橼酸细则" value={citrateDetailDisplay} />
                       ) : null}
                       <RxReadonlyValue
                         label="首剂"
@@ -1791,6 +2018,16 @@ export default function PrescriptionWorkspacePage() {
               <Form.Item label="透析模式" name="mode" rules={[{ required: true, message: '请选择透析模式' }]}>
                 <Select options={[...MODE_OPTIONS]} />
               </Form.Item>
+              {modeWatched === 'HD_HP' && (
+                <Form.Item
+                  label="HD+HP 附加剂量"
+                  name="hpHeparinExtraIU"
+                  rules={[{ required: true, message: '请选择 HD+HP 附加剂量' }]}
+                  extra="用于低分子肝素类首剂自动计算"
+                >
+                  <Select options={[...HD_HP_HEPARIN_EXTRA_OPTIONS]} />
+                </Form.Item>
+              )}
               {modeWatched === 'other' && (
                 <Form.Item label="透析模式说明" name="modeOther" rules={[{ required: true, message: '请填写透析模式' }]}>
                   <Input placeholder="请描述具体透析模式" />
@@ -1840,14 +2077,116 @@ export default function PrescriptionWorkspacePage() {
               </Form.Item>
             </div>
             {anticoagulantWatched === 'citrate' && (
-              <Form.Item
-                label="枸橼酸抗凝细则"
-                name="citrateDetail"
-                style={{ marginBottom: 16 }}
-                rules={[{ required: true, message: '选择枸橼酸抗凝时请填写细则' }]}
+              <Card
+                size="small"
+                title="枸橼酸抗凝细则（普通透析含钙透析液）"
+                style={{ marginBottom: 16, borderColor: '#BFDBFE' }}
               >
-                <Input.TextArea rows={3} placeholder="如：A液/B液比例、补钙策略、监测频次与异常处理要点" maxLength={1200} showCount />
-              </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="默认按简化 RCA-HD：4% 枸橼酸钠、含钙透析液、通常不额外补钙；根据滤器后游离钙和凝血情况调整。"
+                />
+                <div className="grid-4" style={{ gap: 16 }}>
+                  <Form.Item
+                    label="抗凝方式"
+                    name="citrateMode"
+                    rules={[{ required: true, message: '请选择枸橼酸抗凝方式' }]}
+                  >
+                    <Select options={[...CITRATE_ANTICOAGULATION_MODE_OPTIONS]} />
+                  </Form.Item>
+                  <Form.Item
+                    label="枸橼酸浓度"
+                    name="citrateConcentration"
+                    rules={[{ required: true, message: '请填写枸橼酸浓度' }]}
+                  >
+                    <InputNumber min={0.1} max={50} step={0.1} precision={1} style={{ width: '100%' }} addonAfter="%" />
+                  </Form.Item>
+                  <Form.Item
+                    label="动脉端泵速"
+                    name="citrateArterialPumpRate"
+                    extra="4% 枸橼酸钠常按血流速 1.2-2.0 倍 mL/h 个体化调整"
+                    rules={[{ required: true, message: '请填写动脉端泵速' }]}
+                  >
+                    <InputNumber min={0} max={1000} step={10} style={{ width: '100%' }} addonAfter="mL/h" />
+                  </Form.Item>
+                  {citrateModeWatched === 'two_stage' && (
+                    <Form.Item
+                      label="静脉壶前泵速"
+                      name="citrateVenousPumpRate"
+                      extra="仅两段式显示"
+                      rules={[{ required: true, message: '请填写静脉壶前泵速' }]}
+                    >
+                      <InputNumber min={0} max={500} step={5} style={{ width: '100%' }} addonAfter="mL/h" />
+                    </Form.Item>
+                  )}
+                  <Form.Item
+                    label="血流速"
+                    name="citrateBloodFlowRate"
+                    rules={[{ required: true, message: '请填写血流速' }]}
+                  >
+                    <InputNumber min={100} max={450} step={10} style={{ width: '100%' }} addonAfter="mL/min" />
+                  </Form.Item>
+                  <Form.Item
+                    label="透析液流速"
+                    name="citrateDialysateFlowRate"
+                    rules={[{ required: true, message: '请填写透析液流速' }]}
+                  >
+                    <InputNumber min={300} max={800} step={50} style={{ width: '100%' }} addonAfter="mL/min" />
+                  </Form.Item>
+                  <Form.Item
+                    label="透析液钙浓度"
+                    name="citrateDialysateCalcium"
+                    rules={[{ required: true, message: '请选择透析液钙浓度' }]}
+                  >
+                    <Select options={[...CITRATE_DIALYSATE_CALCIUM_OPTIONS]} />
+                  </Form.Item>
+                  <Form.Item
+                    label="是否额外补钙"
+                    name="citrateCalciumSupplement"
+                    rules={[{ required: true, message: '请选择是否补钙' }]}
+                  >
+                    <Select options={[...CITRATE_CALCIUM_SUPPLEMENT_OPTIONS]} />
+                  </Form.Item>
+                  <Form.Item label="滤器后游离钙监测" name="citratePostFilterICa">
+                    <InputNumber min={0} max={3} step={0.01} precision={2} style={{ width: '100%' }} addonAfter="mmol/L" />
+                  </Form.Item>
+                  <Form.Item
+                    label="目标滤器后 iCa"
+                    name="citrateTargetPostFilterICa"
+                    rules={[{ required: true, message: '请选择目标滤器后 iCa' }]}
+                  >
+                    <Select options={[...CITRATE_TARGET_ICA_OPTIONS]} />
+                  </Form.Item>
+                  {citrateTargetPostFilterICaWatched === 'custom' && (
+                    <Form.Item
+                      label="自定义目标 iCa"
+                      name="citrateTargetPostFilterICaCustom"
+                      rules={[{ required: true, message: '请填写自定义目标 iCa' }]}
+                    >
+                      <Input placeholder="如：0.30-0.45 mmol/L" />
+                    </Form.Item>
+                  )}
+                  <Form.Item
+                    label="监测时间点"
+                    name="citrateMonitorPoints"
+                    rules={[{ required: true, message: '请选择监测时间点' }]}
+                  >
+                    <Select mode="multiple" options={[...CITRATE_MONITOR_POINT_OPTIONS]} />
+                  </Form.Item>
+                  <Form.Item
+                    label="凝血观察部位"
+                    name="citrateCoagulationSites"
+                    rules={[{ required: true, message: '请选择凝血观察部位' }]}
+                  >
+                    <Select mode="multiple" options={[...CITRATE_COAGULATION_SITE_OPTIONS]} />
+                  </Form.Item>
+                </div>
+                <Form.Item name="citrateDetail" hidden>
+                  <Input />
+                </Form.Item>
+              </Card>
             )}
             <div className="grid-4" style={{ gap: 16, marginBottom: 16 }}>
               <Form.Item
@@ -1855,7 +2194,7 @@ export default function PrescriptionWorkspacePage() {
                 name="heparinFirst"
                 extra={
                   LMWH_FAMILY.has(anticoagulantWatched ?? '')
-                    ? '低分子肝素类：HDF 在基础首剂上 +200 IU，HD+HP +500 IU；HD+HP +800 方案为 +800 IU（可改）'
+                    ? '低分子肝素类：HDF 在基础首剂上 +200 IU；HD+HP 按上方 +500 / +800 IU 选项自动叠加（可改）'
                     : undefined
                 }
               >

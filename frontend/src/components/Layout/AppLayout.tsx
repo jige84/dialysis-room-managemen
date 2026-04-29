@@ -4,7 +4,7 @@
  * 主要功能：折叠侧栏；用户信息与退出；按路由显示页面标题；消息/预警入口（依实现）。
  */
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Badge, Dropdown, Tooltip, message } from 'antd';
+import { Badge, Dropdown, Form, Input, Modal, Tooltip, message } from 'antd';
 import { LogoutOutlined, SettingOutlined, BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
@@ -25,6 +25,13 @@ export default function AppLayout() {
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [mobileNavOpenPath, setMobileNavOpenPath] = useState<string | null>(null);
   const [pendingAlerts, setPendingAlerts] = useState(0);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [changePasswordSaving, setChangePasswordSaving] = useState(false);
+  const [changePasswordForm] = Form.useForm<{
+    old_password: string;
+    new_password: string;
+    confirm_password: string;
+  }>();
   const navigate = useNavigate();
   const location = useLocation();
   const mobileNavOpen = isMobileViewport && mobileNavOpenPath === location.pathname;
@@ -116,6 +123,21 @@ export default function AppLayout() {
     message.success('已安全退出');
   };
 
+  const handleChangePassword = async () => {
+    try {
+      const values = await changePasswordForm.validateFields();
+      setChangePasswordSaving(true);
+      await authApi.changePassword(values.old_password, values.new_password);
+      message.success('密码已修改，请使用新密码登录');
+      setChangePasswordOpen(false);
+      changePasswordForm.resetFields();
+    } catch {
+      /* axios 拦截器已提示 */
+    } finally {
+      setChangePasswordSaving(false);
+    }
+  };
+
   const handleNavigate = (target: string) => {
     navigate(target);
     if (isMobileViewport) {
@@ -130,6 +152,10 @@ export default function AppLayout() {
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
     ],
     onClick: ({ key }: { key: string }) => {
+      if (key === 'change-pwd') {
+        setChangePasswordOpen(true);
+        return;
+      }
       if (key === 'logout') handleLogout();
     },
   };
@@ -351,6 +377,61 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+      <Modal
+        title="修改密码"
+        open={changePasswordOpen}
+        onOk={() => void handleChangePassword()}
+        onCancel={() => {
+          setChangePasswordOpen(false);
+          changePasswordForm.resetFields();
+        }}
+        confirmLoading={changePasswordSaving}
+        okText="确认修改"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={changePasswordForm} layout="vertical">
+          <Form.Item
+            name="old_password"
+            label="当前密码"
+            rules={[{ required: true, message: '请输入当前密码' }]}
+          >
+            <Input.Password autoComplete="current-password" />
+          </Form.Item>
+          <Form.Item
+            name="new_password"
+            label="新密码"
+            rules={[
+              { required: true, message: '请输入新密码' },
+              { min: 6, message: '密码不能少于6位' },
+              { pattern: /^[A-Za-z0-9]+$/, message: '密码只能包含字母与数字' },
+            ]}
+          >
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="confirm_password"
+            label="确认新密码"
+            dependencies={['new_password']}
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('new_password') === value) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('两次输入的新密码不一致'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+          <div style={{ color: '#64748B', fontSize: 12, lineHeight: 1.7 }}>
+            密码修改后仅保存加密摘要。管理员可在用户管理中重置密码并查看本次生成的临时密码，不能查看用户当前明文密码。
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }

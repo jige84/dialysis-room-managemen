@@ -73,7 +73,7 @@ function mapIsolationToMachineZone(isolationZone) {
  */
 async function fetchPatientsForGenerateWeek() {
   const sqlWithAnchor = `
-    SELECT id, dialysis_schedule_code, dialysis_schedule_anchor_date, isolation_zone, machine_station
+    SELECT id, dialysis_schedule_code, dialysis_schedule_notes, dialysis_schedule_anchor_date, isolation_zone, machine_station
     FROM patients
     WHERE status = 'active'
       AND dialysis_schedule_code IS NOT NULL
@@ -88,7 +88,7 @@ async function fetchPatientsForGenerateWeek() {
       if (errMsg.includes('machine_station')) {
         try {
           const { rows } = await pool.query(
-            `SELECT id, dialysis_schedule_code, dialysis_schedule_anchor_date, isolation_zone
+            `SELECT id, dialysis_schedule_code, dialysis_schedule_notes, dialysis_schedule_anchor_date, isolation_zone
              FROM patients
              WHERE status = 'active'
                AND dialysis_schedule_code IS NOT NULL
@@ -98,7 +98,7 @@ async function fetchPatientsForGenerateWeek() {
         } catch (err2) {
           if (err2 && err2.code === '42703') {
             const { rows } = await pool.query(
-              `SELECT id, dialysis_schedule_code, isolation_zone
+              `SELECT id, dialysis_schedule_code, dialysis_schedule_notes, isolation_zone
                FROM patients
                WHERE status = 'active'
                  AND dialysis_schedule_code IS NOT NULL
@@ -110,7 +110,7 @@ async function fetchPatientsForGenerateWeek() {
         }
       }
       const { rows } = await pool.query(
-        `SELECT id, dialysis_schedule_code, isolation_zone
+        `SELECT id, dialysis_schedule_code, dialysis_schedule_notes, isolation_zone
          FROM patients
          WHERE status = 'active'
            AND dialysis_schedule_code IS NOT NULL
@@ -653,6 +653,7 @@ router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, r
           code,
           p.dialysis_schedule_anchor_date,
           weekStart,
+          p.dialysis_schedule_notes,
         );
 
         expandedSlotCount += slots.length;
@@ -740,7 +741,7 @@ router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, r
     if (inserted === 0) {
       if (patientRows.length === 0) {
         hints.push(
-          '没有在透且已选择透析频次预设的患者：请为患者档案设置「透析时间」（不能选「其他」），并确保状态为在透。',
+          '没有在透且已选择可自动展开透析时间的患者：请为患者档案设置「透析时间」（预设、隔日或自定方案），并确保状态为在透。',
         );
       }
       if (expandedSlotCount === 0) {

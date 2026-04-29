@@ -49,6 +49,7 @@ import {
   analyzeLabValue,
   formatReferenceRange,
   getCategoryForTestType,
+  requiresSampleTiming,
   type LabStatusUi,
 } from '../../utils/labReportOcr';
 
@@ -62,6 +63,18 @@ const STATUS_CONFIG: Record<string, { label: string; className: string; tagColor
 };
 
 const CATEGORIES = ['全部类别', '电解质', '贫血', 'CKD-MBD', '营养', '生化', '传染病筛查', '其他'];
+const SAMPLE_TIMING_NOTE_PREFIX = '[透析时点]';
+const SAMPLE_TIMING_OPTIONS = [
+  { value: 'pre', label: '透前' },
+  { value: 'post', label: '透后' },
+] as const;
+
+function formatSampleTiming(notes: string | null | undefined): string {
+  const text = String(notes || '').trim();
+  if (!text.startsWith(SAMPLE_TIMING_NOTE_PREFIX)) return '';
+  const code = text.slice(SAMPLE_TIMING_NOTE_PREFIX.length).trim();
+  return SAMPLE_TIMING_OPTIONS.find((o) => o.value === code)?.label ?? '';
+}
 
 /** 化验类别展示顺序（与筛选、分组一致） */
 const CATEGORY_ORDER = ['电解质', '贫血', 'CKD-MBD', '营养', '生化', '传染病筛查', '其他'] as const;
@@ -226,6 +239,7 @@ function makeLabColumns(opts: {
   showCategory: boolean;
   canSetRecheck: boolean;
   onOpenRecheck: (r: LabResultListRow) => void;
+  onCriticalHandle: (r: LabResultListRow) => void;
   onAnomalyAnalyze?: (r: LabResultListRow, anomalyType: AnomalyType) => void;
 }): ColumnsType<LabResultListRow> {
   const patientCol: ColumnsType<LabResultListRow>[0] = {
@@ -276,9 +290,15 @@ function makeLabColumns(opts: {
     {
       title: '检验项目',
       width: opts.showPatient ? undefined : 140,
-      render: (_: unknown, r: LabResultListRow) => (
-        <span style={{ fontWeight: 500 }}>{LAB_TYPE_LABELS[r.test_type] ?? r.test_type}</span>
-      ),
+      render: (_: unknown, r: LabResultListRow) => {
+        const timing = formatSampleTiming(r.notes);
+        return (
+          <span style={{ fontWeight: 500 }}>
+            {LAB_TYPE_LABELS[r.test_type] ?? r.test_type}
+            {timing ? <Tag style={{ marginLeft: 6 }}>{timing}</Tag> : null}
+          </span>
+        );
+      },
     },
     {
       title: '结果值',
@@ -359,17 +379,24 @@ function makeLabColumns(opts: {
   ];
   if (opts.onAnomalyAnalyze) {
     rest.push({
-      title: '分析',
-      width: 72,
+      title: '操作',
+      width: 128,
       render: (_: unknown, r: LabResultListRow) => {
         const ui = rowToUiStatus(r);
         const abnormal = r.is_critical || r.is_abnormal || ui === 'critical' || ui === 'high' || ui === 'low';
         if (!abnormal) return <span className="text-muted">—</span>;
         const at: AnomalyType = r.is_critical || ui === 'critical' ? 'lab_critical' : 'lab_abnormal';
         return (
-          <Button type="link" size="small" onClick={() => opts.onAnomalyAnalyze?.(r, at)}>
-            分析
-          </Button>
+          <Space size={4}>
+            {ui === 'critical' ? (
+              <Button type="link" danger size="small" onClick={() => opts.onCriticalHandle(r)}>
+                立即处理
+              </Button>
+            ) : null}
+            <Button type="link" size="small" onClick={() => opts.onAnomalyAnalyze?.(r, at)}>
+              分析
+            </Button>
+          </Space>
         );
       },
     });
@@ -625,6 +652,7 @@ export default function LabResultListPage() {
         showCategory: true,
         canSetRecheck,
         onOpenRecheck: openRecheckModal,
+        onCriticalHandle: openCriticalHandle,
         onAnomalyAnalyze: hasLabWrite ? openAnomaly : undefined,
       }),
     [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly],
@@ -636,6 +664,7 @@ export default function LabResultListPage() {
         showCategory: false,
         canSetRecheck,
         onOpenRecheck: openRecheckModal,
+        onCriticalHandle: openCriticalHandle,
         onAnomalyAnalyze: hasLabWrite ? openAnomaly : undefined,
       }),
     [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly],
@@ -659,10 +688,11 @@ export default function LabResultListPage() {
       test_type?: string;
       value?: string | number;
       unit?: string;
+      sample_timing?: 'pre' | 'post';
     }[];
 
     const messages: string[] = [];
-    const filled: { test_type: string; value: number; unit: string }[] = [];
+    const filled: { test_type: string; value: number; unit: string; notes?: string }[] = [];
 
     for (let i = 0; i < rawRows.length; i++) {
       const row = rawRows[i];
@@ -686,10 +716,16 @@ export default function LabResultListPage() {
         messages.push(`第 ${i + 1} 行：结果值不是有效数字`);
         continue;
       }
+      const needsSampleTiming = requiresSampleTiming(row.test_type);
+      if (needsSampleTiming && !row.sample_timing) {
+        messages.push(`第 ${i + 1} 行：该项目请选择透前或透后`);
+        continue;
+      }
       filled.push({
         test_type: row.test_type as string,
         value: num,
         unit: typeof row.unit === 'string' ? row.unit.trim() : '',
+        notes: needsSampleTiming && row.sample_timing ? `${SAMPLE_TIMING_NOTE_PREFIX} ${row.sample_timing}` : undefined,
       });
     }
 
@@ -701,7 +737,7 @@ export default function LabResultListPage() {
       message.warning('请至少录入一条有效的检验项目（项目 + 结果值）');
       return;
     }
-    const types = filled.map((r) => r.test_type);
+    const types = filled.map((r) => r.test_type.trim().toLowerCase());
     if (new Set(types).size !== types.length) {
       message.error('同一检验项目不能重复，请删除或合并重复行');
       return;
@@ -717,6 +753,7 @@ export default function LabResultListPage() {
           value: item.value,
           unit: item.unit,
           test_date: dateStr,
+          notes: item.notes,
         }))
       );
       message.success(`已保存 ${filled.length} 条检验结果`);
@@ -850,7 +887,18 @@ export default function LabResultListPage() {
             </div>
             <div style={{ marginTop: 14 }}>
               {hasLabWrite ? (
-                <Button type="primary" icon={<PlusOutlined />} block onClick={() => setShowModal(true)}>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  block
+                  onClick={() => {
+                    form.setFieldsValue({
+                      test_date: form.getFieldValue('test_date') || dayjs(),
+                      items: form.getFieldValue('items') || [{}],
+                    });
+                    setShowModal(true);
+                  }}
+                >
                   打开手动录入
                 </Button>
               ) : (
@@ -1201,7 +1249,13 @@ export default function LabResultListPage() {
         confirmLoading={saving}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" size="middle" style={{ marginTop: 8 }}>
+        <Form
+          form={form}
+          layout="vertical"
+          size="middle"
+          style={{ marginTop: 8 }}
+          initialValues={{ test_date: dayjs(), items: [{}] }}
+        >
           <div className="grid-2" style={{ gap: 16 }}>
             <Form.Item label="患者" name="patient_id" rules={[{ required: true, message: '请选择患者' }]}>
               <Select
@@ -1229,7 +1283,7 @@ export default function LabResultListPage() {
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'minmax(160px, 1fr) 120px 120px 40px',
+                    gridTemplateColumns: 'minmax(160px, 1fr) 120px 120px 96px 40px',
                     gap: 8,
                     alignItems: 'center',
                     marginBottom: 6,
@@ -1245,6 +1299,9 @@ export default function LabResultListPage() {
                   <span className="text-muted" style={{ fontSize: 12 }}>
                     单位（可选）
                   </span>
+                  <span className="text-muted" style={{ fontSize: 12 }}>
+                    生化时点
+                  </span>
                   <span />
                 </div>
                 {fields.map((field) => (
@@ -1252,7 +1309,7 @@ export default function LabResultListPage() {
                     key={field.key}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'minmax(160px, 1fr) 120px 120px 40px',
+                      gridTemplateColumns: 'minmax(160px, 1fr) 120px 120px 96px 40px',
                       gap: 8,
                       alignItems: 'flex-start',
                       marginBottom: 8,
@@ -1273,6 +1330,28 @@ export default function LabResultListPage() {
                     <Form.Item name={[field.name, 'unit']} style={{ marginBottom: 0 }}>
                       <Input placeholder="默认单位" />
                     </Form.Item>
+                    <Form.Item
+                      noStyle
+                      shouldUpdate={(prev, cur) =>
+                        prev.items?.[field.name]?.test_type !== cur.items?.[field.name]?.test_type
+                      }
+                    >
+                      {({ getFieldValue }) => {
+                        const type = getFieldValue(['items', field.name, 'test_type']);
+                        const needsSampleTiming = requiresSampleTiming(type);
+                        return needsSampleTiming ? (
+                          <Form.Item
+                            name={[field.name, 'sample_timing']}
+                            style={{ marginBottom: 0 }}
+                            rules={[{ required: true, message: '请选择' }]}
+                          >
+                            <Select options={[...SAMPLE_TIMING_OPTIONS]} placeholder="透前/透后" />
+                          </Form.Item>
+                        ) : (
+                          <span style={{ color: '#94A3B8', lineHeight: '32px' }}>—</span>
+                        );
+                      }}
+                    </Form.Item>
                     <Button
                       type="text"
                       danger
@@ -1286,7 +1365,7 @@ export default function LabResultListPage() {
                 ))}
                 <Button
                   type="dashed"
-                  onClick={() => add({ test_type: undefined, value: undefined, unit: undefined })}
+                  onClick={() => add({ test_type: undefined, value: undefined, unit: undefined, sample_timing: undefined })}
                   block
                   icon={<PlusOutlined />}
                   style={{ marginTop: 4 }}

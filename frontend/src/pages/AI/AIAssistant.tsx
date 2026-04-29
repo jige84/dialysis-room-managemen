@@ -47,6 +47,12 @@ const TAB_TO_FEAT: Record<TabKey, AiAssistantFeaturePermissionKey> = {
   med: 'ai_feat:medication',
 };
 
+const NLP_QUICK_QUESTIONS = [
+  '透析患者血小板偏低一般见于什么',
+  '近30天超滤超标患者有哪些',
+  '请分析患者近3个月Kt/V趋势并给出复查建议',
+];
+
 function kbSaveMessage(kb: AiKbSaveResult | undefined) {
   if (!kb || kb.skipped) return null;
   const overviewLine = formatKbSaveOverviewLine(kb.overview);
@@ -122,6 +128,15 @@ function formatRetrieval(r?: AiRetrievalSummary) {
   if (r.medical_site_names?.length) {
     parts.push(`专业网站引用 ${r.medical_site_names.join('、')}`);
   }
+  if ((r.web_excerpt_count ?? 0) > 0) {
+    parts.push(`网站公开摘要 ${r.web_excerpt_count} 条`);
+  }
+  if (r.medical_site_excerpt_names?.length) {
+    parts.push(`摘要来源 ${r.medical_site_excerpt_names.join('、')}`);
+  }
+  if (r.query_mode) {
+    parts.push(`查询模式 ${r.query_mode}`);
+  }
   if (r.used_web_fallback) parts.push('已尝试联网补全（若配置）');
   return parts.join('；');
 }
@@ -146,6 +161,7 @@ function AiResultView({ result }: { result: AiTextResult | null }) {
           <span style={{ fontWeight: 600, color: '#0369A1' }}>AI 分析结果</span>
           <Tag color="orange">AI 生成</Tag>
           <Tag>{result.model || 'qwen3-max'}</Tag>
+          {result.query_execution?.query_mode && <Tag color="blue">{result.query_execution.query_mode}</Tag>}
           {result.generated_at && (
             <Text type="secondary" style={{ fontSize: 12 }}>
               {new Date(result.generated_at).toLocaleString('zh-CN', { hour12: false })}
@@ -167,6 +183,15 @@ function AiResultView({ result }: { result: AiTextResult | null }) {
           style={{ marginBottom: 12 }}
           message="本次分析参考来源摘要"
           description={refLine}
+        />
+      )}
+      {result.query_execution?.summary && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="结构化查询摘要"
+          description={result.query_execution.summary}
         />
       )}
       <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>
@@ -276,7 +301,12 @@ export default function AIAssistantPage() {
       } else if (effectiveTabKey === 'cvc') {
         res = await aiApi.postCvcExplanation({ assessmentId: values.assessmentId, saveToKnowledgeBase });
       } else if (effectiveTabKey === 'nlp') {
-        res = await aiApi.postNlpQuery({ query: values.query, saveToKnowledgeBase });
+        const nlpPatientId = typeof values.nlpPatientId === 'string' ? values.nlpPatientId.trim() : '';
+        const normalizedQuery =
+          nlpPatientId && !String(values.query || '').includes(nlpPatientId)
+            ? `患者ID ${nlpPatientId}，${String(values.query || '').trim()}`
+            : String(values.query || '').trim();
+        res = await aiApi.postNlpQuery({ query: normalizedQuery, saveToKnowledgeBase });
       } else if (effectiveTabKey === 'med') {
         res = await aiApi.postMedicationAdvice({
           patientId: values.patientId,
@@ -296,8 +326,8 @@ export default function AIAssistantPage() {
             message.info(line ? `未重复入库。${line}` : '未重复入库：正文已存在');
           } else if (kb.reason === 'no_kb_chunks') {
             message.warning('本次未命中资料片段，未写入知识库');
-          } else if (kb.error === 'persist_failed') {
-            message.error('保存到知识库失败');
+          } else if (kb.error === 'persist_failed' || kb.error === 'summary_failed' || kb.error === 'summary_empty') {
+            message.error('保存到知识库失败：整理总结或写入未成功');
           }
         }
       }
@@ -439,16 +469,50 @@ export default function AIAssistantPage() {
             )}
 
             {effectiveTabKey === 'nlp' && (
-              <Form.Item
-                label="自然语言问题"
-                name="query"
-                rules={[{ required: true, message: '请输入要查询的问题' }]}
-              >
-                <TextArea
-                  rows={3}
-                  placeholder="可询问医学相关问题。涉及本科室患者数据时建议：请分析患者ID/姓名在近3个月 Kt/V、血红蛋白、血钾和超滤量的趋势，指出异常依据、可能原因和复查建议。"
+              <>
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="自然语言智能模式"
+                  description="支持两类：1）结构化查询（患者趋势、超滤超标名单）；2）通用医学问答（无患者数据时也可回答）。"
                 />
-              </Form.Item>
+                <Form.Item label="患者（可选）" name="nlpPatientId">
+                  <Select
+                    showSearch
+                    placeholder="可先选患者，系统会自动补全患者 ID 到问题中"
+                    filterOption={false}
+                    notFoundContent={loadingPatients ? '搜索中…' : null}
+                    onSearch={handleSearchPatients}
+                    options={patientOptions}
+                    allowClear
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="自然语言问题"
+                  name="query"
+                  rules={[{ required: true, message: '请输入要查询的问题' }]}
+                >
+                  <TextArea
+                    rows={3}
+                    placeholder="例如：透析患者血小板偏低一般见于什么；近30天超滤超标患者有哪些；请分析患者近3个月Kt/V趋势。"
+                  />
+                </Form.Item>
+                <div style={{ marginBottom: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>快捷问题：</Text>
+                  <Space wrap style={{ marginTop: 6 }}>
+                    {NLP_QUICK_QUESTIONS.map((q) => (
+                      <Button
+                        key={q}
+                        size="small"
+                        onClick={() => form.setFieldValue('query', q)}
+                      >
+                        {q}
+                      </Button>
+                    ))}
+                  </Space>
+                </div>
+              </>
             )}
 
             {effectiveTabKey === 'med' && (

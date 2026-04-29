@@ -33,7 +33,10 @@ export interface AiRetrievalSummary {
   kb_query?: string;
   medical_site_keys: string[];
   medical_site_names: string[];
+  medical_site_excerpt_names?: string[];
+  web_excerpt_count?: number;
   used_web_fallback: boolean;
+  query_mode?: 'structured_query' | 'medical_qa' | 'patient_context_qa' | 'unsupported_sensitive' | string;
 }
 
 export interface AiTextResult {
@@ -43,6 +46,13 @@ export interface AiTextResult {
   retrieval?: AiRetrievalSummary;
   model?: string;
   generated_at?: string;
+  query_execution?: {
+    planner?: string;
+    query_mode?: string;
+    query_type?: string;
+    summary?: string;
+    result_count?: number;
+  };
 }
 
 /** 月度质控月报解读（科室聚合，无患者标识） */

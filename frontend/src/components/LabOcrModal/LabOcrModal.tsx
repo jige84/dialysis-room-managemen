@@ -39,6 +39,7 @@ import {
   getCategoryForTestType,
   isLikelyLegibleLabOcrText,
   parseLabReportText,
+  requiresSampleTiming,
   type ParsedLabLine,
   type LabStatusUi,
 } from '../../utils/labReportOcr';
@@ -58,6 +59,12 @@ const STATUS_TAG: Record<LabStatusUi, { color: string; label: string }> = {
   critical: { color: 'error', label: '危急值' },
 };
 
+const SAMPLE_TIMING_NOTE_PREFIX = '[透析时点]';
+const SAMPLE_TIMING_OPTIONS = [
+  { value: 'pre', label: '透前' },
+  { value: 'post', label: '透后' },
+] as const;
+
 export interface LabOcrModalProps {
   open: boolean;
   onClose: () => void;
@@ -70,6 +77,7 @@ interface RowItem extends ParsedLabLine {
   range: string;
   status: LabStatusUi;
   summary: string;
+  sampleTiming?: 'pre' | 'post';
 }
 
 function buildRows(lines: ParsedLabLine[]): RowItem[] {
@@ -512,6 +520,10 @@ export default function LabOcrModal({ open, onClose, onSaved }: LabOcrModalProps
     );
   };
 
+  const updateRowTiming = (key: string, sampleTiming: 'pre' | 'post') => {
+    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, sampleTiming } : r)));
+  };
+
   const handleSave = async () => {
     if (!patientId) {
       message.warning('请选择患者');
@@ -519,6 +531,11 @@ export default function LabOcrModal({ open, onClose, onSaved }: LabOcrModalProps
     }
     if (rows.length === 0) {
       message.warning('没有可保存的检验项');
+      return;
+    }
+    const missingTiming = rows.find((r) => requiresSampleTiming(r.test_type) && !r.sampleTiming);
+    if (missingTiming) {
+      message.warning(`${missingTiming.label} 请选择透前或透后`);
       return;
     }
     const dateStr = testDate.format('YYYY-MM-DD');
@@ -529,7 +546,9 @@ export default function LabOcrModal({ open, onClose, onSaved }: LabOcrModalProps
         value: r.value,
         unit: r.unit,
         test_date: dateStr,
-        notes: '来源：化验单拍照识别（已人工核对）',
+        notes: r.sampleTiming
+          ? `${SAMPLE_TIMING_NOTE_PREFIX} ${r.sampleTiming}`
+          : '来源：化验单拍照识别（已人工核对）',
       }));
       await labsApi.add(patientId, payload);
       message.success('检验结果已保存');
@@ -558,6 +577,23 @@ export default function LabOcrModal({ open, onClose, onSaved }: LabOcrModalProps
       ),
     },
     { title: '单位', dataIndex: 'unit', width: 72 },
+    {
+      title: '生化时点',
+      width: 110,
+      render: (_: unknown, r: RowItem) =>
+        requiresSampleTiming(r.test_type) ? (
+          <Select
+            size="small"
+            value={r.sampleTiming}
+            options={[...SAMPLE_TIMING_OPTIONS]}
+            placeholder="透前/透后"
+            onChange={(v) => updateRowTiming(r.key, v)}
+            style={{ width: '100%' }}
+          />
+        ) : (
+          <Text type="secondary">—</Text>
+        ),
+    },
     { title: '参考范围', dataIndex: 'range', width: 130 },
     {
       title: '自动分析',

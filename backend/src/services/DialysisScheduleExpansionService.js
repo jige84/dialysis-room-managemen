@@ -56,13 +56,38 @@ function enumerateWeekDates(weekStartMonday) {
   return out;
 }
 
+const CUSTOM_SCHEDULE_NOTE_PREFIX = '[自定排班] ';
+
+function parseCustomCyclePlan(notes) {
+  if (!notes || typeof notes !== 'string' || !notes.startsWith(CUSTOM_SCHEDULE_NOTE_PREFIX)) return null;
+  try {
+    const raw = JSON.parse(notes.slice(CUSTOM_SCHEDULE_NOTE_PREFIX.length));
+    const normalizeWeek = (week) => {
+      const weekdays = Array.isArray(week && week.weekdays)
+        ? week.weekdays
+            .map((d) => Number(d))
+            .filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+        : [];
+      const shift = week && week.shift;
+      if (!weekdays.length || !['morning', 'afternoon', 'evening'].includes(String(shift))) return null;
+      return { weekdays: [...new Set(weekdays)], shift };
+    };
+    const week1 = normalizeWeek(raw.week1);
+    const week2 = normalizeWeek(raw.week2);
+    return week1 && week2 ? { week1, week2 } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * @param {string} code
  * @param {string | null | undefined} anchorDate YYYY-MM-DD（qod 必填）
  * @param {string} weekStartMonday
+ * @param {string | null | undefined} notes
  * @returns {{ scheduledDate: string, shift: DbShift }[]}
  */
-function expandDialysisScheduleCode(code, anchorDate, weekStartMonday) {
+function expandDialysisScheduleCode(code, anchorDate, weekStartMonday, notes) {
   if (!code || code === 'other') return [];
 
   const dates = enumerateWeekDates(weekStartMonday);
@@ -98,6 +123,20 @@ function expandDialysisScheduleCode(code, anchorDate, weekStartMonday) {
     return slots;
   }
 
+  if (code === 'custom_cycle') {
+    const plan = parseCustomCyclePlan(notes);
+    if (!plan) return [];
+    for (const ds of dates) {
+      const wn = isoWeekNumber(new Date(`${ds}T12:00:00`));
+      const weekPlan = wn % 2 === 1 ? plan.week1 : plan.week2;
+      const wd = weekdayJs(ds);
+      if (weekPlan.weekdays.includes(wd)) {
+        slots.push({ scheduledDate: ds, shift: weekPlan.shift });
+      }
+    }
+    return slots;
+  }
+
   const tiw = {
     tiw_mwf_morning: { days: [1, 3, 5], shift: /** @type {DbShift} */ ('morning') },
     tiw_mwf_afternoon: { days: [1, 3, 5], shift: /** @type {DbShift} */ ('afternoon') },
@@ -124,4 +163,5 @@ module.exports = {
   expandDialysisScheduleCode,
   enumerateWeekDates,
   isoWeekNumber,
+  parseCustomCyclePlan,
 };
