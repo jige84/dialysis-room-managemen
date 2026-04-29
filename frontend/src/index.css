@@ -156,18 +156,13 @@ body {
   margin-bottom: 24px;
 }
 
-.login-brand-mark {
+.login-brand-logo {
   width: 48px;
   height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   border-radius: 16px;
-  background: linear-gradient(180deg, #315F75 0%, #224C62 100%);
-  color: #fff;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  object-fit: contain;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
 }
 
 .login-brand-name {
@@ -276,19 +271,14 @@ body {
   flex-shrink: 0;
 }
 
-.hd-sidebar-brand-icon {
+.hd-sidebar-brand-logo {
   width: 38px;
   height: 38px;
-  background: rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.96);
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  object-fit: contain;
+  padding: 3px;
   flex-shrink: 0;
 }
 

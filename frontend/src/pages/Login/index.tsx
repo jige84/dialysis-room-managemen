@@ -40,7 +40,7 @@ export default function LoginPage() {
 
       <div className="login-card-animate login-card">
         <div className="login-brand-row">
-          <div className="login-brand-mark">HD</div>
+          <img className="login-brand-logo" src="/brand-logo.png" alt="善谷医院血液透析室" />
           <div>
             <div className="login-brand-name">涉县善谷医院</div>
             <div className="login-brand-system">血液透析室管理系统</div>

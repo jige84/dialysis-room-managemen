@@ -215,7 +215,7 @@ export default function AppLayout() {
       >
         {/* 品牌标识 */}
         <div className="hd-sidebar-brand">
-          <div className="hd-sidebar-brand-icon">HD</div>
+          <img className="hd-sidebar-brand-logo" src="/brand-logo.png" alt="善谷医院血液透析室" />
           {!collapsed && (
             <div className="hd-sidebar-brand-copy">
               <div className="hd-sidebar-brand-name">善谷医院</div>
