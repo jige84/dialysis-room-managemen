@@ -14,7 +14,7 @@ import { useAuthStore } from '../../stores/authStore';
 import IsolationZoneTag from '../../components/IsolationZoneTag/IsolationZoneTag';
 import { getAccessTypeStyle } from '../../constants/isolation';
 import { patientsApi, type Patient } from '../../api/patients';
-import { buildPatientNamePinyinSortKey, getPatientNameLeadingPinyinLetter } from '../../utils/patientNamePinyin';
+import { buildPatientNameInitialsChain, buildPatientNamePinyinSortKey } from '../../utils/patientNamePinyin';
 
 type PatientSortMode =
   | 'default'
@@ -44,12 +44,10 @@ type PatientRow = {
   loadOrder: number;
   /** 姓名全拼小写，用于拼音排序 */
   namePinyinKey: string;
-  /** 姓名首字拼音首字母（A–Z / #） */
-  leadingPinyinLetter: string;
+  /** 姓名逐字拼音首字母串联（小写），如任计阁→rjg，用于搜索框英文检索 */
+  nameInitialsChain: string;
   dialysisStartDate: string | null;
 };
-
-const PINYIN_QUICK_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 function parseDryWeightKg(
   profile: Patient['profile_dry_weight'],
@@ -86,7 +84,7 @@ function toPatientRow(p: Patient, loadOrder: number): PatientRow {
     responsibleNurseName: p.responsible_nurse_name?.trim() || '—',
     loadOrder,
     namePinyinKey: buildPatientNamePinyinSortKey(name),
-    leadingPinyinLetter: getPatientNameLeadingPinyinLetter(name),
+    nameInitialsChain: buildPatientNameInitialsChain(name),
     dialysisStartDate: p.dialysis_start_date ?? null,
   };
 }
@@ -107,7 +105,6 @@ export default function PatientListPage() {
   const canDeletePatient = hasRole(['admin', 'head_nurse']);
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<PatientSortMode>('default');
-  const [pinyinLetter, setPinyinLetter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [accessFilter, setAccessFilter] = useState('');
   const [zoneFilter, setZoneFilter] = useState('');
@@ -147,14 +144,26 @@ export default function PatientListPage() {
     };
   }, []);
 
-  const filtered = useMemo(() => rows.filter((p) => {
-    if (search && !p.name.includes(search) && !p.diagnosis.includes(search)) return false;
-    if (pinyinLetter != null && p.leadingPinyinLetter !== pinyinLetter) return false;
-    if (statusFilter && p.status !== statusFilter) return false;
-    if (accessFilter && p.access !== accessFilter) return false;
-    if (zoneFilter && p.zone !== zoneFilter) return false;
-    return true;
-  }), [rows, search, pinyinLetter, statusFilter, accessFilter, zoneFilter]);
+  const filtered = useMemo(() => {
+    const q = search.trim();
+    const qLower = q.toLowerCase();
+    /** 纯英文字母：按姓名逐字拼音首字母串联做前缀匹配（逐字符输入即可筛选；输全 rjg 可对应「任计阁」） */
+    const isLettersOnly = q.length > 0 && /^[a-z]+$/i.test(q);
+
+    return rows.filter((p) => {
+      if (q) {
+        if (isLettersOnly) {
+          if (!p.nameInitialsChain.startsWith(qLower)) return false;
+        } else if (!p.name.includes(q) && !p.diagnosis.includes(q)) {
+          return false;
+        }
+      }
+      if (statusFilter && p.status !== statusFilter) return false;
+      if (accessFilter && p.access !== accessFilter) return false;
+      if (zoneFilter && p.zone !== zoneFilter) return false;
+      return true;
+    });
+  }, [rows, search, statusFilter, accessFilter, zoneFilter]);
 
   const sortedRows = useMemo(() => {
     const arr = [...filtered];
@@ -227,7 +236,7 @@ export default function PatientListPage() {
         <div>
           <div style={{ fontWeight: 600 }}>患者信息</div>
           <Typography.Text type="secondary" style={{ fontSize: 11, fontWeight: 400 }}>
-            拼音排序 · 首字母筛选见上方
+            排序见筛选栏 · 搜索框仅字母时按姓名拼音首字母链筛选（如 rjg→任计阁）
           </Typography.Text>
         </div>
       ),
@@ -367,10 +376,10 @@ export default function PatientListPage() {
         <div className="hd-filter-bar__left">
           <Input
             prefix={<SearchOutlined style={{ color: '#7B92BC' }} />}
-            placeholder="搜索患者姓名 / 诊断"
+            placeholder="姓名 / 诊断；仅英文字母时按拼音首字母链（如 r→rj→rjg 对应任计阁）"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            style={{ width: 260 }}
+            style={{ width: 320 }}
             allowClear
           />
           <Select
@@ -453,47 +462,6 @@ export default function PatientListPage() {
           )}
           <Button icon={<ExportOutlined />}>导出名单</Button>
         </div>
-      </div>
-
-      <div
-        className="hd-filter-bar"
-        style={{
-          marginTop: -4,
-          marginBottom: 12,
-          flexWrap: 'wrap',
-          gap: 8,
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary" style={{ marginRight: 4, flexShrink: 0 }}>
-          拼音首字母
-        </Typography.Text>
-        <Space size={[6, 6]} wrap style={{ flex: 1 }}>
-          <Button
-            size="small"
-            type={pinyinLetter === null ? 'primary' : 'default'}
-            onClick={() => setPinyinLetter(null)}
-          >
-            全部
-          </Button>
-          {PINYIN_QUICK_LETTERS.map((ch) => (
-            <Button
-              key={ch}
-              size="small"
-              type={pinyinLetter === ch ? 'primary' : 'default'}
-              onClick={() => setPinyinLetter((prev) => (prev === ch ? null : ch))}
-            >
-              {ch}
-            </Button>
-          ))}
-          <Button
-            size="small"
-            type={pinyinLetter === '#' ? 'primary' : 'default'}
-            onClick={() => setPinyinLetter((prev) => (prev === '#' ? null : '#'))}
-          >
-            #
-          </Button>
-        </Space>
       </div>
 
       {/* 患者表格 */}

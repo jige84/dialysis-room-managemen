@@ -1,6 +1,6 @@
 /**
- * 患者姓名拼音工具（列表排序与首字母检索）
- * 依赖 pinyin-pro：中文转拼音；异常时降级为原文本比较。
+ * 患者姓名拼音工具（列表排序与搜索）
+ * 依赖 pinyin-pro：中文转拼音；异常时降级。
  */
 import { pinyin } from 'pinyin-pro';
 
@@ -18,19 +18,27 @@ export function buildPatientNamePinyinSortKey(name: string): string {
 }
 
 /**
- * 用于拼音首字母快捷筛选：取姓名首字的拼音首字母（A–Z），无法归类时为 `#`
+ * 姓名逐字拼音首字母串联（小写），如「任计阁」→ rjg。
+ * 搜索框仅输入 a–z 时，与输入串做前缀匹配（startsWith），便于逐键筛选。
  */
-export function getPatientNameLeadingPinyinLetter(name: string): string {
+export function buildPatientNameInitialsChain(name: string): string {
   const s = String(name ?? '').trim();
-  if (!s) return '#';
-  const firstChar = s[0];
-  if (/[A-Za-z]/.test(firstChar)) return firstChar.toUpperCase();
-  try {
-    const py = pinyin(firstChar, { pattern: 'first', toneType: 'none', type: 'string' });
-    const c = py.trim().charAt(0).toUpperCase();
-    if (c >= 'A' && c <= 'Z') return c;
-  } catch {
-    /* 降级 */
+  if (!s) return '';
+  const parts: string[] = [];
+  for (const ch of Array.from(s)) {
+    if (/[A-Za-z]/.test(ch)) {
+      parts.push(ch.toLowerCase());
+      continue;
+    }
+    if (/[\u4e00-\u9fff]/.test(ch)) {
+      try {
+        const py = pinyin(ch, { pattern: 'first', toneType: 'none', type: 'string' });
+        const c = py.trim().charAt(0).toLowerCase();
+        if (c >= 'a' && c <= 'z') parts.push(c);
+      } catch {
+        /* 单字失败则跳过 */
+      }
+    }
   }
-  return '#';
+  return parts.join('');
 }
