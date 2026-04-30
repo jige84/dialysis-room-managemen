@@ -42,23 +42,42 @@ const {
 const PG_UNDEFINED_COLUMN = '42703';
 const PG_FOREIGN_KEY_VIOLATION = '23503';
 
+/** 质控只读角色：不因 menu_permissions 为 null（全开语义）而获得设备写能力 */
+const QUALITY_ROLES = new Set(['quality', 'qc']);
+
+/**
+ * 与前端侧栏及 menuPermission.isKeyAllowed 一致：null/undefined = 不按菜单白名单限制；
+ * 非空数组须包含 /devices 才能访问设备耗材模块。
+ * @param {string[] | null | undefined} menuPermissions normalizeMenuPermissions 的结果
+ */
+function hasDevicesModuleAccess(menuPermissions) {
+  if (menuPermissions === null || menuPermissions === undefined) return true;
+  return Array.isArray(menuPermissions) && menuPermissions.includes('/devices');
+}
+
 async function requireMachineRegistrationPermission(req, res, next) {
   if (['admin', 'head_nurse'].includes(req.user?.role)) return next();
+  if (QUALITY_ROLES.has(req.user?.role)) {
+    return forbidden(res, '您未被授权登记透析机，请联系管理员开通设备耗材管理权限');
+  }
   try {
     const menuPermissions = normalizeMenuPermissions(await fetchMenuPermissionsByUserId(req.user.id));
-    if (Array.isArray(menuPermissions) && menuPermissions.includes('/devices')) return next();
+    if (hasDevicesModuleAccess(menuPermissions)) return next();
     return forbidden(res, '您未被授权登记透析机，请联系管理员开通设备耗材管理权限');
   } catch (err) {
     return next(err);
   }
 }
 
-/** 新建耗材目录：与入库/库存调整一致，含责任护士；或为设备耗材菜单权限用户（与登记透析机策略对齐） */
+/** 新建耗材目录：与入库/库存调整一致，含责任护士；菜单全开(null)或含 /devices 的用户（与侧栏语义一致） */
 async function requireConsumableCreatePermission(req, res, next) {
   if (['admin', 'head_nurse', 'nurse'].includes(req.user?.role)) return next();
+  if (QUALITY_ROLES.has(req.user?.role)) {
+    return forbidden(res, '您未被授权新建耗材目录，请联系管理员开通设备耗材管理权限');
+  }
   try {
     const menuPermissions = normalizeMenuPermissions(await fetchMenuPermissionsByUserId(req.user.id));
-    if (Array.isArray(menuPermissions) && menuPermissions.includes('/devices')) return next();
+    if (hasDevicesModuleAccess(menuPermissions)) return next();
     return forbidden(res, '您未被授权新建耗材目录，请联系管理员开通设备耗材管理权限');
   } catch (err) {
     return next(err);

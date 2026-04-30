@@ -116,7 +116,11 @@ export default function DevicesPage() {
   const hasRole = useAuthStore((s) => s.hasRole);
   const menuPermissions = useAuthStore((s) => s.user?.menu_permissions);
   const normalizedMenuPermissions = normalizeMenuPermissions(menuPermissions);
-  const hasDeviceMenuPermission = normalizedMenuPermissions?.includes('/devices') ?? false;
+  /** 与后端 hasDevicesModuleAccess 一致：null/undefined = 菜单不设限；[] 须显式含 /devices */
+  const hasDeviceMenuPermission =
+    normalizedMenuPermissions === null || normalizedMenuPermissions === undefined
+      ? true
+      : normalizedMenuPermissions.includes('/devices');
   const canWriteDevice = hasRole(['admin', 'head_nurse']);
   const canRegisterMachine = canWriteDevice || hasDeviceMenuPermission;
   const canInbound = hasRole(['admin', 'head_nurse', 'nurse']);

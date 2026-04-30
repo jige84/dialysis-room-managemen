@@ -82,7 +82,7 @@ request.interceptors.response.use(
       localStorage.removeItem('hd_user');
       window.location.href = '/login';
     } else if (status === 403) {
-      message.error('权限不足，无法执行此操作');
+      message.error(serverMsg || '权限不足，无法执行此操作');
     } else if (status === 502) {
       const onLocalDevHost =
         typeof window !== 'undefined' &&
