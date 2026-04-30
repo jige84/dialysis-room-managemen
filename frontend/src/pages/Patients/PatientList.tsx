@@ -4,7 +4,7 @@
  * 主要功能：Table + 搜索；导出（权限受控）；对接 patientsApi.list。
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Card, Input, Select, Button, Table, Space, Tooltip, Popconfirm, message } from 'antd';
+import { Card, Input, Select, Button, Table, Space, Tooltip, Popconfirm, message, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { SearchOutlined, PlusOutlined, ExportOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -14,6 +14,16 @@ import { useAuthStore } from '../../stores/authStore';
 import IsolationZoneTag from '../../components/IsolationZoneTag/IsolationZoneTag';
 import { getAccessTypeStyle } from '../../constants/isolation';
 import { patientsApi, type Patient } from '../../api/patients';
+import { buildPatientNamePinyinSortKey, getPatientNameLeadingPinyinLetter } from '../../utils/patientNamePinyin';
+
+type PatientSortMode =
+  | 'default'
+  | 'name_pinyin_asc'
+  | 'name_pinyin_desc'
+  | 'age_asc'
+  | 'age_desc'
+  | 'dialysis_start_asc'
+  | 'dialysis_start_desc';
 
 type PatientRow = {
   key: string;
@@ -30,7 +40,16 @@ type PatientRow = {
   dryWeight?: number | null;
   status: string;
   responsibleNurseName: string;
+  /** 列表加载顺序（默认排序用） */
+  loadOrder: number;
+  /** 姓名全拼小写，用于拼音排序 */
+  namePinyinKey: string;
+  /** 姓名首字拼音首字母（A–Z / #） */
+  leadingPinyinLetter: string;
+  dialysisStartDate: string | null;
 };
+
+const PINYIN_QUICK_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 function parseDryWeightKg(
   profile: Patient['profile_dry_weight'],
@@ -46,14 +65,15 @@ function parseDryWeightKg(
   return toNum(prescription);
 }
 
-function toPatientRow(p: Patient): PatientRow {
+function toPatientRow(p: Patient, loadOrder: number): PatientRow {
   const access = (p.access_type || 'NCC').toUpperCase();
   const zone = p.isolation_zone || 'normal';
+  const name = p.name ?? '';
   return {
     key: p.id,
     id: p.id,
-    avatar: p.name?.slice(0, 1) || '患',
-    name: p.name,
+    avatar: name.slice(0, 1) || '患',
+    name,
     gender: p.gender === 'F' ? '女' : p.gender === 'M' ? '男' : '待补全',
     age: Number.isFinite(p.age) ? Number(p.age) : null,
     diagnosis: p.primary_diagnosis || '待补全',
@@ -64,6 +84,10 @@ function toPatientRow(p: Patient): PatientRow {
     dryWeight: parseDryWeightKg(p.profile_dry_weight, p.prescription_dry_weight),
     status: p.status,
     responsibleNurseName: p.responsible_nurse_name?.trim() || '—',
+    loadOrder,
+    namePinyinKey: buildPatientNamePinyinSortKey(name),
+    leadingPinyinLetter: getPatientNameLeadingPinyinLetter(name),
+    dialysisStartDate: p.dialysis_start_date ?? null,
   };
 }
 
@@ -82,6 +106,8 @@ export default function PatientListPage() {
   const canCreatePatient = hasRole(['admin', 'doctor']);
   const canDeletePatient = hasRole(['admin', 'head_nurse']);
   const [search, setSearch] = useState('');
+  const [sortMode, setSortMode] = useState<PatientSortMode>('default');
+  const [pinyinLetter, setPinyinLetter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [accessFilter, setAccessFilter] = useState('');
   const [zoneFilter, setZoneFilter] = useState('');
@@ -103,7 +129,8 @@ export default function PatientListPage() {
           setLoadError(true);
           return;
         }
-        setRows(res.data.data.list.map(toPatientRow));
+        const list = res.data.data.list as Patient[];
+        setRows(list.map((p, i) => toPatientRow(p, i)));
       } catch {
         if (!cancelled) {
           setRows([]);
@@ -122,11 +149,47 @@ export default function PatientListPage() {
 
   const filtered = useMemo(() => rows.filter((p) => {
     if (search && !p.name.includes(search) && !p.diagnosis.includes(search)) return false;
+    if (pinyinLetter != null && p.leadingPinyinLetter !== pinyinLetter) return false;
     if (statusFilter && p.status !== statusFilter) return false;
     if (accessFilter && p.access !== accessFilter) return false;
     if (zoneFilter && p.zone !== zoneFilter) return false;
     return true;
-  }), [rows, search, statusFilter, accessFilter, zoneFilter]);
+  }), [rows, search, pinyinLetter, statusFilter, accessFilter, zoneFilter]);
+
+  const sortedRows = useMemo(() => {
+    const arr = [...filtered];
+    const nullsLast = (a: number | null, b: number | null) => {
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      return a - b;
+    };
+    const dateCmp = (a: string | null, b: string | null) => {
+      if (!a && !b) return 0;
+      if (!a) return 1;
+      if (!b) return -1;
+      return a.localeCompare(b);
+    };
+    arr.sort((a, b) => {
+      switch (sortMode) {
+        case 'name_pinyin_asc':
+          return (a.namePinyinKey || '').localeCompare(b.namePinyinKey || '', 'en');
+        case 'name_pinyin_desc':
+          return (b.namePinyinKey || '').localeCompare(a.namePinyinKey || '', 'en');
+        case 'age_asc':
+          return nullsLast(a.age, b.age);
+        case 'age_desc':
+          return nullsLast(b.age, a.age);
+        case 'dialysis_start_asc':
+          return dateCmp(a.dialysisStartDate, b.dialysisStartDate);
+        case 'dialysis_start_desc':
+          return dateCmp(b.dialysisStartDate, a.dialysisStartDate);
+        default:
+          return a.loadOrder - b.loadOrder;
+      }
+    });
+    return arr;
+  }, [filtered, sortMode]);
 
   const summary = useMemo(() => ({
     total: rows.length,
@@ -160,7 +223,14 @@ export default function PatientListPage() {
 
   const columns: ColumnsType<PatientRow> = [
     {
-      title: '患者信息',
+      title: (
+        <div>
+          <div style={{ fontWeight: 600 }}>患者信息</div>
+          <Typography.Text type="secondary" style={{ fontSize: 11, fontWeight: 400 }}>
+            拼音排序 · 首字母筛选见上方
+          </Typography.Text>
+        </div>
+      ),
       key: 'patient',
       render: (_, r) => (
         <div className="flex items-center gap-8">
@@ -344,6 +414,21 @@ export default function PatientListPage() {
               { value: 'hcv', label: '丙肝隔离区' },
             ]}
           />
+          <Select
+            placeholder="排序方式"
+            value={sortMode}
+            onChange={(v) => setSortMode(v as PatientSortMode)}
+            style={{ width: 168 }}
+            options={[
+              { value: 'default', label: '默认（加载顺序）' },
+              { value: 'name_pinyin_asc', label: '姓名 · 拼音 A→Z' },
+              { value: 'name_pinyin_desc', label: '姓名 · 拼音 Z→A' },
+              { value: 'age_asc', label: '年龄 · 低到高' },
+              { value: 'age_desc', label: '年龄 · 高到低' },
+              { value: 'dialysis_start_asc', label: '透析开始 · 早→晚' },
+              { value: 'dialysis_start_desc', label: '透析开始 · 晚→早' },
+            ]}
+          />
         </div>
         <div className="hd-filter-bar__right">
           {canCreatePatient ? (
@@ -370,12 +455,53 @@ export default function PatientListPage() {
         </div>
       </div>
 
+      <div
+        className="hd-filter-bar"
+        style={{
+          marginTop: -4,
+          marginBottom: 12,
+          flexWrap: 'wrap',
+          gap: 8,
+          alignItems: 'center',
+        }}
+      >
+        <Typography.Text type="secondary" style={{ marginRight: 4, flexShrink: 0 }}>
+          拼音首字母
+        </Typography.Text>
+        <Space size={[6, 6]} wrap style={{ flex: 1 }}>
+          <Button
+            size="small"
+            type={pinyinLetter === null ? 'primary' : 'default'}
+            onClick={() => setPinyinLetter(null)}
+          >
+            全部
+          </Button>
+          {PINYIN_QUICK_LETTERS.map((ch) => (
+            <Button
+              key={ch}
+              size="small"
+              type={pinyinLetter === ch ? 'primary' : 'default'}
+              onClick={() => setPinyinLetter((prev) => (prev === ch ? null : ch))}
+            >
+              {ch}
+            </Button>
+          ))}
+          <Button
+            size="small"
+            type={pinyinLetter === '#' ? 'primary' : 'default'}
+            onClick={() => setPinyinLetter((prev) => (prev === '#' ? null : '#'))}
+          >
+            #
+          </Button>
+        </Space>
+      </div>
+
       {/* 患者表格 */}
       <Card className="hd-table-card" styles={{ body: { padding: 0 } }}>
         <div className="hd-table-responsive">
         <Table
           rowKey="id"
-          dataSource={filtered}
+          dataSource={sortedRows}
           columns={columns}
           rowClassName={rowClassName}
           pagination={{
@@ -389,7 +515,7 @@ export default function PatientListPage() {
         </div>
       </Card>
       <div className="hd-list-summary">
-        显示 {filtered.length} / {rows.length} 条患者记录
+        显示 {sortedRows.length} / {rows.length} 条患者记录
       </div>
     </PageShell>
   );
