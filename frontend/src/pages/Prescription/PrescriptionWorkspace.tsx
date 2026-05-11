@@ -1946,7 +1946,7 @@ export default function PrescriptionWorkspacePage() {
         </div>
       </div>
 
-      <div className="hd-workspace-frame">
+      <div className="hd-workspace-frame hd-workspace-frame--scroll-split">
         {scheduleTodayRows.length > 0 ? (
           siderCollapsed ? (
             /* ── 折叠态 ── */

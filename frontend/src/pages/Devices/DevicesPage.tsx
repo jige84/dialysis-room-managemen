@@ -115,6 +115,84 @@ function buildNewConsumableSpecification(params: {
   return m || undefined;
 }
 
+/** 品类文案按长度降序，用于从 item_name 前缀拆解「品类 / 型号」 */
+const CONSUMABLE_CATEGORY_LABELS_DESC = [...new Set(CONSUMABLE_CATEGORY_OPTIONS.map((o) => o.label))].sort(
+  (a, b) => b.length - a.length,
+);
+
+function stripDialyzerFluxSuffixFromModel(model: string): string {
+  return model.replace(/\s*（(?:高通量|低通量)）\s*$/u, '').trim();
+}
+
+/** 无品类前缀的旧数据：按 category 与透析归类推断品类展示名 */
+function inferFallbackConsumableCategoryLabel(row: ConsumableStockRow): string {
+  const cat = row.category;
+  const nm = row.item_name ?? '';
+  if (cat === 'needle') {
+    if (/钝/u.test(nm)) return '穿刺针（钝）';
+    if (/锐/u.test(nm)) return '穿刺针（锐）';
+    return '穿刺针';
+  }
+  if (cat === 'blood_tubing') return '管路';
+  if (cat === 'catheter') return '灌流连接管';
+  if (cat === 'other') {
+    if (/补液/u.test(nm)) return '补液管';
+    return '其他';
+  }
+  if (cat === 'dialyzer') {
+    if (row.hemodialysis_piece_role === 'hemoperfusion') return '灌流器';
+    if (row.hemodialysis_piece_role === 'membrane') {
+      if (/血滤/u.test(nm)) return '血滤器';
+      return '透析器';
+    }
+    if (/灌流/u.test(nm)) return '灌流器';
+    if (/血滤/u.test(nm)) return '血滤器';
+    return '透析器';
+  }
+  return '耗材';
+}
+
+/**
+ * 库存总览表：耗材名称列 = 新建时所选品类；规格列 = 型号（与处方仍以完整 item_name 为准）。
+ */
+function consumableStockOverviewDisplay(row: ConsumableStockRow): { categoryLabel: string; modelLabel: string } {
+  const raw = trimNonEmpty(row.item_name);
+  for (const label of CONSUMABLE_CATEGORY_LABELS_DESC) {
+    if (raw.startsWith(label)) {
+      const rest = stripDialyzerFluxSuffixFromModel(raw.slice(label.length).trim());
+      const model = rest || trimNonEmpty(row.specification) || '—';
+      return { categoryLabel: label, modelLabel: model };
+    }
+  }
+
+  const categoryLabel = inferFallbackConsumableCategoryLabel(row);
+  const specFallback = trimNonEmpty(row.specification);
+
+  if (!raw) {
+    return { categoryLabel, modelLabel: specFallback || '—' };
+  }
+
+  if (specFallback && raw === specFallback) {
+    return { categoryLabel, modelLabel: raw };
+  }
+
+  return { categoryLabel, modelLabel: raw };
+}
+
+/** 出库明细无 category 字段：仅前缀拆分；否则保持「名称 / 规格」原样分列 */
+function consumableOutboundLineDisplay(row: OutboundLineRow): { categoryLabel: string; modelLabel: string } {
+  const raw = trimNonEmpty(row.item_name);
+  for (const label of CONSUMABLE_CATEGORY_LABELS_DESC) {
+    if (raw.startsWith(label)) {
+      const rest = stripDialyzerFluxSuffixFromModel(raw.slice(label.length).trim());
+      const model = rest || trimNonEmpty(row.specification) || '—';
+      return { categoryLabel: label, modelLabel: model };
+    }
+  }
+  const spec = trimNonEmpty(row.specification);
+  return { categoryLabel: raw || '—', modelLabel: spec || '—' };
+}
+
 function resolveMachineUiStatus(m: MachineRow): keyof typeof MACHINE_STATUS_UI {
   if (m.status === 'maintenance') return 'maintenance';
   if (m.status === 'fault') return 'fault';
@@ -562,10 +640,15 @@ export default function DevicesPage() {
   const overviewColumns = [
     {
       title: '耗材名称',
-      dataIndex: 'item_name',
-      render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span>,
+      render: (_: unknown, r: ConsumableStockRow) => {
+        const { categoryLabel } = consumableStockOverviewDisplay(r);
+        return <span style={{ fontWeight: 500 }}>{categoryLabel}</span>;
+      },
     },
-    { title: '规格', dataIndex: 'specification', render: (v: string | null) => v || '—' },
+    {
+      title: '规格',
+      render: (_: unknown, r: ConsumableStockRow) => consumableStockOverviewDisplay(r).modelLabel,
+    },
     { title: '单位', dataIndex: 'unit' },
     {
       title: '通量',
@@ -642,8 +725,14 @@ export default function DevicesPage() {
 
   const outboundCols = [
     { title: '日期', dataIndex: 'outbound_date', width: 110 },
-    { title: '耗材', dataIndex: 'item_name' },
-    { title: '规格', dataIndex: 'specification', render: (v: string | null) => v || '—' },
+    {
+      title: '耗材',
+      render: (_: unknown, r: OutboundLineRow) => consumableOutboundLineDisplay(r).categoryLabel,
+    },
+    {
+      title: '规格',
+      render: (_: unknown, r: OutboundLineRow) => consumableOutboundLineDisplay(r).modelLabel,
+    },
     { title: '数量', dataIndex: 'quantity' },
     { title: '患者', dataIndex: 'patient_name' },
     { title: '操作人', dataIndex: 'operated_by_name', render: (v: string | null) => v || '—' },

@@ -55,13 +55,7 @@ export default function DialysisWorkspace() {
   }, [navigate]);
 
   return (
-    <Layout
-      style={{
-        background: 'transparent',
-        gap: 12,
-        minHeight: 'min(70vh, calc(100vh - 140px))',
-      }}
-    >
+    <Layout className="hd-dialysis-workspace-layout" style={{ background: 'transparent' }}>
       <Sider
         width={TODAY_LIST_SIDER_WIDTH}
         collapsedWidth={SIDER_COLLAPSED_WIDTH}

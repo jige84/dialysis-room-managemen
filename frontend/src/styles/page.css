@@ -9,8 +9,16 @@
 }
 
 .hd-main-outlet {
-  min-height: calc(100vh - var(--header-height));
+  flex: 1;
+  min-height: 0;
   background: var(--bg);
+}
+
+/** 透析工作台嵌套路由：主栏裁剪高度，由内层双栏各自滚动 */
+.hd-main-outlet:has(.hd-dialysis-workspace-layout) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .hd-page-shell {
@@ -187,11 +195,25 @@
   min-height: min(72vh, calc(100vh - 180px));
 }
 
+/**
+ * 处方工作台：双栏限制在视口内，左侧名单与右侧表单各自纵向滚动。
+ * --hd-workspace-split-offset：顶栏 + PageShell 留白 + intro + 筛选条及间距（略保守，避免裁切）。
+ */
+.hd-workspace-frame--scroll-split {
+  --hd-workspace-split-offset: calc(var(--header-height) + (var(--hd-page-padding) * 2) + 128px + 56px + 20px);
+  height: calc(100svh - var(--hd-workspace-split-offset));
+  max-height: calc(100svh - var(--hd-workspace-split-offset));
+  min-height: min(360px, calc(100svh - var(--hd-workspace-split-offset)));
+  overflow: hidden;
+}
+
 .hd-workspace-sidebar {
   flex: 0 0 228px;
   width: 228px;
   max-width: 228px;
   align-self: stretch;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -205,6 +227,7 @@
 .hd-workspace-sidebar__head {
   padding: 14px 14px 12px;
   border-bottom: 1px solid #e6edf2;
+  flex-shrink: 0;
 }
 
 .hd-workspace-sidebar__title {
@@ -225,6 +248,11 @@
   border-bottom: 1px solid #eef3f6;
   font-size: 12px;
   color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.hd-workspace-sidebar [role='tablist'] {
+  flex-shrink: 0;
 }
 
 .hd-workspace-sidebar__body {
@@ -238,6 +266,40 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/**
+ * 透析工作台 /dialysis：左侧今日名单 + 右侧录入（Ant Layout）
+ * 依赖 .hd-main-outlet:has(...) 裁剪高度；侧栏 .ant-layout-sider-children 需纵向 flex 才能让名单区 overflow:auto 生效。
+ */
+.hd-dialysis-workspace-layout.ant-layout {
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.hd-dialysis-workspace-layout > .ant-layout-sider {
+  overflow: hidden;
+}
+
+.hd-dialysis-workspace-layout .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hd-dialysis-workspace-layout > .ant-layout-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .hd-record-section {
@@ -526,13 +588,44 @@
     flex-direction: column;
   }
 
+  .hd-workspace-frame--scroll-split {
+    height: auto;
+    max-height: none;
+    min-height: min(52vh, 400px);
+    overflow: visible;
+  }
+
   .hd-workspace-sidebar {
     width: 100%;
     max-width: none;
+    max-height: min(48vh, 380px);
+    height: auto;
   }
 
   .hd-workspace-content {
     width: 100%;
+    max-height: min(62vh, 560px);
+  }
+
+  .hd-main-outlet:has(.hd-dialysis-workspace-layout) {
+    overflow: visible;
+  }
+
+  .hd-dialysis-workspace-layout.ant-layout {
+    flex-direction: column;
+    overflow: visible;
+    flex: 1 1 auto;
+    min-height: min(52vh, 420px);
+  }
+
+  .hd-dialysis-workspace-layout > .ant-layout-sider {
+    max-height: min(46vh, 380px);
+  }
+
+  .hd-dialysis-workspace-layout > .ant-layout-content {
+    flex: 1 1 auto;
+    max-height: min(62vh, 560px);
+    min-height: 200px;
   }
 
   .hd-split-panels {
