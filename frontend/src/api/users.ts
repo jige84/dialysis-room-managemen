@@ -1,7 +1,7 @@
 /**
  * 系统用户 API（仅管理员后端放行）
  */
-import request, { type ApiResponse } from './request';
+import request, { type ApiResponse, type PagedData } from './request';
 
 export type SystemUserRole = 'admin' | 'doctor' | 'nurse' | 'head_nurse' | 'technician' | 'qc' | 'quality';
 
@@ -41,6 +41,24 @@ export interface NursingStaffRow {
   role: 'nurse' | 'head_nurse';
 }
 
+export interface UserAuditLogRow {
+  id: string;
+  user_name: string;
+  user_role: string | null;
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | string;
+  table_name: string | null;
+  record_id: string | null;
+  new_values: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface UserAuditLogQuery {
+  user_id: string;
+  page?: number;
+  page_size?: number;
+}
+
 export const usersApi = {
   list: () => request.get<ApiResponse<UserRow[]>>('/users'),
 
@@ -64,4 +82,10 @@ export const usersApi = {
 
   remove: (id: string) =>
     request.delete<ApiResponse<{ id: string; username: string; real_name: string; role: SystemUserRole }>>(`/users/${id}`),
+
+  /** 管理员查看某用户操作记录（后端 audit_logs 过滤 user_id） */
+  auditLogs: ({ user_id, page = 1, page_size = 10 }: UserAuditLogQuery) =>
+    request.get<ApiResponse<PagedData<UserAuditLogRow>>>('/users/audit-logs', {
+      params: { user_id, page, page_size },
+    }),
 };

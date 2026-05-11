@@ -24,7 +24,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
-import { usersApi, type UserRow, type SystemUserRole } from '../../api/users';
+import { usersApi, type UserAuditLogRow, type UserRow, type SystemUserRole } from '../../api/users';
 import { ROLE_LABELS } from '../../constants/roleLabels';
 import { useAuthStore } from '../../stores/authStore';
 import {
@@ -87,6 +87,12 @@ export default function AdminUsersPage() {
     password: '',
   });
   const [editing, setEditing] = useState<UserRow | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logRows, setLogRows] = useState<UserAuditLogRow[]>([]);
+  const [logTotal, setLogTotal] = useState(0);
+  const [logPage, setLogPage] = useState(1);
+  const [logTarget, setLogTarget] = useState<UserRow | null>(null);
   const [createForm] = Form.useForm<{
     username: string;
     real_name: string;
@@ -261,6 +267,27 @@ export default function AdminUsersPage() {
     }
   };
 
+  const loadUserLogs = useCallback(async (userId: string, page: number) => {
+    setLogLoading(true);
+    try {
+      const res = await usersApi.auditLogs({ user_id: userId, page, page_size: 10 });
+      setLogRows(res.data.data?.list ?? []);
+      setLogTotal(res.data.data?.total ?? 0);
+      setLogPage(res.data.data?.page ?? page);
+    } catch {
+      setLogRows([]);
+      setLogTotal(0);
+    } finally {
+      setLogLoading(false);
+    }
+  }, []);
+
+  const openUserLogs = useCallback((r: UserRow) => {
+    setLogTarget(r);
+    setLogOpen(true);
+    void loadUserLogs(r.id, 1);
+  }, [loadUserLogs]);
+
   const columns: ColumnsType<UserRow> = useMemo(
     () => [
       { title: '用户名', dataIndex: 'username', key: 'username', width: 140 },
@@ -327,6 +354,9 @@ export default function AdminUsersPage() {
               <Button type="link" size="small" onClick={() => openReset(r)}>
                 重置密码
               </Button>
+              <Button type="link" size="small" onClick={() => openUserLogs(r)}>
+                查看日志
+              </Button>
               {!isSelf && (
                 <Popconfirm
                   title={r.is_active ? '确定禁用该用户？' : '确定启用该用户？'}
@@ -357,7 +387,7 @@ export default function AdminUsersPage() {
         },
       },
     ],
-    [currentUserId, handleDelete, handleToggle, openEdit, openReset]
+    [currentUserId, handleDelete, handleToggle, openEdit, openReset, openUserLogs]
   );
 
   return (
@@ -515,6 +545,82 @@ export default function AdminUsersPage() {
           该密码仅本次显示，请通知用户登录后尽快修改。
         </Typography.Text>
       </Modal>
+
+      <Modal
+        title={logTarget ? `操作日志：${logTarget.real_name}（${logTarget.username}）` : '操作日志'}
+        open={logOpen}
+        onCancel={() => {
+          setLogOpen(false);
+          setLogTarget(null);
+          setLogRows([]);
+          setLogTotal(0);
+          setLogPage(1);
+        }}
+        footer={null}
+        width={980}
+      >
+        <Table<UserAuditLogRow>
+          rowKey="id"
+          loading={logLoading}
+          dataSource={logRows}
+          size="small"
+          columns={[
+            {
+              title: '时间',
+              dataIndex: 'created_at',
+              width: 160,
+              render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm:ss'),
+            },
+            {
+              title: '操作',
+              dataIndex: 'action',
+              width: 90,
+              render: (v: string) => formatAuditAction(v),
+            },
+            {
+              title: '表',
+              dataIndex: 'table_name',
+              width: 120,
+              render: (v: string | null) => v || '—',
+            },
+            {
+              title: '记录ID',
+              dataIndex: 'record_id',
+              width: 180,
+              ellipsis: true,
+              render: (v: string | null) => v || '—',
+            },
+            {
+              title: 'IP',
+              dataIndex: 'ip_address',
+              width: 130,
+              render: (v: string | null) => v || '—',
+            },
+            {
+              title: '变更内容',
+              dataIndex: 'new_values',
+              render: (v: Record<string, unknown> | null) => {
+                const text = summarizeAuditPayload(v);
+                return (
+                  <Typography.Text title={text} style={{ fontSize: 12 }}>
+                    {text}
+                  </Typography.Text>
+                );
+              },
+            },
+          ]}
+          pagination={{
+            current: logPage,
+            pageSize: 10,
+            total: logTotal,
+            showSizeChanger: false,
+            onChange: (nextPage) => {
+              if (!logTarget) return;
+              void loadUserLogs(logTarget.id, nextPage);
+            },
+          }}
+        />
+      </Modal>
     </PageShell>
   );
 }
@@ -606,6 +712,23 @@ function formatAiMenuCell(r: UserRow) {
 
 function isFormValidationError(e: unknown): boolean {
   return Boolean(e && typeof e === 'object' && 'errorFields' in e);
+}
+
+function formatAuditAction(action: string): string {
+  if (action === 'CREATE') return '新增';
+  if (action === 'UPDATE') return '更新';
+  if (action === 'DELETE') return '删除';
+  return action || '—';
+}
+
+function summarizeAuditPayload(payload: Record<string, unknown> | null): string {
+  if (!payload || typeof payload !== 'object') return '—';
+  try {
+    const text = JSON.stringify(payload);
+    return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+  } catch {
+    return '—';
+  }
 }
 
 function AiAssistantControls({
