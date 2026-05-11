@@ -446,6 +446,23 @@ body {
   transition: margin-left 0.25s;
 }
 
+/**
+ * 左侧主导航为 fixed，不参与撑高；若不钉死壳高度，hd-app-main 会随 Outlet 内容无限增高，
+ * 透析/处方工作台内「侧栏 + 主区」无法形成独立滚动。
+ */
+.hd-app-frame:has(.hd-dialysis-workspace-layout),
+.hd-app-frame:has(.hd-workspace-frame--scroll-split) {
+  height: 100svh;
+  max-height: 100svh;
+  overflow: hidden;
+}
+
+.hd-app-frame:has(.hd-dialysis-workspace-layout) > .hd-app-main,
+.hd-app-frame:has(.hd-workspace-frame--scroll-split) > .hd-app-main {
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* ══════════════════════════════════════════
    顶部栏
 ══════════════════════════════════════════ */
@@ -997,6 +1014,18 @@ body {
   .hd-app-main {
     margin-left: 0 !important;
     width: 100%;
+  }
+
+  .hd-app-frame:has(.hd-dialysis-workspace-layout),
+  .hd-app-frame:has(.hd-workspace-frame--scroll-split) {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .hd-app-frame:has(.hd-dialysis-workspace-layout) > .hd-app-main,
+  .hd-app-frame:has(.hd-workspace-frame--scroll-split) > .hd-app-main {
+    overflow: visible;
   }
 
   .hd-topbar {

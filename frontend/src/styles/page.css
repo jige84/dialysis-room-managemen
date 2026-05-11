@@ -284,6 +284,8 @@
 
 .hd-dialysis-workspace-layout > .ant-layout-sider {
   overflow: hidden;
+  align-self: stretch;
+  max-height: 100%;
 }
 
 .hd-dialysis-workspace-layout .ant-layout-sider-children {
