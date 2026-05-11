@@ -41,6 +41,8 @@ import {
   dialyzerDisplayShort,
   dialyzerStringForForm,
   hpCartridgeDisplayShort,
+  isDialysisMembraneCatalogRow,
+  isHemoperfusionCatalogRow,
   parseDialyzerFormSelection,
   resolveDialyzerFormValue,
   resolveHpCartridgeFormValue,
@@ -52,6 +54,7 @@ import {
   isolationTagProps,
   ageFromDob,
   groupTodayScheduleRowsByShiftThenZone,
+  normalizeScheduleShiftKey,
 } from '../../utils/dialysisTodayScheduleDisplay';
 import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantToDb } from '../../constants/prescriptionAnticoagulant';
 import { mergeShiftFromPatientProfileIntoFormValues } from '../../constants/dialysisSchedule';
@@ -720,6 +723,10 @@ export default function PrescriptionWorkspacePage() {
   const [postSyncMeta, setPostSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
   const [baselineDryWeight, setBaselineDryWeight] = useState<number | null>(null);
   const [siderCollapsed, setSiderCollapsed] = useState(false);
+  /** 今日排班侧栏：时段筛选（全部 / 上午 / 下午 / 晚上） */
+  const [sidebarScheduleShiftFilter, setSidebarScheduleShiftFilter] = useState<
+    'all' | 'morning' | 'afternoon' | 'evening'
+  >('all');
   const skipPersistRef = useRef(false);
   const baselineDryWeightRef = useRef<number | null>(null);
   const heparinCoreIURef = useRef(0);
@@ -736,8 +743,31 @@ export default function PrescriptionWorkspacePage() {
   /** 选中患者时 GET /patients/:id 拉取的档案快照（机位等以服务端为准，避免列表缓存滞后） */
   const [patientDetailFromApi, setPatientDetailFromApi] = useState<Patient | null>(null);
   const [dialyzerStocks, setDialyzerStocks] = useState<ConsumableStockRow[]>([]);
+  /** 已成功拉取 /devices/consumables：透析器下拉严格跟仓库，不再混入内置 FX 等预设 */
+  const [consumablesCatalogSynced, setConsumablesCatalogSynced] = useState(false);
+  const lastConsumablesPullMsRef = useRef(0);
   const dialyzerStocksRef = useRef<ConsumableStockRow[]>([]);
   dialyzerStocksRef.current = dialyzerStocks;
+
+  const refreshConsumablesCatalog = useCallback(async () => {
+    try {
+      const res = await devicesApi.consumables();
+      const rows = res.data.data;
+      if (Array.isArray(rows)) {
+        setDialyzerStocks(rows);
+        setConsumablesCatalogSynced(true);
+      }
+    } catch {
+      /* 离线：保留已有缓存；从未同步成功时仍为未同步状态（可走内置预设兜底） */
+    }
+  }, []);
+
+  const pullConsumablesCatalogOnInteract = useCallback(() => {
+    const now = Date.now();
+    if (now - lastConsumablesPullMsRef.current < 10_000) return;
+    lastConsumablesPullMsRef.current = now;
+    void refreshConsumablesCatalog();
+  }, [refreshConsumablesCatalog]);
 
   const frequencyPreset = Form.useWatch('frequencyPreset', form);
   const modeWatched = Form.useWatch('mode', form);
@@ -862,8 +892,17 @@ export default function PrescriptionWorkspacePage() {
     return m;
   }, [dialyzerStocks]);
 
+  const membraneStockCount = useMemo(
+    () => dialyzerStocks.filter(isDialysisMembraneCatalogRow).length,
+    [dialyzerStocks],
+  );
+  const hemoperfusionStockCount = useMemo(
+    () => dialyzerStocks.filter(isHemoperfusionCatalogRow).length,
+    [dialyzerStocks],
+  );
+
   const dialyzerOptions = useMemo(() => {
-    const base = buildDialyzerSelectOptions(dialyzerStocks);
+    const base = buildDialyzerSelectOptions(dialyzerStocks, consumablesCatalogSynced);
     const cur = dialyzerWatched;
     if (typeof cur === 'string' && cur.startsWith(LEGACY_DIALYZER_PREFIX)) {
       const exists = base.some((o) => o.value === cur);
@@ -873,7 +912,21 @@ export default function PrescriptionWorkspacePage() {
       }
     }
     return base;
-  }, [dialyzerStocks, dialyzerWatched]);
+  }, [dialyzerStocks, dialyzerWatched, consumablesCatalogSynced]);
+
+  const dialyzerSelectPlaceholder = useMemo(() => {
+    if (consumablesCatalogSynced && membraneStockCount === 0) {
+      return '仓库暂无透析器目录，请在「设备与耗材」维护（透析器/血滤器）';
+    }
+    return '从耗材目录选择';
+  }, [consumablesCatalogSynced, membraneStockCount]);
+
+  const hpCartridgeSelectPlaceholder = useMemo(() => {
+    if (consumablesCatalogSynced && hemoperfusionStockCount === 0) {
+      return '仓库暂无灌流器目录，请在「设备与耗材」维护并归类为灌流器';
+    }
+    return '从耗材目录选择灌流器';
+  }, [consumablesCatalogSynced, hemoperfusionStockCount]);
 
   const hpCartridgeOptions = useMemo(() => {
     const base = buildHemoperfusionSelectOptions(dialyzerStocks);
@@ -961,20 +1014,36 @@ export default function PrescriptionWorkspacePage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    devicesApi
-      .consumables()
-      .then((res: Awaited<ReturnType<typeof devicesApi.consumables>>) => {
-        const rows = res.data.data;
-        if (!cancelled && Array.isArray(rows)) setDialyzerStocks(rows);
-      })
-      .catch(() => {
-        /* 离线时仍可用内置预设选项 */
-      });
-    return () => {
-      cancelled = true;
+    void refreshConsumablesCatalog();
+  }, [refreshConsumablesCatalog]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshConsumablesCatalog();
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [refreshConsumablesCatalog]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void refreshConsumablesCatalog();
     };
-  }, []);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshConsumablesCatalog]);
+
+  useEffect(() => {
+    const onCatalogHint = () => {
+      void refreshConsumablesCatalog();
+    };
+    window.addEventListener('hd-consumables-catalog-changed', onCatalogHint);
+    return () => window.removeEventListener('hd-consumables-catalog-changed', onCatalogHint);
+  }, [refreshConsumablesCatalog]);
+
+  useEffect(() => {
+    if (!isUuid(selectedPatient)) return;
+    void refreshConsumablesCatalog();
+  }, [selectedPatient, refreshConsumablesCatalog]);
 
   useEffect(() => {
     const load = () => {
@@ -1023,10 +1092,30 @@ export default function PrescriptionWorkspacePage() {
     };
   }, [selectedPatient]);
 
-  /** 与透析工作台侧栏「今日上机名单」相同：先班次、再分区 */
-  const scheduleTodayGrouped = useMemo(
-    () => groupTodayScheduleRowsByShiftThenZone(scheduleTodayRows),
-    [scheduleTodayRows],
+  const sidebarShiftTabCounts = useMemo(() => {
+    let morning = 0;
+    let afternoon = 0;
+    let evening = 0;
+    for (const r of scheduleTodayRows) {
+      const k = normalizeScheduleShiftKey(r.shift);
+      if (k === 'morning') morning += 1;
+      else if (k === 'afternoon') afternoon += 1;
+      else if (k === 'evening') evening += 1;
+    }
+    return { morning, afternoon, evening };
+  }, [scheduleTodayRows]);
+
+  const scheduleTodayRowsForSidebar = useMemo(() => {
+    if (sidebarScheduleShiftFilter === 'all') return scheduleTodayRows;
+    return scheduleTodayRows.filter(
+      (r) => normalizeScheduleShiftKey(r.shift) === sidebarScheduleShiftFilter,
+    );
+  }, [scheduleTodayRows, sidebarScheduleShiftFilter]);
+
+  /** 与透析工作台侧栏「今日上机名单」相同：先班次、再分区（受时段筛选影响） */
+  const scheduleTodayGroupedForSidebar = useMemo(
+    () => groupTodayScheduleRowsByShiftThenZone(scheduleTodayRowsForSidebar),
+    [scheduleTodayRowsForSidebar],
   );
 
   /** 保存确认弹窗展示用（演示患者 / 档案列表 / 今日排班） */
@@ -1905,6 +1994,67 @@ export default function PrescriptionWorkspacePage() {
               <span style={{ fontWeight: 700, color: '#0f172a' }}>{scheduleTodayRows.length} 人</span>
               <span style={{ marginLeft: 8 }}>{dayjs().format('YYYY-MM-DD')}</span>
             </div>
+            <div
+              role="tablist"
+              aria-label="按班次筛选今日排班"
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                marginBottom: 10,
+                paddingLeft: 2,
+              }}
+            >
+              {(
+                [
+                  { filterKey: 'all' as const, label: '全部' },
+                  { filterKey: 'morning' as const, label: '上午' },
+                  { filterKey: 'afternoon' as const, label: '下午' },
+                  { filterKey: 'evening' as const, label: '晚上' },
+                ] as const
+              ).map(({ filterKey, label }) => {
+                const count =
+                  filterKey === 'all' ? scheduleTodayRows.length : sidebarShiftTabCounts[filterKey];
+                const selected = sidebarScheduleShiftFilter === filterKey;
+                return (
+                  <button
+                    key={filterKey}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => setSidebarScheduleShiftFilter(filterKey)}
+                    style={{
+                      border: `1px solid ${selected ? '#2563eb' : '#e2e8f0'}`,
+                      background: selected ? '#eff6ff' : '#fff',
+                      borderRadius: 8,
+                      padding: '4px 8px',
+                      fontSize: 11,
+                      fontWeight: selected ? 700 : 600,
+                      color: selected ? '#1d4ed8' : '#475569',
+                      cursor: 'pointer',
+                      lineHeight: 1.3,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <span>{label}</span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        color: selected ? '#1d4ed8' : '#64748b',
+                        background: selected ? '#dbeafe' : '#f1f5f9',
+                        borderRadius: 6,
+                        padding: '0 5px',
+                      }}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
             <div className="hd-workspace-sidebar__body">
               <div
                 style={{
@@ -1913,7 +2063,23 @@ export default function PrescriptionWorkspacePage() {
                   gap: 0,
                 }}
               >
-                {scheduleTodayGrouped.map((shiftBlock, shiftIdx) => (
+                {scheduleTodayGroupedForSidebar.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: '#94a3b8',
+                      padding: '12px 4px',
+                      textAlign: 'center',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {sidebarScheduleShiftFilter === 'all' ? '暂无排班数据' : '该时段暂无排班患者'}
+                  </div>
+                ) : (
+                  scheduleTodayGroupedForSidebar.map((shiftBlock, shiftIdx) => {
+                    const showShiftSectionTitle =
+                      sidebarScheduleShiftFilter === 'all' || scheduleTodayGroupedForSidebar.length > 1;
+                    return (
                   <section
                     key={shiftBlock.shiftKey}
                     style={{
@@ -1922,6 +2088,7 @@ export default function PrescriptionWorkspacePage() {
                       borderTop: shiftIdx > 0 ? '1px solid #EEF2F7' : 'none',
                     }}
                   >
+                    {showShiftSectionTitle ? (
                     <div
                       style={{
                         fontSize: 12,
@@ -1936,6 +2103,7 @@ export default function PrescriptionWorkspacePage() {
                         {shiftBlock.zones.reduce((n, z) => n + z.rows.length, 0)} 人
                       </Tag>
                     </div>
+                    ) : null}
                     {shiftBlock.zones.map((zoneBlock) => (
                       <div key={`${shiftBlock.shiftKey}-${zoneBlock.zoneKey}`} style={{ marginBottom: 10 }}>
                         <div
@@ -2058,7 +2226,9 @@ export default function PrescriptionWorkspacePage() {
                       </div>
                     ))}
                   </section>
-                ))}
+                    );
+                  })
+                )}
               </div>
             </div>
             </aside>
@@ -2344,7 +2514,15 @@ export default function PrescriptionWorkspacePage() {
                 </>
               )}
               <Form.Item label="透析器" name="dialyzer" rules={[{ required: true, message: '请选择透析器' }]}>
-                <Select options={dialyzerOptions} showSearch optionFilterProp="label" placeholder="从耗材目录选择" />
+                <Select
+                  options={dialyzerOptions}
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder={dialyzerSelectPlaceholder}
+                  onDropdownVisibleChange={(open) => {
+                    if (open) pullConsumablesCatalogOnInteract();
+                  }}
+                />
               </Form.Item>
               {modeWatched === 'HD_HP' && (
                 <Form.Item
@@ -2357,7 +2535,10 @@ export default function PrescriptionWorkspacePage() {
                     options={hpCartridgeOptions}
                     showSearch
                     optionFilterProp="label"
-                    placeholder="从耗材目录选择灌流器"
+                    placeholder={hpCartridgeSelectPlaceholder}
+                    onDropdownVisibleChange={(open) => {
+                      if (open) pullConsumablesCatalogOnInteract();
+                    }}
                   />
                 </Form.Item>
               )}

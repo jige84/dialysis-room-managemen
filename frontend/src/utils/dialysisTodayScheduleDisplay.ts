@@ -8,10 +8,10 @@ export function scheduleShiftLabel(shift: string | undefined): string {
   const m: Record<string, string> = {
     morning: '上午',
     afternoon: '下午',
-    evening: '晚班',
+    evening: '晚上',
     am: '上午',
     pm: '下午',
-    eve: '晚班',
+    eve: '晚上',
   };
   if (!shift) return '—';
   return m[String(shift).toLowerCase()] ?? shift;
@@ -97,7 +97,7 @@ export function normalizeIsolationZoneKey(zone: string | null | undefined): Norm
 function shiftSectionTitle(shiftKey: NormalizedShiftKey, sampleShift: string | undefined): string {
   if (shiftKey === 'morning') return '上午';
   if (shiftKey === 'afternoon') return '下午';
-  if (shiftKey === 'evening') return '晚班';
+  if (shiftKey === 'evening') return '晚上';
   return scheduleShiftLabel(sampleShift);
 }
 

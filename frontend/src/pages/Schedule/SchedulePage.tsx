@@ -90,6 +90,63 @@ function scheduleDialysisModeLabel(mode: string | null | undefined): string {
   return map[u] || map[raw] || raw;
 }
 
+/** 排序键：优先透析机 machine_no，其次档案约定机位（格内展示常与之一致） */
+function scheduleSlotMachineLabelForSort(p: PatientSlot): string {
+  const no = p.machineNo?.trim();
+  if (no) return no;
+  return (p.machineStation ?? '').trim();
+}
+
+/**
+ * 机器标识排序：纯数字 → 字母+数字（如 B11）→ 中文等（急诊机、备用机）；空串靠后。
+ */
+function compareDialysisMachineLabels(aRaw: string, bRaw: string): number {
+  const a = String(aRaw ?? '').trim();
+  const b = String(bRaw ?? '').trim();
+  if (a === '' && b === '') return 0;
+  if (a === '') return 1;
+  if (b === '') return -1;
+
+  const tier = (s: string): number => {
+    if (/^\d+$/.test(s)) return 0;
+    if (/^[A-Za-z]+\d*$/.test(s)) return 1;
+    return 2;
+  };
+  const ta = tier(a);
+  const tb = tier(b);
+  if (ta !== tb) return ta - tb;
+
+  if (ta === 0) return Number(a) - Number(b);
+
+  if (ta === 1) {
+    const ma = a.match(/^([A-Za-z]+)(\d*)$/);
+    const mb = b.match(/^([A-Za-z]+)(\d*)$/);
+    const pa = ma?.[1] ?? '';
+    const pb = mb?.[1] ?? '';
+    if (pa.toLowerCase() !== pb.toLowerCase()) {
+      return pa.localeCompare(pb, 'en', { sensitivity: 'base' });
+    }
+    const na = ma?.[2] ? Number(ma[2]) : 0;
+    const nb = mb?.[2] ? Number(mb[2]) : 0;
+    return na - nb;
+  }
+
+  return a.localeCompare(b, 'zh-CN', { numeric: true });
+}
+
+function comparePatientSlotsByMachine(a: PatientSlot, b: PatientSlot): number {
+  const byMachine = compareDialysisMachineLabels(
+    scheduleSlotMachineLabelForSort(a),
+    scheduleSlotMachineLabelForSort(b),
+  );
+  if (byMachine !== 0) return byMachine;
+  return a.name.localeCompare(b.name, 'zh-CN');
+}
+
+function sortPatientSlotsByMachine(patients: PatientSlot[]): PatientSlot[] {
+  return [...patients].sort(comparePatientSlotsByMachine);
+}
+
 /** PATCH 排班后立刻更新周视图中的本条记录，避免仅依赖重新拉取时界面仍显示旧透析模式 */
 /** 后端提示迁移/处方未写入时用警告样式，避免误以为已完全同步 */
 function shouldWarnScheduleSyncMessage(text: string | undefined): boolean {
@@ -326,7 +383,8 @@ export default function SchedulePage() {
 
   const cellPatientsForModal = useMemo(() => {
     if (!weekData || !cellCtx) return [];
-    return weekData.cells[cellCtx.shiftKey]?.[cellCtx.date]?.patients ?? [];
+    const raw = weekData.cells[cellCtx.shiftKey]?.[cellCtx.date]?.patients ?? [];
+    return sortPatientSlotsByMachine(raw);
   }, [weekData, cellCtx]);
 
   const weekPatientOverviewRows = useMemo(() => {
@@ -361,6 +419,8 @@ export default function SchedulePage() {
       if (d !== 0) return d;
       const sd = order.indexOf(a.shiftKey) - order.indexOf(b.shiftKey);
       if (sd !== 0) return sd;
+      const sm = comparePatientSlotsByMachine(a.slot, b.slot);
+      if (sm !== 0) return sm;
       return a.slot.name.localeCompare(b.slot.name, 'zh-CN');
     });
     return out;
@@ -884,7 +944,7 @@ export default function SchedulePage() {
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                  {cell.patients.map((p) => (
+                                  {sortPatientSlotsByMachine(cell.patients).map((p) => (
                                     <div
                                       key={p.scheduleId}
                                       style={{

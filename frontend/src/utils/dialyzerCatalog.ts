@@ -124,9 +124,14 @@ export function resolveDialyzerFormValue(
   return narrowed[0].id;
 }
 
-export function buildDialyzerSelectOptions(stocks: ConsumableStockRow[]): { value: string; label: string }[] {
+export function buildDialyzerSelectOptions(
+  stocks: ConsumableStockRow[],
+  /** API 已成功同步仓库后：仅展示仓库中的透析膜材，不再混入内置预设 */
+  strictWarehouseOnly = false,
+): { value: string; label: string }[] {
   const rows = dialysisMembraneRows(stocks);
   if (rows.length === 0) {
+    if (strictWarehouseOnly) return [];
     return getDialyzerSelectOptions().map((o) => ({
       value: `${LEGACY_DIALYZER_PREFIX}${o.value}`,
       label: o.label,

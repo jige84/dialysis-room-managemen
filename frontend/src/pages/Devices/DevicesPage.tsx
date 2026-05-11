@@ -195,6 +195,7 @@ export default function DevicesPage() {
       setMachines(mRes.data.data ?? []);
       setConsumables(cRes.data.data ?? []);
       setTodaySummary(tRes.data.data ?? null);
+      window.dispatchEvent(new CustomEvent('hd-consumables-catalog-changed'));
     } catch {
       message.error('加载设备耗材数据失败');
     } finally {
