@@ -72,11 +72,18 @@ function normalizeResultText(result?: string | null): string {
   return String(result);
 }
 
+/** 筛查日期展示：后端常为 ISO UTC（…Z），按浏览器本地时区格式化为日历日期 */
+function formatScreeningDate(date: string | null | undefined): string {
+  if (date == null || !String(date).trim()) return '-';
+  const d = dayjs(date);
+  return d.isValid() ? d.format('YYYY-MM-DD') : String(date);
+}
+
 function getScreeningStatus(result?: string | null, date?: string | null): ScreeningStatus {
   const normalized = String(result || '').toLowerCase();
   if (!date) return 'missing';
   if (normalized === 'positive') return 'positive';
-  const days = dayjs().diff(dayjs(date), 'day');
+  const days = dayjs().startOf('day').diff(dayjs(date).startOf('day'), 'day');
   if (days >= 185) return 'overdue';
   if (days >= 175) return 'warning';
   return 'normal';
@@ -114,7 +121,7 @@ function ScreeningCell({ item }: { item: { result: string; date: string | null; 
   return (
     <Space direction="vertical" size={0}>
       <Tag color={meta.color}>{item.result}</Tag>
-      <span style={{ color: '#64748b', fontSize: 12 }}>{item.date || '-'}</span>
+      <span style={{ color: '#64748b', fontSize: 12 }}>{formatScreeningDate(item.date)}</span>
     </Space>
   );
 }
@@ -442,7 +449,7 @@ function OverdueSummary() {
       columns={[
         { title: '患者', dataIndex: 'name' },
         { title: '筛查项目', dataIndex: 'screen_type', render: (v) => v || '未筛查' },
-        { title: '最近日期', dataIndex: 'screen_date', render: (v) => v || '-' },
+        { title: '最近日期', dataIndex: 'screen_date', render: (v: string | null) => formatScreeningDate(v) },
       ]}
     />
   );
