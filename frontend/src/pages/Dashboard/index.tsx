@@ -175,7 +175,7 @@ export default function DashboardPage() {
           patientsApi.stats(),
           dialysisApi.statsDaily(todayStr),
           scheduleApi.getToday(),
-          scheduleApi.getWeek(weekStart),
+          scheduleApi.getWeek(weekStart).catch((): null => null),
           alertsApi.summary(),
           alertsApi.list({ status: 'active', page_size: 8 }),
           reportsApi.getQCUpload(y, m),

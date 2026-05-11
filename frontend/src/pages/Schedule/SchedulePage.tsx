@@ -276,7 +276,11 @@ export default function SchedulePage() {
   const [showModal, setShowModal] = useState(false);
   const [weeklyPlan, setWeeklyPlan] = useState<string>('');
   const [form] = Form.useForm();
-  const { canSchedule } = usePermission();
+  const {
+    canPatientScheduleRead,
+    canPatientScheduleWrite,
+    canNurseScheduleWrite,
+  } = usePermission();
 
   const [machines, setMachines] = useState<MachineRow[]>([]);
   const [cellModalOpen, setCellModalOpen] = useState(false);
@@ -430,6 +434,7 @@ export default function SchedulePage() {
   }, [weekData]);
 
   const openCellModal = (date: string, shiftKey: ShiftKey) => {
+    if (!canPatientScheduleWrite) return;
     setCellCtx({ date, shiftKey });
     setAddPatientId(undefined);
     setAddPatientIsolation(undefined);
@@ -442,6 +447,7 @@ export default function SchedulePage() {
   };
 
   const openSlotHemoModal = (slot: PatientSlot, scheduleDate: string) => {
+    if (!canPatientScheduleRead) return;
     setSlotHemoEditing(slot);
     setSlotHemoScheduleDate(scheduleDate);
     slotHemoForm.setFieldsValue({
@@ -462,7 +468,7 @@ export default function SchedulePage() {
   };
 
   const handleSaveSlotHemo = async () => {
-    if (!slotHemoEditing || !canSchedule) return;
+    if (!slotHemoEditing || !canPatientScheduleWrite) return;
     const v = await slotHemoForm.validateFields();
     const scheduleId = slotHemoEditing.scheduleId;
     const patientId = slotHemoEditing.patientId;
@@ -500,7 +506,7 @@ export default function SchedulePage() {
   };
 
   const handleGenerateWeek = () => {
-    if (!canSchedule) return;
+    if (!canPatientScheduleWrite) return;
     Modal.confirm({
       title: '按患者档案生成本周排班？',
       content:
@@ -592,6 +598,7 @@ export default function SchedulePage() {
   };
 
   const handleDeleteSlot = async (scheduleId: string) => {
+    if (!canPatientScheduleWrite) return;
     try {
       await scheduleApi.deleteSlot(scheduleId);
       message.success('已删除排班');
@@ -603,6 +610,7 @@ export default function SchedulePage() {
   };
 
   const handleChangeMachine = async (scheduleId: string, machineId: string) => {
+    if (!canPatientScheduleWrite) return;
     try {
       await scheduleApi.updateSlot(scheduleId, { machine_id: machineId });
       message.success('机位已更新');
@@ -614,6 +622,7 @@ export default function SchedulePage() {
   };
 
   const handleAddSlot = async () => {
+    if (!canPatientScheduleWrite) return;
     if (!cellCtx || !addPatientId || !addMachineId) return;
     try {
       const remarkTrim = addScheduleRemark.trim();
@@ -693,8 +702,7 @@ export default function SchedulePage() {
   };
 
   const handleOpenModal = () => {
-    if (!canSchedule) return;
-    setShowModal(true);
+    if (!canNurseScheduleWrite) return;
   };
 
   const cellShiftLabel = cellCtx
@@ -737,12 +745,14 @@ export default function SchedulePage() {
           <div className="hd-stat-value num">{todayStats.nurses}</div>
           <div className="hd-stat-meta">按护士排班统计</div>
         </div>
+        {canPatientScheduleRead ? (
         <div className="hd-stat-card amber">
           <div className="hd-stat-icon">💉</div>
           <div className="hd-stat-label">今日安排患者</div>
           <div className="hd-stat-value num">{todayStats.patients}</div>
           <div className="hd-stat-meta">所有班次合计</div>
         </div>
+        ) : null}
         {nonCompliantCount > 0 ? (
           <div className="hd-stat-card red">
             <div className="hd-stat-icon">⚠️</div>
@@ -760,7 +770,7 @@ export default function SchedulePage() {
         )}
       </div>
 
-      {todayDialysisRows.length > 0 && (
+      {canPatientScheduleRead && todayDialysisRows.length > 0 && (
         <Alert
           type="info"
           showIcon
@@ -858,20 +868,28 @@ export default function SchedulePage() {
           </div>
         }
         extra={
-          canSchedule && (
+          (canPatientScheduleWrite || canNurseScheduleWrite) ? (
             <Space size={10} wrap>
-              <Button onClick={() => setWeekPatientAdjustOpen(true)}>
-                本周患者调班
-              </Button>
-              <Button loading={generating} onClick={handleGenerateWeek}>
-                按档案生成本周
-              </Button>
-              <span style={{ display: 'inline-block', width: 1, height: 16, background: 'var(--border)', verticalAlign: 'middle', margin: '0 2px' }} />
-              <Button type="primary" onClick={handleOpenModal}>
-                ＋ 调整排班（护士）
-              </Button>
+              {canPatientScheduleWrite ? (
+                <>
+                  <Button onClick={() => setWeekPatientAdjustOpen(true)}>
+                    本周患者调班
+                  </Button>
+                  <Button loading={generating} onClick={handleGenerateWeek}>
+                    按档案生成本周
+                  </Button>
+                </>
+              ) : null}
+              {canPatientScheduleWrite && canNurseScheduleWrite ? (
+                <span style={{ display: 'inline-block', width: 1, height: 16, background: 'var(--border)', verticalAlign: 'middle', margin: '0 2px' }} />
+              ) : null}
+              {canNurseScheduleWrite ? (
+                <Button type="primary" onClick={handleOpenModal}>
+                  ＋ 调整排班（护士）
+                </Button>
+              ) : null}
             </Space>
-          )
+          ) : null
         }
       >
         <Spin spinning={loading}>
@@ -920,7 +938,7 @@ export default function SchedulePage() {
                       return (
                         <td key={day} style={{ padding: 8, borderBottom: '1px solid #DBEAFE', borderRight: '1px solid #DBEAFE', background: isToday ? '#F0F9FF' : 'transparent', verticalAlign: 'top' }}>
                           <div>
-                            {canSchedule && (
+                            {canPatientScheduleWrite && (
                               <div style={{ marginBottom: 4 }}>
                                 <Button
                                   type="link"
@@ -932,7 +950,25 @@ export default function SchedulePage() {
                                 </Button>
                               </div>
                             )}
-                            {cell && cell.patients.length > 0 ? (
+                            {cell && cell.patients.length > 0 && !canPatientScheduleRead ? (
+                              <div>
+                                <div className="flex items-center gap-4" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                  {cell.ratio !== '—' && (
+                                    <span style={{ background: cell.compliant ? '#ECFDF5' : '#FFF1F2', color: cell.compliant ? '#059669' : '#BE123C', padding: '1px 6px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>
+                                      {cell.ratio}
+                                    </span>
+                                  )}
+                                  {cell.nurses.length > 0 && (
+                                    <span style={{ fontSize: 11, color: '#7B92BC' }}>
+                                      {cell.nurses.map((n) => n.name).join('·')}
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11, color: '#94a3b8', padding: '4px 0', lineHeight: 1.45 }}>
+                                  本格已安排 {cell.patients.length} 位患者（无患者排班查看权限，详情已隐藏）
+                                </div>
+                              </div>
+                            ) : cell && cell.patients.length > 0 && canPatientScheduleRead ? (
                               <div>
                                 <div className="flex items-center gap-4" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
                                   {cell.ratio !== '—' && (
@@ -1047,7 +1083,7 @@ export default function SchedulePage() {
 
       <NurseScheduleBlankTemplate
         weekStart={currentWeek}
-        canEdit={canSchedule}
+        canEdit={canNurseScheduleWrite}
         weekSchedule={weekData}
         weekScheduleLoading={loading}
       />
@@ -1060,7 +1096,7 @@ export default function SchedulePage() {
             <div className="hd-alert-title">本周 {nonCompliantCount} 个班次护患比超标（&gt; 1:5）</div>
             <div className="hd-alert-desc">请合理分配护士与患者，确保护患比 ≤ 1:5</div>
           </div>
-          {canSchedule && (
+          {canNurseScheduleWrite && (
             <Button size="small" type="default" onClick={handleOpenModal}>
               调整护士排班
             </Button>
@@ -1137,7 +1173,7 @@ export default function SchedulePage() {
                   value={row.machineId ?? undefined}
                   options={machineOptionsForSlot(row, machines, cellPatientsForModal)}
                   onChange={(v) => handleChangeMachine(row.scheduleId, v)}
-                  disabled={!canSchedule}
+                  disabled={!canPatientScheduleWrite}
                 />
               ),
             },
@@ -1147,7 +1183,7 @@ export default function SchedulePage() {
               width: 72,
               render: (_, row) => (
                 <Popconfirm title="确定删除该排班？" onConfirm={() => handleDeleteSlot(row.scheduleId)}>
-                  <Button type="link" size="small" danger disabled={!canSchedule}>
+                  <Button type="link" size="small" danger disabled={!canPatientScheduleWrite}>
                     删除
                   </Button>
                 </Popconfirm>
@@ -1231,7 +1267,7 @@ export default function SchedulePage() {
         width={440}
         destroyOnClose
         footer={
-          canSchedule ? (
+          canPatientScheduleWrite ? (
             <Space>
               <Button onClick={appendHeparinToSlotHemo}>无肝素</Button>
               <Button type="primary" onClick={handleSaveSlotHemo}>
@@ -1246,7 +1282,7 @@ export default function SchedulePage() {
         <p style={{ color: '#64748B', fontSize: 12, marginBottom: 12 }}>
           透析模式（HD / HDF / HD+HP）与档案中的「腹透／血透」类别是不同概念；默认 HD、备注空。保存后写入本条排班；<strong>仅在上机当日</strong>同步至患者当前透析处方（提前排班请在上机日在透析处方中确认）。
         </p>
-        <Form form={slotHemoForm} layout="vertical" disabled={!canSchedule}>
+        <Form form={slotHemoForm} layout="vertical" disabled={!canPatientScheduleWrite}>
           <Form.Item name="modality" label="透析模式" rules={[{ required: true, message: '请选择透析模式' }]}>
             <Select options={HEMO_MODALITY_OPTIONS} placeholder="默认 HD" />
           </Form.Item>
@@ -1329,7 +1365,7 @@ export default function SchedulePage() {
                 <Button
                   type="link"
                   size="small"
-                  disabled={!canSchedule}
+                  disabled={!canPatientScheduleWrite}
                   onClick={() => {
                     setWeekPatientAdjustOpen(false);
                     openCellModal(r.date, r.shiftKey);

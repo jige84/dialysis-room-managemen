@@ -8,6 +8,7 @@ import type { SidebarMenuKey } from '../constants/sidebarModules';
 import type { AiAssistantFeaturePermissionKey } from '../constants/aiAssistantFeatures';
 import { hasAiAssistantFeature, isMenuKeyAllowed } from './menuAccess';
 import { canRoleAccessClinicalAi } from '../constants/sidebarModules';
+import { resolveScheduleCaps } from './schedulePermissions';
 
 export const usePermission = () => {
   const role = useAuthStore((s) => s.user?.role);
@@ -17,10 +18,23 @@ export const usePermission = () => {
   const canUseAiModule = (key: SidebarMenuKey) => isMenuKeyAllowed(key, menuPermissions, role);
   const canManageAiKnowledge = canUseAiModule('/ai/knowledge') && canRoleAccessClinicalAi(role);
 
+  const schedCaps = resolveScheduleCaps(menuPermissions);
+  const scheduleMutationRole = !!role && ['admin', 'head_nurse'].includes(role);
+  const canPatientScheduleRead = schedCaps.patientRead;
+  const canPatientScheduleWrite = scheduleMutationRole && schedCaps.patientWrite;
+  const canNurseScheduleRead = schedCaps.nurseRead;
+  const canNurseScheduleWrite = scheduleMutationRole && schedCaps.nurseWrite;
+  /** @deprecated 请改用 canPatientScheduleWrite / canNurseScheduleWrite */
+  const canSchedule = canPatientScheduleWrite || canNurseScheduleWrite;
+
   return {
     canWrite:       !!role && ['admin', 'head_nurse', 'nurse', 'doctor'].includes(role),
     canManageUsers: role === 'admin',
-    canSchedule:    !!role && ['admin', 'head_nurse'].includes(role),
+    canSchedule,
+    canPatientScheduleRead,
+    canPatientScheduleWrite,
+    canNurseScheduleRead,
+    canNurseScheduleWrite,
     canExportData:  !!role && ['admin', 'head_nurse'].includes(role),
     canViewReports: !!role && ['admin', 'head_nurse', 'quality', 'qc'].includes(role),
     canPrescribe:   !!role && ['admin', 'doctor'].includes(role),

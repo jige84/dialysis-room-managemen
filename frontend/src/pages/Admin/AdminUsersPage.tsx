@@ -30,6 +30,7 @@ import { useAuthStore } from '../../stores/authStore';
 import {
   AI_CLINICAL_MENU_KEYS,
   SIDEBAR_NAV_SECTIONS,
+  SCHEDULE_PERMISSION_KEYS,
   menuKeysConfigurableForRole,
 } from '../../constants/sidebarModules';
 import { AI_ASSISTANT_FEATURES, AI_ASSISTANT_FEATURE_KEYS } from '../../constants/aiAssistantFeatures';
@@ -545,9 +546,17 @@ function normalizeRoleForForm(role: string): SystemUserRole {
 function mergePermissionsForForm(role: SystemUserRole, stored: string[] | null | undefined): string[] {
   const full = menuKeysConfigurableForRole(role);
   if (stored === null || stored === undefined) return full;
-  const fromSidebar = full.filter(k => stored.includes(k));
-  const feats = AI_ASSISTANT_FEATURE_KEYS.filter(k => stored.includes(k));
-  return [...new Set([...fromSidebar, ...feats])];
+  const expandedStored = new Set<string>();
+  for (const k of stored) {
+    if (k === '/schedule') {
+      SCHEDULE_PERMISSION_KEYS.forEach((sk) => expandedStored.add(sk));
+    } else {
+      expandedStored.add(k);
+    }
+  }
+  const fromConfigurable = full.filter((k) => expandedStored.has(k));
+  const feats = AI_ASSISTANT_FEATURE_KEYS.filter((k) => stored.includes(k));
+  return [...new Set([...fromConfigurable, ...feats])];
 }
 
 /** 与保存时「menu_permissions: null」的默认全开语义一致：不得含任一 ai_feat:* */
@@ -673,6 +682,121 @@ interface MenuKeysEditorProps {
   role: SystemUserRole;
 }
 
+function SchedulePermissionsControls({
+  menuKeys,
+  onChange,
+  role,
+}: {
+  menuKeys: string[];
+  onChange: (next: string[]) => void;
+  role: SystemUserRole;
+}) {
+  const allowed = new Set(menuKeysConfigurableForRole(role));
+
+  const stripPatient = (keys: string[]) =>
+    keys.filter((k) => k !== 'schedule_patient:read' && k !== 'schedule_patient:write');
+  const stripNurse = (keys: string[]) =>
+    keys.filter((k) => k !== 'schedule_nurse:read' && k !== 'schedule_nurse:write');
+
+  const pr = menuKeys.includes('schedule_patient:read');
+  const pw = menuKeys.includes('schedule_patient:write');
+  const nr = menuKeys.includes('schedule_nurse:read');
+  const nw = menuKeys.includes('schedule_nurse:write');
+
+  const setPatientRead = (on: boolean) => {
+    const next = stripPatient(menuKeys);
+    if (on) {
+      next.push('schedule_patient:read');
+      if (pw) next.push('schedule_patient:write');
+    }
+    onChange(next);
+  };
+
+  const setPatientWrite = (on: boolean) => {
+    const next = stripPatient(menuKeys);
+    if (on) {
+      next.push('schedule_patient:read', 'schedule_patient:write');
+    } else if (pr) {
+      next.push('schedule_patient:read');
+    }
+    onChange(next);
+  };
+
+  const setNurseRead = (on: boolean) => {
+    const next = stripNurse(menuKeys);
+    if (on) {
+      next.push('schedule_nurse:read');
+      if (nw) next.push('schedule_nurse:write');
+    }
+    onChange(next);
+  };
+
+  const setNurseWrite = (on: boolean) => {
+    const next = stripNurse(menuKeys);
+    if (on) {
+      next.push('schedule_nurse:read', 'schedule_nurse:write');
+    } else if (nr) {
+      next.push('schedule_nurse:read');
+    }
+    onChange(next);
+  };
+
+  const patientReadAllowed = allowed.has('schedule_patient:read');
+  const patientWriteAllowed = allowed.has('schedule_patient:write');
+  const nurseReadAllowed = allowed.has('schedule_nurse:read');
+  const nurseWriteAllowed = allowed.has('schedule_nurse:write');
+
+  return (
+    <div style={{ paddingLeft: 8, borderLeft: '2px solid #bae6fd' }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+        患者排班与护士排班分开授权：「只读」可进入排班页查看对应区块；「修改」需账号角色为管理员或护士长，且用于调整机位/患者班次或护士人力。
+      </Typography.Text>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <div>
+          <Typography.Text strong>患者排班</Typography.Text>
+          <div style={{ marginTop: 6 }}>
+            <Checkbox
+              disabled={!patientReadAllowed}
+              checked={pr || pw}
+              onChange={(e) => setPatientRead(e.target.checked)}
+            >
+              只读
+            </Checkbox>
+            <Checkbox
+              disabled={!patientWriteAllowed}
+              checked={pw}
+              style={{ marginLeft: 16 }}
+              onChange={(e) => setPatientWrite(e.target.checked)}
+            >
+              修改
+            </Checkbox>
+          </div>
+        </div>
+        <div>
+          <Typography.Text strong>护士排班</Typography.Text>
+          <div style={{ marginTop: 6 }}>
+            <Checkbox
+              disabled={!nurseReadAllowed}
+              checked={nr || nw}
+              onChange={(e) => setNurseRead(e.target.checked)}
+            >
+              只读
+            </Checkbox>
+            <Checkbox
+              disabled={!nurseWriteAllowed}
+              checked={nw}
+              style={{ marginLeft: 16 }}
+              onChange={(e) => setNurseWrite(e.target.checked)}
+            >
+              修改
+            </Checkbox>
+          </div>
+        </div>
+      </Space>
+    </div>
+  );
+}
+
 function MenuKeysEditor({ value = [], onChange, role }: MenuKeysEditorProps) {
   const allowed = menuKeysConfigurableForRole(role);
   const menuKeys = value;
@@ -690,7 +814,9 @@ function MenuKeysEditor({ value = [], onChange, role }: MenuKeysEditorProps) {
           )}
           <Typography.Text type="secondary">{section.title}</Typography.Text>
           <div style={{ marginTop: 8 }}>
-            {section.title === 'AI 临床分析' ? (
+            {section.title === '专项管理' ? (
+              <SchedulePermissionsControls menuKeys={menuKeys} onChange={setMenuKeys} role={role} />
+            ) : section.title === 'AI 临床分析' ? (
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 {canConfigureAiAssistant ? (
                   <AiAssistantControls menuKeys={menuKeys} onChange={setMenuKeys} />

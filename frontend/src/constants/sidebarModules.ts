@@ -3,6 +3,16 @@
  */
 export type SidebarMenuKey = (typeof ALL_SIDEBAR_MENU_KEYS)[number];
 
+/** 排班细分权限（写入隐含可读），存入 users.menu_permissions；旧数据可用 `/schedule` 表示四项全开 */
+export const SCHEDULE_PERMISSION_KEYS = [
+  'schedule_patient:read',
+  'schedule_patient:write',
+  'schedule_nurse:read',
+  'schedule_nurse:write',
+] as const;
+
+export type SchedulePermissionKey = (typeof SCHEDULE_PERMISSION_KEYS)[number];
+
 /** 与后端 users.menu_permissions 白名单一致 */
 export const ALL_SIDEBAR_MENU_KEYS = [
   '/dashboard',
@@ -107,13 +117,15 @@ export const SIDEBAR_NAV_SECTIONS: SidebarNavSection[] = [
 ];
 
 /** 某角色可配置的模块 key（非管理员不可勾选仅管理员侧栏项） */
-export function menuKeysConfigurableForRole(role: string): SidebarMenuKey[] {
+export function menuKeysConfigurableForRole(role: string): string[] {
   const isAdmin = role === 'admin';
-  let keys = isAdmin
+  let keys: SidebarMenuKey[] = isAdmin
     ? [...ALL_SIDEBAR_MENU_KEYS]
-    : ALL_SIDEBAR_MENU_KEYS.filter(k => !ADMIN_ONLY_MENU_KEYS.includes(k));
+    : ALL_SIDEBAR_MENU_KEYS.filter((k) => !ADMIN_ONLY_MENU_KEYS.includes(k));
   if (!canRoleAccessClinicalAi(role)) {
-    keys = keys.filter(k => !AI_CLINICAL_MENU_KEYS.includes(k));
+    keys = keys.filter((k) => !AI_CLINICAL_MENU_KEYS.includes(k));
   }
-  return keys;
+  return keys.flatMap((k) =>
+    k === '/schedule' ? [...SCHEDULE_PERMISSION_KEYS] : [k],
+  );
 }

@@ -22,6 +22,13 @@ const {
   validateScheduleRulePayload,
   validateNurseAdjustPayload,
 } = require('../validators/scheduleValidators');
+const {
+  requireScheduleWeekView,
+  requireSchedulePatientRead,
+  requireScheduleNurseRead,
+  requireSchedulePatientWrite,
+  requireScheduleNurseWrite,
+} = require('../middleware/schedulePermissionCaps');
 
 const NURSE_SHEET_ROW_COUNT = 14;
 
@@ -589,7 +596,7 @@ async function queryWeekPatientScheduleRows(weekStart, weekEnd) {
 }
 
 // GET /api/schedule/week?start_date=2026-04-06 - 获取当周排班（周视图）
-router.get('/week', auth, async (req, res, next) => {
+router.get('/week', auth, requireScheduleWeekView, async (req, res, next) => {
   try {
     const { start_date: queryStart } = req.query;
     const startValid = validateOptionalStartDate(queryStart);
@@ -703,7 +710,12 @@ router.get('/week', auth, async (req, res, next) => {
 });
 
 // POST /api/schedule/generate-week — 按患者档案 dialysis_schedule_code 生成本周实例（不覆盖已有排班）
-router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.post(
+  '/generate-week',
+  auth,
+  rbac(['admin', 'head_nurse']),
+  requireSchedulePatientWrite,
+  async (req, res, next) => {
   try {
     const { start_date: bodyStart } = req.body || {};
     const startValid = validateOptionalStartDate(bodyStart);
@@ -876,7 +888,7 @@ router.post('/generate-week', auth, rbac(['admin', 'head_nurse']), async (req, r
 });
 
 // POST /api/schedule/slots — 手动新增单条患者排班
-router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.post('/slots', auth, rbac(['admin', 'head_nurse']), requireSchedulePatientWrite, async (req, res, next) => {
   try {
     const payloadValid = validateCreateSlotPayload(req.body);
     if (!payloadValid.ok) return error(res, payloadValid.message, payloadValid.statusCode || 400);
@@ -1021,7 +1033,7 @@ router.post('/slots', auth, rbac(['admin', 'head_nurse']), async (req, res, next
 });
 
 // PATCH /api/schedule/slots/:id — 调整日期/班次/机位/状态
-router.patch('/slots/:id', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.patch('/slots/:id', auth, rbac(['admin', 'head_nurse']), requireSchedulePatientWrite, async (req, res, next) => {
   try {
     const { id } = req.params;
     const idValid = validateScheduleSlotId(id);
@@ -1343,7 +1355,7 @@ router.patch('/slots/:id', auth, rbac(['admin', 'head_nurse']), async (req, res,
 });
 
 // DELETE /api/schedule/slots/:id — 删除排班实例
-router.delete('/slots/:id', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.delete('/slots/:id', auth, rbac(['admin', 'head_nurse']), requireSchedulePatientWrite, async (req, res, next) => {
   try {
     const { id } = req.params;
     const idValid = validateScheduleSlotId(id);
@@ -1401,7 +1413,7 @@ router.get('/today', auth, async (req, res, next) => {
 });
 
 // GET /api/schedule/nurse-sheet?week_start=YYYY-MM-DD — 护士长排班空白表（按周）
-router.get('/nurse-sheet', auth, async (req, res, next) => {
+router.get('/nurse-sheet', auth, requireScheduleNurseRead, async (req, res, next) => {
   try {
     const weekValid = validateNurseSheetWeekStart(req.query.week_start);
     if (!weekValid.ok) return error(res, weekValid.message, weekValid.statusCode || 400);
@@ -1437,7 +1449,7 @@ router.get('/nurse-sheet', auth, async (req, res, next) => {
 });
 
 // PUT /api/schedule/nurse-sheet — 保存护士长排班空白表
-router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), requireScheduleNurseWrite, async (req, res, next) => {
   try {
     const { week_start_date: weekStart, rows: bodyRows, white_zone: bodyWhiteZone } = req.body || {};
     const weekValid = validateNurseSheetWeekStartBody(weekStart);
@@ -1481,7 +1493,7 @@ router.put('/nurse-sheet', auth, rbac(['admin', 'head_nurse']), async (req, res,
 });
 
 // GET /api/schedule/:patientId - 某患者的排班规则与实例
-router.get('/:patientId', auth, async (req, res, next) => {
+router.get('/:patientId', auth, requireSchedulePatientRead, async (req, res, next) => {
   try {
     const patientId = req.params.patientId;
     const pidValid = validateSchedulePatientId(patientId);
@@ -1509,7 +1521,7 @@ router.get('/:patientId', auth, async (req, res, next) => {
 });
 
 // POST /api/schedule/rules - 新建患者长期排班规则（护士长权限）
-router.post('/rules', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.post('/rules', auth, rbac(['admin', 'head_nurse']), requireSchedulePatientWrite, async (req, res, next) => {
   try {
     const payloadValid = validateScheduleRulePayload(req.body);
     if (!payloadValid.ok) return error(res, payloadValid.message);
@@ -1549,7 +1561,7 @@ router.post('/rules', auth, rbac(['admin', 'head_nurse']), async (req, res, next
 });
 
 // POST /api/schedule/nurse-adjust - 调整某天某班次护士排班
-router.post('/nurse-adjust', auth, rbac(['admin', 'head_nurse']), async (req, res, next) => {
+router.post('/nurse-adjust', auth, rbac(['admin', 'head_nurse']), requireScheduleNurseWrite, async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

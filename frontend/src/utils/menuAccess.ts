@@ -2,7 +2,7 @@
  * 侧栏模块路径与当前 URL 的对应关系（用于菜单过滤与路由守卫）
  */
 import type { SidebarMenuKey } from '../constants/sidebarModules';
-import { ALL_SIDEBAR_MENU_KEYS } from '../constants/sidebarModules';
+import { ALL_SIDEBAR_MENU_KEYS, SCHEDULE_PERMISSION_KEYS } from '../constants/sidebarModules';
 import { canRoleAccessClinicalAi, isClinicalAiMenuKey } from '../constants/sidebarModules';
 import type { AiAssistantFeaturePermissionKey } from '../constants/aiAssistantFeatures';
 import { AI_FEAT_PREFIX } from '../constants/aiAssistantFeatures';
@@ -57,9 +57,15 @@ export function pathToMenuKey(pathname: string): SidebarMenuKey | null {
 export function isMenuKeyAllowed(
   key: SidebarMenuKey | null,
   menuPermissions: string[] | null | undefined,
-  role?: string | null
+  role?: string | null,
 ): boolean {
   const mp = normalizeMenuPermissions(menuPermissions);
+  if (key === '/schedule') {
+    if (mp === null || mp === undefined) return true;
+    if (mp.length === 0) return false;
+    if (mp.includes('/schedule')) return true;
+    return SCHEDULE_PERMISSION_KEYS.some((k) => mp.includes(k));
+  }
   if (isClinicalAiMenuKey(key) && !canRoleAccessClinicalAi(role)) return false;
   if (mp === null || mp === undefined) return true;
   if (mp.length === 0) return false;
