@@ -20,9 +20,8 @@ import {
   Space,
   Spin,
   Empty,
-  Dropdown,
 } from 'antd';
-import { SearchOutlined, PlusOutlined, ToolOutlined, EyeOutlined, DownOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, ToolOutlined, EyeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import { useAuthStore } from '../../stores/authStore';
@@ -68,6 +67,53 @@ const CONSUMABLE_CATEGORY_OPTIONS: { value: string; label: string; backendCatego
   { value: 'perf_connector', label: '灌流连接管', backendCategory: 'catheter' },
   { value: 'other_custom', label: '其他', backendCategory: 'other' },
 ];
+
+function trimNonEmpty(value: unknown): string {
+  if (value == null) return '';
+  const t = String(value).trim();
+  return t;
+}
+
+/** 展示名：品类前缀 + 型号，避免与规格字段重复填同一字符串 */
+function buildNewConsumableItemName(categoryLabel: string, modelRaw: string): string {
+  const label = trimNonEmpty(categoryLabel);
+  const model = trimNonEmpty(modelRaw);
+  if (!label && !model) return '';
+  if (!label) return model;
+  if (!model) return label;
+  const collapsed = model.replace(/\s+/g, ' ').trim();
+  if (collapsed.startsWith(label)) return collapsed;
+  return `${label} ${collapsed}`.replace(/\s+/g, ' ').trim();
+}
+
+function buildNewConsumableSpecification(params: {
+  categoryLabel: string;
+  modelRaw: string;
+  membraneArea: unknown;
+  dialyzerFlux: 'high' | 'low' | undefined;
+  fillVolume: unknown;
+  gauge: unknown;
+}): string | undefined {
+  const { categoryLabel, modelRaw, membraneArea, dialyzerFlux, fillVolume, gauge } = params;
+  if (categoryLabel === '透析器' || categoryLabel === '血滤器') {
+    const parts: string[] = [];
+    const area = trimNonEmpty(membraneArea);
+    if (area) parts.push(`${area}㎡`);
+    if (dialyzerFlux === 'high') parts.push('高通量');
+    else if (dialyzerFlux === 'low') parts.push('低通量');
+    const spec = parts.join(' · ');
+    return spec || undefined;
+  }
+  if (categoryLabel === '灌流器') {
+    const vol = trimNonEmpty(fillVolume);
+    return vol ? `${vol} mL 灌装` : undefined;
+  }
+  if (categoryLabel === '穿刺针（钝）' || categoryLabel === '穿刺针（锐）') {
+    return trimNonEmpty(gauge) || undefined;
+  }
+  const m = trimNonEmpty(modelRaw);
+  return m || undefined;
+}
 
 function resolveMachineUiStatus(m: MachineRow): keyof typeof MACHINE_STATUS_UI {
   if (m.status === 'maintenance') return 'maintenance';
@@ -202,25 +248,6 @@ export default function DevicesPage() {
       setLoading(false);
     }
   }, []);
-
-  const patchConsumableDialysisRole = useCallback(
-    async (r: ConsumableStockRow, role: 'membrane' | 'hemoperfusion' | null) => {
-      try {
-        await devicesApi.patchConsumableMeta(r.id, { hemodialysis_piece_role: role });
-        const hint =
-          role === 'hemoperfusion'
-            ? '已归类为灌流器（处方 HD+HP 下拉将同步显示）'
-            : role === 'membrane'
-              ? '已归类为透析膜材（透析器下拉）'
-              : '已清除归类（仍可按名称含「灌流」自动识别灌流器）';
-        message.success(hint);
-        await loadAll();
-      } catch {
-        /* request 层已提示 */
-      }
-    },
-    [loadAll],
-  );
 
   const loadTodayUsage = useCallback(async () => {
     setTodayUsageLoading(true);
@@ -550,20 +577,6 @@ export default function DevicesPage() {
         ),
     },
     {
-      title: '处方归类',
-      width: 110,
-      render: (_: unknown, r: ConsumableStockRow) => {
-        if (r.category !== 'dialyzer') return '—';
-        if (r.hemodialysis_piece_role === 'hemoperfusion') {
-          return <Tag color="purple">灌流器</Tag>;
-        }
-        if (r.hemodialysis_piece_role === 'membrane') {
-          return <Tag color="blue">透析膜材</Tag>;
-        }
-        return <Tag>自动</Tag>;
-      },
-    },
-    {
       title: '库存',
       render: (_: unknown, r: ConsumableStockRow) => {
         const lv = stockLevel(r);
@@ -616,27 +629,6 @@ export default function DevicesPage() {
               >
                 入库
               </Button>
-            )}
-            {canDeleteDeviceAsset && r.category === 'dialyzer' && (
-              <Dropdown
-                menu={{
-                  items: [
-                    { key: 'hemoperfusion', label: '标记为灌流器（HD+HP 处方）' },
-                    { key: 'membrane', label: '标记为透析膜材（透析器）' },
-                    { key: 'auto', label: '清除归类（名称推断）' },
-                  ],
-                  onClick: ({ key, domEvent }) => {
-                    domEvent.stopPropagation();
-                    if (key === 'hemoperfusion') void patchConsumableDialysisRole(r, 'hemoperfusion');
-                    else if (key === 'membrane') void patchConsumableDialysisRole(r, 'membrane');
-                    else void patchConsumableDialysisRole(r, null);
-                  },
-                }}
-              >
-                <Button size="small">
-                  归类 <DownOutlined />
-                </Button>
-              </Dropdown>
             )}
             {canDeleteDeviceAsset && (
               <Button size="small" danger onClick={() => handleDeleteConsumable(r)}>
@@ -1793,15 +1785,25 @@ export default function DevicesPage() {
           stockForm.validateFields().then(async (v) => {
             const categoryOpt = CONSUMABLE_CATEGORY_OPTIONS.find((o) => o.value === v.category_ui);
             const backendCategory = categoryOpt?.backendCategory ?? 'other';
+            const categoryLabel = categoryOpt?.label ?? '';
             const dialyzerFlux = v.dialyzer_flux as 'high' | 'low' | undefined;
-            let itemName: string = v.item_name;
-            if (!itemName && (stockCategoryLabel === '穿刺针（钝）' || stockCategoryLabel === '穿刺针（锐）') && v.gauge) {
-              itemName = v.gauge;
-            }
+            const modelRaw =
+              categoryLabel === '穿刺针（钝）' || categoryLabel === '穿刺针（锐）'
+                ? trimNonEmpty(v.gauge)
+                : trimNonEmpty(v.item_name);
+            const itemName = buildNewConsumableItemName(categoryLabel, modelRaw);
+            const specification = buildNewConsumableSpecification({
+              categoryLabel,
+              modelRaw,
+              membraneArea: v.membrane_area,
+              dialyzerFlux,
+              fillVolume: v.fill_volume,
+              gauge: v.gauge,
+            });
             let pieceRole: 'membrane' | 'hemoperfusion' | undefined;
             if (backendCategory === 'dialyzer') {
-              if (stockCategoryLabel === '灌流器') pieceRole = 'hemoperfusion';
-              else if (stockCategoryLabel === '透析器' || stockCategoryLabel === '血滤器') {
+              if (categoryLabel === '灌流器') pieceRole = 'hemoperfusion';
+              else if (categoryLabel === '透析器' || categoryLabel === '血滤器') {
                 pieceRole = 'membrane';
               }
             }
@@ -1809,7 +1811,7 @@ export default function DevicesPage() {
               await devicesApi.createConsumableStock({
                 item_name: itemName,
                 category: backendCategory,
-                specification: itemName,
+                specification,
                 unit: v.unit,
                 dialyzer_flux: dialyzerFlux,
                 manufacturer: v.manufacturer,
@@ -1820,6 +1822,7 @@ export default function DevicesPage() {
               message.success('耗材目录已创建');
               setShowStockModal(false);
               stockForm.resetFields();
+              setStockCategoryLabel(undefined);
               loadAll();
             } catch {
               /* request 已提示 */
@@ -1829,19 +1832,20 @@ export default function DevicesPage() {
         onCancel={() => {
           setShowStockModal(false);
           stockForm.resetFields();
+          setStockCategoryLabel(undefined);
         }}
         okText="保存"
         width={520}
       >
         <Form form={stockForm} layout="vertical" size="middle">
           <Form.Item
-            label="耗材目录"
+            label="耗材品类"
             name="category_ui"
-            rules={[{ required: true, message: '请选择耗材目录' }]}
-            extra="必填，固定为透析器、血滤器、穿刺针等大类，用于后续筛选统计。"
+            rules={[{ required: true, message: '请选择耗材品类' }]}
+            extra="新建后会写入耗材名称前缀（如「透析器 FX80」），并与透析处方下拉联动；规格填写膜面积、灌装量等技术参数。"
           >
             <Select
-              placeholder="选择耗材目录"
+              placeholder="选择耗材品类"
               options={CONSUMABLE_CATEGORY_OPTIONS}
               onChange={(_, option) => {
                 const opt = option as { value: string; label: string };
@@ -1854,7 +1858,7 @@ export default function DevicesPage() {
               label="型号"
               name="item_name"
               rules={[{ required: true, message: '请输入型号' }]}
-              extra="必填，建议与外包装型号保持一致，如 FX80、HF16 等。"
+              extra="仅填型号简称即可；清单中的完整名称会自动带上上方所选品类。"
             >
               <Input placeholder="如：FX80 / HF16 等" />
             </Form.Item>

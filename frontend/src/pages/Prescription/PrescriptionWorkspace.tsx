@@ -923,7 +923,7 @@ export default function PrescriptionWorkspacePage() {
 
   const hpCartridgeSelectPlaceholder = useMemo(() => {
     if (consumablesCatalogSynced && hemoperfusionStockCount === 0) {
-      return '仓库暂无灌流器目录，请在「设备与耗材」维护并归类为灌流器';
+      return '仓库暂无灌流器目录，请在「设备与耗材」新建并选择品类「灌流器」';
     }
     return '从耗材目录选择灌流器';
   }, [consumablesCatalogSynced, hemoperfusionStockCount]);
@@ -2529,7 +2529,7 @@ export default function PrescriptionWorkspacePage() {
                   label="灌流器"
                   name="hpCartridge"
                   rules={[{ required: true, message: '请选择灌流器（HD+HP）' }]}
-                  extra="选项来自设备耗材仓库中有库存的目录项。若型号不含「灌流」字样，请到「设备与耗材」→ 耗材列表对该条目使用「归类 → 标记为灌流器」。新建目录时选择「灌流器」类会自动归类。"
+                  extra="选项来自设备耗材仓库中有库存的目录项。新建耗材目录时请选择品类「灌流器」，系统将同步至 HD+HP 灌流器可选列表。"
                 >
                   <Select
                     options={hpCartridgeOptions}

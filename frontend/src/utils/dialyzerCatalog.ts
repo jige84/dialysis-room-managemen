@@ -1,6 +1,6 @@
 /**
  * 处方透析器 / HD+HP 灌流器 ↔ 耗材目录 consumable_stocks（category=dialyzer）对齐。
- * 灌流器在目录中与透析器同属 dialyzer 大类，通过名称含「灌流」识别。
+ * 灌流器与透析器同属 dialyzer 大类：优先 hemodialysis_piece_role，其次名称含「灌流」识别。
  */
 import type { ConsumableStockRow } from '../api/devices';
 import { getDialyzerSelectOptions } from '../constants/dialyzerConsumables';
