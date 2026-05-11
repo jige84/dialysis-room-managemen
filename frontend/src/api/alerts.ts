@@ -30,6 +30,8 @@ export interface AlertSummary {
   critical: number;
   warning: number;
   info: number;
+  /** 检验系统上报的危急值条数（与 severity=critical 的全部预警区分） */
+  lab_critical?: number;
 }
 
 const alertsApi = {

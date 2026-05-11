@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Card, Button, Select, Input, Modal, Form, message, Spin } from 'antd';
 import { SearchOutlined, CheckOutlined, ReloadOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import { useLocation } from 'react-router-dom';
 import alertsApi, { type AlertItem, type AlertSummary } from '../../api/alerts';
@@ -42,11 +43,24 @@ const CATEGORY_LABEL: Record<string, string> = {
   disinfection_alarm: '消毒相关报警',
 };
 
+function formatAlertDisplayTime(iso?: string): string {
+  if (!iso) return '—';
+  const d = dayjs(iso);
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : iso.slice(0, 16);
+}
+
 export default function AlertCenterPage() {
   const location = useLocation();
   const [loading, setLoading] = useState(false);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [summary, setSummary] = useState<AlertSummary>({ total: 0, emergency: 0, critical: 0, warning: 0, info: 0 });
+  const [summary, setSummary] = useState<AlertSummary>({
+    total: 0,
+    emergency: 0,
+    critical: 0,
+    warning: 0,
+    info: 0,
+    lab_critical: 0,
+  });
 
   const [severityFilter, setSeverityFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
@@ -104,7 +118,7 @@ export default function AlertCenterPage() {
         alertsApi.summary(),
       ]);
       setAlerts(listRes.data.data?.data ?? []);
-      setSummary(summaryRes.data.data ?? { total: 0, emergency: 0, critical: 0, warning: 0, info: 0 });
+      setSummary(summaryRes.data.data ?? { total: 0, emergency: 0, critical: 0, warning: 0, info: 0, lab_critical: 0 });
     } catch {
       message.error('加载预警数据失败');
     } finally {
@@ -113,6 +127,20 @@ export default function AlertCenterPage() {
   }, [severityFilter, statusFilter, categoryFilter]);
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') fetchAlerts();
+    }, 60_000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchAlerts();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [fetchAlerts]);
 
   const filtered = useMemo(() => alerts.filter(a => {
     if (search && !(a.patient_name ?? '').includes(search) && !a.title.includes(search)) return false;
@@ -133,8 +161,13 @@ export default function AlertCenterPage() {
     }, 80);
   };
 
-  const handleSummaryCardClick = (severity: string, target: 'urgent' | 'normal') => {
+  const handleSummaryCardClick = (
+    severity: string,
+    target: 'urgent' | 'normal',
+    opts?: { category?: string }
+  ) => {
     setSeverityFilter(severity);
+    setCategoryFilter(opts?.category ?? '');
     setStatusFilter('active');
     scrollToSection(target);
   };
@@ -169,11 +202,13 @@ export default function AlertCenterPage() {
           <div className="hd-stat-value num" style={{ color: '#BE123C' }}>{summary.emergency}</div>
           <div className="hd-stat-meta">需立即处理</div>
         </div>
-        <div className="hd-stat-card amber" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('critical', 'urgent')}>
+        <div className="hd-stat-card amber" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('', 'urgent', { category: 'lab_critical' })}>
           <div className="hd-stat-icon">🔴</div>
           <div className="hd-stat-label">危急值</div>
-          <div className="hd-stat-value num" style={{ color: '#C2410C' }}>{summary.critical}</div>
-          <div className="hd-stat-meta">今日处理</div>
+          <div className="hd-stat-value num" style={{ color: '#C2410C' }}>
+            {summary.lab_critical ?? summary.critical}
+          </div>
+          <div className="hd-stat-meta">检验危急值</div>
         </div>
         <div className="hd-stat-card blue" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => handleSummaryCardClick('warning', 'normal')}>
           <div className="hd-stat-icon">🟡</div>
@@ -268,7 +303,7 @@ export default function AlertCenterPage() {
               </div>
               <div style={{ fontSize: 12.5, color: '#3D5280' }}>{handleModal.message}</div>
               <div style={{ fontSize: 11.5, color: '#7B92BC', marginTop: 4 }}>
-                患者：{handleModal.patient_name ?? '—'} · {handleModal.created_at?.slice(0, 16)}
+                患者：{handleModal.patient_name ?? '—'} · {formatAlertDisplayTime(handleModal.created_at)}
               </div>
             </div>
             <Form form={handleForm} layout="vertical">
@@ -330,7 +365,7 @@ function AlertCard({
         <div style={{ fontSize: 12.5, color: '#3D5280', marginBottom: 3 }}>{alert.message}</div>
         <div style={{ fontSize: 11.5, color: '#7B92BC' }}>
           {alert.patient_name && <span>患者：{alert.patient_name} · </span>}
-          ⏱ {alert.created_at?.slice(0, 16)}
+          ⏱ {formatAlertDisplayTime(alert.created_at)}
         </div>
       </div>
       {alert.status === 'active' && (

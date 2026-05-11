@@ -63,15 +63,27 @@ router.get('/', auth, async (req, res, next) => {
 router.get('/summary', auth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT severity, COUNT(*) as count
+      `SELECT severity, COUNT(*)::int as count
        FROM alerts
        WHERE status = 'active'
        GROUP BY severity`
     );
-    const summary = { total: 0, emergency: 0, critical: 0, warning: 0, info: 0 };
+    const { rows: labCritRows } = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM alerts
+       WHERE status = 'active' AND alert_type = 'lab_critical'`
+    );
+    const summary = {
+      total: 0,
+      emergency: 0,
+      critical: 0,
+      warning: 0,
+      info: 0,
+      lab_critical: parseInt(labCritRows[0]?.count ?? '0', 10),
+    };
     for (const row of rows) {
-      summary[row.severity] = parseInt(row.count);
-      summary.total += parseInt(row.count);
+      summary[row.severity] = row.count;
+      summary.total += row.count;
     }
     return success(res, summary);
   } catch (err) { next(err); }

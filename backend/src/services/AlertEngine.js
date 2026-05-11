@@ -37,6 +37,12 @@ function buildAlertDraft({
 
 class AlertEngine {
   async runAll() {
+    await pool.query(
+      `UPDATE alerts SET severity = 'warning'
+       WHERE status = 'active' AND severity = 'critical'
+         AND alert_type IN ('lab_review_due', 'infection_screening_due')`
+    );
+
     let generated = 0;
     generated += await this.checkInfectionScreeningDue();
     generated += await this.checkLowKtV();
@@ -47,42 +53,139 @@ class AlertEngine {
   }
 
   /**
-   * 感染筛查到期提醒（HBV/HCV/HIV/TP每半年）
-   * 规程：≥175 天橙色预警，≥185 天红色超期（与 medical-domain-rules 一致）
+   * 感染筛查到期提醒（HBV/HCV/HIV/梅毒抗体四项，维持患者约每半年复查）
+   * 规程：距末次同类检测 ≥175 天预警，≥185 天超期（与 medical-domain-rules 一致）
+   * 不使用占位天数；无记录与超期均只用 warning，避免挤占检验「危急值」汇总口径。
    */
   async checkInfectionScreeningDue() {
     const INFECTION_WARNING_DAYS = 175;
     const INFECTION_OVERDUE_DAYS = 185;
-    const CYCLE_DAYS = 180;
 
-    const { rows: patients } = await pool.query(
-      `SELECT DISTINCT ON (p.id, scr.test_type)
-         p.id, p.name, scr.test_type, scr.test_date
-       FROM patients p
-       LEFT JOIN infection_screenings scr ON scr.patient_id = p.id
+    const REQUIRED_TYPES = ['hbsag', 'hcvab', 'hiv', 'syphilis_tppa'];
+    const TYPE_LABEL = {
+      hbsag: 'HBsAg',
+      hcvab: '抗-HCV',
+      hiv: '抗-HIV',
+      syphilis_tppa: '梅毒螺旋体抗体',
+    };
+
+    await pool.query(
+      `UPDATE alerts SET status = 'auto_closed', handled_at = NOW(), handle_notes = $1
+       WHERE alert_type = 'infection_screening_due' AND status = 'active'
+         AND (
+           message LIKE '%9999%'
+           OR alert_rule_id = 'initial_screening'
+         )`,
+      ['规则更正：历史占位文案自动关闭']
+    );
+
+    await pool.query(
+      `UPDATE alerts a SET status = 'auto_closed', handled_at = NOW(), handle_notes = $1
+       WHERE a.alert_type = 'infection_screening_due' AND a.status = 'active'
+         AND a.alert_rule_id = 'pending_initial_four'
+         AND EXISTS (SELECT 1 FROM infection_screenings s WHERE s.patient_id = a.patient_id)`
+      ,
+      ['已存在筛查记录，自动关闭待完善提醒']
+    );
+
+    await pool.query(
+      `UPDATE alerts a SET status = 'auto_closed', handled_at = NOW(), handle_notes = $1
+       WHERE a.alert_type = 'infection_screening_due' AND a.status = 'active'
+         AND a.alert_rule_id <> 'pending_initial_four'
+         AND EXISTS (
+           SELECT 1 FROM infection_screenings s
+           WHERE s.patient_id = a.patient_id
+             AND s.test_type = a.alert_rule_id
+             AND (CURRENT_DATE - s.test_date)::integer < $2
+         )`,
+      ['复查已在周期内，自动关闭', INFECTION_WARNING_DAYS]
+    );
+
+    const { rows: noScreenPatients } = await pool.query(
+      `SELECT p.id, p.name FROM patients p
        WHERE p.status = 'active'
-       ORDER BY p.id, scr.test_type, scr.test_date DESC`
+         AND NOT EXISTS (SELECT 1 FROM infection_screenings s WHERE s.patient_id = p.id)`
     );
 
     let count = 0;
-    for (const row of patients) {
-      const daysSince = row.test_date
-        ? Math.floor((Date.now() - new Date(row.test_date).getTime()) / 86400000)
-        : 9999;
+    for (const row of noScreenPatients) {
+      const exists = await this._alertExists(row.id, 'infection_screening_due', 'pending_initial_four');
+      if (exists) continue;
 
-      if (daysSince >= INFECTION_WARNING_DAYS) {
+      await this._insertAlert(
+        buildAlertDraft({
+          patientId: row.id,
+          alertRuleId: 'pending_initial_four',
+          alertType: 'infection_screening_due',
+          severity: 'warning',
+          title: `传染病筛查待完善：${row.name}`,
+          message: `患者 ${row.name} 尚未在系统中录入传染病筛查（四项），请安排检验并在传染病筛查模块登记`,
+        })
+      );
+      count++;
+    }
+
+    const { rows } = await pool.query(
+      `WITH active_patients AS (
+         SELECT id, name FROM patients WHERE status = 'active'
+       ),
+       latest AS (
+         SELECT DISTINCT ON (patient_id, test_type)
+           patient_id, test_type, test_date
+         FROM infection_screenings
+         ORDER BY patient_id, test_type, test_date DESC
+       )
+       SELECT ap.id, ap.name, r.test_type AS test_type,
+              l.test_date,
+              CASE
+                WHEN l.test_date IS NULL THEN NULL
+                ELSE (CURRENT_DATE - l.test_date)::integer
+              END AS days_since
+       FROM active_patients ap
+       INNER JOIN (SELECT unnest($1::text[]) AS test_type) r ON true
+       LEFT JOIN latest l ON l.patient_id = ap.id AND l.test_type = r.test_type
+       WHERE EXISTS (SELECT 1 FROM infection_screenings s WHERE s.patient_id = ap.id)`,
+      [REQUIRED_TYPES]
+    );
+
+    for (const row of rows) {
+      const label = TYPE_LABEL[row.test_type] || row.test_type;
+
+      if (row.test_date == null) {
         const exists = await this._alertExists(row.id, 'infection_screening_due', row.test_type);
         if (exists) continue;
 
-        const draft = buildAlertDraft({
-          patientId: row.id,
-          alertRuleId: row.test_type || 'initial_screening',
-          alertType: 'infection_screening_due',
-          severity: daysSince >= INFECTION_OVERDUE_DAYS ? 'critical' : 'warning',
-          title: `感染筛查到期：${row.name}`,
-          message: `患者 ${row.name} 的 ${row.test_type || '感染'} 筛查已${daysSince}天未复查，请安排复查`,
-        });
-        await this._insertAlert(draft);
+        await this._insertAlert(
+          buildAlertDraft({
+            patientId: row.id,
+            alertRuleId: row.test_type,
+            alertType: 'infection_screening_due',
+            severity: 'warning',
+            title: `感染筛查待完善：${row.name}`,
+            message: `患者 ${row.name} 尚未录入 ${label} 筛查结果，请安排检验并在系统中登记`,
+          })
+        );
+        count++;
+        continue;
+      }
+
+      if (row.days_since >= INFECTION_WARNING_DAYS) {
+        const exists = await this._alertExists(row.id, 'infection_screening_due', row.test_type);
+        if (exists) continue;
+
+        const overdue = row.days_since >= INFECTION_OVERDUE_DAYS;
+        await this._insertAlert(
+          buildAlertDraft({
+            patientId: row.id,
+            alertRuleId: row.test_type,
+            alertType: 'infection_screening_due',
+            severity: 'warning',
+            title: overdue ? `感染筛查超期：${row.name}` : `感染筛查到期：${row.name}`,
+            message: overdue
+              ? `患者 ${row.name} 的 ${label} 筛查已 ${row.days_since} 天未复查（已超过 ${INFECTION_OVERDUE_DAYS} 天），请尽快安排复查`
+              : `患者 ${row.name} 的 ${label} 筛查已 ${row.days_since} 天未复查（已达 ${INFECTION_WARNING_DAYS} 天提醒线），请安排复查`,
+          })
+        );
         count++;
       }
     }
@@ -157,7 +260,7 @@ class AlertEngine {
             patientId: row.patient_id,
             alertRuleId: testType,
             alertType: 'lab_review_due',
-            severity: daysSince >= days ? 'critical' : 'warning',
+            severity: 'warning',
             title: `化验到期提醒：${row.name}`,
             message: `患者 ${row.name} 的 ${testType.toUpperCase()} 已${daysSince}天未复查（周期${days}天）`,
           }));
