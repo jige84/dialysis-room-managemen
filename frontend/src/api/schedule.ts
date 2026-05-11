@@ -44,6 +44,8 @@ export interface ScheduleCell {
   nurses: NurseSlot[];
   ratio: string;
   compliant: boolean;
+  /** 护患比用护士人数：nurse_schedule 有记录时用其条数；否则用护士空白表解析人数 */
+  staffingNurseCount?: number;
 }
 
 export interface WeekScheduleResponse {

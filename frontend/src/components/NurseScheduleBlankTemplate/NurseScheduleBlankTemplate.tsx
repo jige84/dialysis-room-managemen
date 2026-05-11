@@ -24,7 +24,10 @@ const SHIFT_ROW_LABEL: Record<ShiftKey, string> = {
 
 function StaffingMiniCell({ cell }: { cell: ScheduleCell }) {
   const pc = cell.patients.length;
-  const nc = cell.nurses.length;
+  const nc =
+    typeof cell.staffingNurseCount === 'number' && cell.staffingNurseCount >= 0
+      ? cell.staffingNurseCount
+      : cell.nurses.length;
   const ratioRaw = cell.ratio?.trim() || '—';
   let stateClass = styles.stateOk;
   let stateText = '合规';

@@ -58,6 +58,104 @@ function normalizeNurseSheetRows(input) {
 }
 
 /**
+ * 护士排班空白表单日格文案 → 透析班次键（am / pm / eve）。
+ * nurse_schedule 无记录时，用此估算护患比。
+ */
+function dayCellTextToShiftKeys(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return [];
+  if (/^(休|欠|假)/.test(raw)) return [];
+
+  const compact = raw.replace(/\s/g, '');
+
+  /** @type {Set<'am'|'pm'|'eve'>} */
+  const keys = new Set();
+
+  const hasNight = /夜|主夜|晚班|晚间|^晚$/.test(compact);
+  const hasPm = /中|主中|下午/.test(compact);
+  const hasAmExplicit = /早|主早|治/.test(compact);
+
+  if (hasNight) keys.add('eve');
+  if (hasPm) keys.add('pm');
+  if (hasAmExplicit) keys.add('am');
+
+  const whiteFull =
+    /^白$|^白班$/.test(compact)
+    || (/白/.test(compact) && !hasNight && !/下午|中班/.test(compact) && !hasPm);
+
+  if (whiteFull) {
+    keys.add('am');
+    keys.add('pm');
+  }
+
+  if (keys.size === 0 && /[A-Za-z\u4e00-\u9fff]/.test(compact)) {
+    const looksRestOnly = /^(休|欠|假)[\d.\\/]*$/.test(compact);
+    if (!looksRestOnly && /^([A-Za-z]+)[/／]/.test(compact)) {
+      keys.add('am');
+      keys.add('pm');
+    }
+  }
+
+  return [...keys];
+}
+
+/**
+ * @param {ReturnType<normalizeNurseSheetRows>} sheetRows
+ * @param {{ date: string; label: string }[]} days
+ */
+function computeStaffingCountsFromNurseSheet(sheetRows, days) {
+  const dates = days.map((d) => d.date);
+  /** @type {Record<string, Record<string, number>>} */
+  const counts = { am: {}, pm: {}, eve: {} };
+
+  if (!Array.isArray(sheetRows)) return counts;
+
+  for (let ri = 0; ri < sheetRows.length; ri += 1) {
+    const row = sheetRows[ri];
+    if (!row || !Array.isArray(row.days)) continue;
+    for (let di = 0; di < 7 && di < row.days.length; di += 1) {
+      const dk = dates[di];
+      if (!dk) continue;
+      const shiftKeys = dayCellTextToShiftKeys(row.days[di]);
+      for (const sk of shiftKeys) {
+        if (!counts[sk]) counts[sk] = {};
+        counts[sk][dk] = (counts[sk][dk] || 0) + 1;
+      }
+    }
+  }
+  return counts;
+}
+
+/**
+ * @param {Record<string, Record<string, { patients: unknown[]; nurses: unknown[]; ratio: string; compliant: boolean; staffingNurseCount?: number }>>} cells
+ */
+function applyMergedStaffingToCells(cells, shifts, days, sheetCounts) {
+  for (const shiftKey of shifts) {
+    for (const d of days) {
+      const cell = cells[shiftKey][d.date];
+      const dbN = cell.nurses.length;
+      const sheetN = sheetCounts[shiftKey]?.[d.date] || 0;
+      const effectiveN = dbN > 0 ? dbN : sheetN;
+      const pc = cell.patients.length;
+
+      cell.staffingNurseCount = effectiveN;
+
+      if (pc === 0 && effectiveN === 0) {
+        cell.ratio = '—';
+        cell.compliant = true;
+      } else if (effectiveN === 0) {
+        cell.ratio = '1:0.0';
+        cell.compliant = false;
+      } else {
+        const ratioNum = pc / effectiveN;
+        cell.ratio = `1:${ratioNum.toFixed(1)}`;
+        cell.compliant = ratioNum <= 5.0 + 1e-9;
+      }
+    }
+  }
+}
+
+/**
  * 患者隔离分区 → 透析机分区（仅 machines.zone 三种）
  * @param {string | null} isolationZone
  * @returns {'normal'|'hbv'|'hcv'}
@@ -517,17 +615,9 @@ router.get('/week', auth, async (req, res, next) => {
       [weekStart, weekEnd]
     );
 
-    // 护患比（按日/班次聚合）
-    const { rows: ratioRows } = await pool.query(
-      `SELECT duty_date,
-              shift,
-              patient_count,
-              nurse_count,
-              ratio_value,
-              compliant
-       FROM vw_shift_staffing
-       WHERE duty_date BETWEEN $1 AND $2`,
-      [weekStart, weekEnd]
+    const { rows: nurseSheetDbRows } = await pool.query(
+      `SELECT payload FROM nurse_schedule_sheet WHERE week_start_date = $1::date`,
+      [weekStart],
     );
 
     // 组装返回结构
@@ -595,22 +685,18 @@ router.get('/week', auth, async (req, res, next) => {
       });
     });
 
-    // 护患比
-    ratioRows.forEach((row) => {
-      const shiftKey = toShiftKey(row.shift);
-      const dateKey = toSqlDateKey(row.duty_date);
-      const cell = dateKey && cells[shiftKey] && cells[shiftKey][dateKey];
-      if (!cell) return;
-      if (!row.nurse_count || row.nurse_count === 0) {
-        cell.ratio = '—';
-        cell.compliant = false;
-      } else {
-        const ratioNum = Number(row.ratio_value || 0);
-        const rounded = ratioNum.toFixed(1);
-        cell.ratio = `1:${rounded}`;
-        cell.compliant = !!row.compliant;
-      }
-    });
+    let sheetPayloadRows = [];
+    if (
+      nurseSheetDbRows.length > 0
+      && nurseSheetDbRows[0].payload
+      && typeof nurseSheetDbRows[0].payload === 'object'
+    ) {
+      const pr = nurseSheetDbRows[0].payload.rows;
+      if (Array.isArray(pr)) sheetPayloadRows = pr;
+    }
+    const normalizedSheetRows = normalizeNurseSheetRows(sheetPayloadRows);
+    const sheetStaffingCounts = computeStaffingCountsFromNurseSheet(normalizedSheetRows, days);
+    applyMergedStaffingToCells(cells, shifts, days, sheetStaffingCounts);
 
     return success(res, { shifts, days, cells });
   } catch (err) { next(err); }
