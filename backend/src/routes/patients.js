@@ -36,7 +36,9 @@ const {
 
 const BACKEND_ROOT_CANDIDATES = [
   path.join(__dirname, '../..'),
+  process.cwd(),
   process.env.APP_ROOT ? path.join(process.env.APP_ROOT, 'backend') : null,
+  process.env.BACKEND_ROOT || null,
   '/opt/hemodialysis/backend',
   '/www/wwwroot/xuetoushiguanli/backend',
 ].filter(Boolean);
@@ -47,10 +49,25 @@ function isInsideUploads(normalizedPath, backendRoot) {
 }
 
 function resolveStoredUploadPath(relativePath) {
-  const rel = String(relativePath || '').trim();
-  if (!rel || path.isAbsolute(rel)) return null;
+  const raw = String(relativePath || '').trim();
+  if (!raw) return null;
 
-  for (const root of [...new Set(BACKEND_ROOT_CANDIDATES.map((p) => path.normalize(p)))]) {
+  const roots = [...new Set(BACKEND_ROOT_CANDIDATES.map((p) => path.normalize(p)))];
+  const normalizedRaw = path.normalize(raw);
+  if (path.isAbsolute(normalizedRaw)) {
+    for (const root of roots) {
+      if (isInsideUploads(normalizedRaw, root) && fs.existsSync(normalizedRaw)) {
+        return normalizedRaw;
+      }
+    }
+  }
+
+  const slashPath = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  const uploadsIndex = slashPath.indexOf('uploads/');
+  const rel = uploadsIndex >= 0 ? slashPath.slice(uploadsIndex) : slashPath;
+  if (!rel) return null;
+
+  for (const root of roots) {
     const normalized = path.normalize(path.join(root, rel));
     if (isInsideUploads(normalized, root) && fs.existsSync(normalized)) {
       return normalized;
@@ -58,6 +75,15 @@ function resolveStoredUploadPath(relativePath) {
   }
 
   return null;
+}
+
+function getImageContentType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'application/octet-stream';
 }
 
 const consentUpload = createPatientConsentUploader();
@@ -250,6 +276,8 @@ router.get('/:id/consent-dialysis-image/:index', auth, async (req, res, next) =>
     if (!normalized) return error(res, '影像文件不存在，请重新上传或检查上传目录', 404);
 
     res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', getImageContentType(normalized));
+    res.setHeader('Content-Disposition', 'inline');
     res.sendFile(normalized, (err) => {
       if (err) next(err);
     });
@@ -270,6 +298,8 @@ router.get('/:id/consent-dialysis-image', auth, async (req, res, next) => {
     if (!normalized) return error(res, '影像文件不存在，请重新上传或检查上传目录', 404);
 
     res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', getImageContentType(normalized));
+    res.setHeader('Content-Disposition', 'inline');
     res.sendFile(normalized, (err) => {
       if (err) next(err);
     });

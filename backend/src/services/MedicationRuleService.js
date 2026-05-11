@@ -37,19 +37,30 @@ async function evaluateForPrescription(patientId, { anticoagulantKey = 'heparin'
   );
 
   const acLabel = ANTICOAGULANT_LABELS[anticoagulantKey] || '';
-  const drugStrings = [
-    ...orders.map((o) => `${o.drug_name || ''}`),
-    ...(acLabel ? [acLabel] : []),
-  ].filter(Boolean);
+  const orderDrugItems = orders
+    .map((o) => ({
+      text: `${o.drug_name || ''}`.trim(),
+      source: 'order',
+    }))
+    .filter((x) => x.text);
+  const prescriptionDrugItems = acLabel
+    ? [{ text: acLabel, source: 'prescription' }]
+    : [];
+  const drugItems = [...orderDrugItems, ...prescriptionDrugItems];
 
   const issues = [];
 
-  for (let i = 0; i < drugStrings.length; i++) {
-    for (let j = i + 1; j < drugStrings.length; j++) {
-      const a = drugStrings[i];
-      const b = drugStrings[j];
+  for (let i = 0; i < drugItems.length; i++) {
+    for (let j = i + 1; j < drugItems.length; j++) {
+      const a = drugItems[i].text;
+      const b = drugItems[j].text;
+      const sourceA = drugItems[i].source;
+      const sourceB = drugItems[j].source;
       for (const rule of rules) {
         if (rule.rule_type === 'duplicate') {
+          // 处方抗凝方案与同名长期医嘱在本系统中常为同一治疗方案描述，不应触发“重复用药”误报。
+          // duplicate 仅在长期医嘱之间判定，interaction/contraindication 仍保留跨来源判定。
+          if (sourceA !== 'order' || sourceB !== 'order') continue;
           if (
             rule.drug_pattern_b &&
             a.includes(rule.drug_pattern_a) &&

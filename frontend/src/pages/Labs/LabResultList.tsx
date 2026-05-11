@@ -21,6 +21,7 @@ import {
   Segmented,
   Typography,
   Tag,
+  Alert,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -30,6 +31,7 @@ import {
   AppstoreOutlined,
   UnorderedListOutlined,
   MinusCircleOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
@@ -74,6 +76,13 @@ function formatSampleTiming(notes: string | null | undefined): string {
   if (!text.startsWith(SAMPLE_TIMING_NOTE_PREFIX)) return '';
   const code = text.slice(SAMPLE_TIMING_NOTE_PREFIX.length).trim();
   return SAMPLE_TIMING_OPTIONS.find((o) => o.value === code)?.label ?? '';
+}
+
+function getSampleTimingValue(notes: string | null | undefined): 'pre' | 'post' | undefined {
+  const text = String(notes || '').trim();
+  if (!text.startsWith(SAMPLE_TIMING_NOTE_PREFIX)) return undefined;
+  const code = text.slice(SAMPLE_TIMING_NOTE_PREFIX.length).trim();
+  return code === 'pre' || code === 'post' ? code : undefined;
 }
 
 /** 化验类别展示顺序（与筛选、分组一致） */
@@ -143,29 +152,25 @@ interface PatientCategoryGroup {
 }
 
 /**
- * 列表防重：后端历史数据可能存在“同患者+同项目+同日期+同结果+同单位”的重复行。
- * 这里统一在前端展示层去重，并保留排序靠前（通常是最新创建）的一条。
+ * 列表防重：同患者、同项目、同检测日期只展示最新一条。
+ * 生化类项目按透前/透后区分，避免把同日透前/透后结果误合并。
  */
 function dedupeLabRows(rows: LabResultListRow[]): LabResultListRow[] {
   const seenId = new Set<string>();
   const seenBiz = new Set<string>();
   const out: LabResultListRow[] = [];
 
-  const normalizeValue = (value: unknown): string => {
-    const n = Number(value);
-    return Number.isFinite(n) ? String(n) : String(value ?? '').trim();
-  };
-
   for (const r of rows) {
     if (r.id && seenId.has(r.id)) continue;
     if (r.id) seenId.add(r.id);
 
+    const normalizedType = String(r.test_type || '').toLowerCase();
+    const timing = requiresSampleTiming(normalizedType) ? formatSampleTiming(r.notes) : '';
     const bizKey = [
       r.patient_id,
-      String(r.test_type || '').toLowerCase(),
+      normalizedType,
       String(r.test_date || '').slice(0, 10),
-      normalizeValue(r.value),
-      String(r.unit ?? '').trim().toLowerCase(),
+      timing,
     ].join('|');
     if (seenBiz.has(bizKey)) continue;
     seenBiz.add(bizKey);
@@ -240,6 +245,7 @@ function makeLabColumns(opts: {
   canSetRecheck: boolean;
   onOpenRecheck: (r: LabResultListRow) => void;
   onCriticalHandle: (r: LabResultListRow) => void;
+  onEdit?: (r: LabResultListRow) => void;
   onAnomalyAnalyze?: (r: LabResultListRow, anomalyType: AnomalyType) => void;
 }): ColumnsType<LabResultListRow> {
   const patientCol: ColumnsType<LabResultListRow>[0] = {
@@ -377,25 +383,32 @@ function makeLabColumns(opts: {
       },
     },
   ];
-  if (opts.onAnomalyAnalyze) {
+  if (opts.onAnomalyAnalyze || opts.onEdit) {
     rest.push({
       title: '操作',
-      width: 128,
+      width: 168,
       render: (_: unknown, r: LabResultListRow) => {
         const ui = rowToUiStatus(r);
         const abnormal = r.is_critical || r.is_abnormal || ui === 'critical' || ui === 'high' || ui === 'low';
-        if (!abnormal) return <span className="text-muted">—</span>;
         const at: AnomalyType = r.is_critical || ui === 'critical' ? 'lab_critical' : 'lab_abnormal';
         return (
           <Space size={4}>
+            {opts.onEdit ? (
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => opts.onEdit?.(r)}>
+                修改
+              </Button>
+            ) : null}
             {ui === 'critical' ? (
               <Button type="link" danger size="small" onClick={() => opts.onCriticalHandle(r)}>
                 立即处理
               </Button>
             ) : null}
-            <Button type="link" size="small" onClick={() => opts.onAnomalyAnalyze?.(r, at)}>
-              分析
-            </Button>
+            {abnormal && opts.onAnomalyAnalyze ? (
+              <Button type="link" size="small" onClick={() => opts.onAnomalyAnalyze?.(r, at)}>
+                分析
+              </Button>
+            ) : null}
+            {!opts.onEdit && !abnormal ? <span className="text-muted">—</span> : null}
           </Space>
         );
       },
@@ -445,8 +458,12 @@ export default function LabResultListPage() {
   const [showOcr, setShowOcr] = useState(false);
   const [viewMode, setViewMode] = useState<'grouped' | 'table'>('grouped');
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
   const [patientOptions, setPatientOptions] = useState<Patient[]>([]);
   const [saving, setSaving] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editTarget, setEditTarget] = useState<LabResultListRow | null>(null);
 
   const [anomalyOpen, setAnomalyOpen] = useState(false);
   const [anomalyCtx, setAnomalyCtx] = useState<{
@@ -635,6 +652,62 @@ export default function LabResultListPage() {
     }
   };
 
+  const openEditModal = useCallback(
+    (row: LabResultListRow) => {
+      setEditTarget(row);
+      editForm.setFieldsValue({
+        test_type: row.test_type,
+        value: row.value,
+        unit: row.unit,
+        test_date: row.test_date ? dayjs(row.test_date) : dayjs(),
+        sample_timing: getSampleTimingValue(row.notes),
+      });
+      setEditOpen(true);
+    },
+    [editForm],
+  );
+
+  const saveEditModal = async () => {
+    if (!editTarget) return;
+    const values = await editForm.validateFields();
+    const rawValue = values.value;
+    const numericValue = Number(rawValue);
+    if (!Number.isFinite(numericValue)) {
+      message.error('结果值必须是有效数字');
+      return;
+    }
+    const testType = String(values.test_type || '').trim();
+    const needsSampleTiming = requiresSampleTiming(testType);
+    if (needsSampleTiming && !values.sample_timing) {
+      message.error('该项目请选择透前或透后');
+      return;
+    }
+
+    setEditSaving(true);
+    try {
+      await labsApi.update(editTarget.id, {
+        test_type: testType,
+        value: numericValue,
+        unit: typeof values.unit === 'string' ? values.unit.trim() : '',
+        test_date: values.test_date ? values.test_date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+        notes: needsSampleTiming && values.sample_timing
+          ? `${SAMPLE_TIMING_NOTE_PREFIX} ${values.sample_timing}`
+          : undefined,
+      });
+      message.success('检验结果已修改');
+      setEditOpen(false);
+      setEditTarget(null);
+      editForm.resetFields();
+      await loadLabRecords(recordScope);
+      await loadDueSoonMeta();
+      await loadMonthCompletionMeta();
+    } catch {
+      message.error('修改检验结果失败');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   const handleDueSoonOpen = async () => {
     setDueSoonOpen(true);
     await loadDueSoonMeta();
@@ -653,9 +726,10 @@ export default function LabResultListPage() {
         canSetRecheck,
         onOpenRecheck: openRecheckModal,
         onCriticalHandle: openCriticalHandle,
+        onEdit: hasLabWrite ? openEditModal : undefined,
         onAnomalyAnalyze: hasLabWrite ? openAnomaly : undefined,
       }),
-    [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly],
+    [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly, openEditModal],
   );
   const columnsGrouped = useMemo(
     () =>
@@ -665,9 +739,10 @@ export default function LabResultListPage() {
         canSetRecheck,
         onOpenRecheck: openRecheckModal,
         onCriticalHandle: openCriticalHandle,
+        onEdit: hasLabWrite ? openEditModal : undefined,
         onAnomalyAnalyze: hasLabWrite ? openAnomaly : undefined,
       }),
-    [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly],
+    [canSetRecheck, openRecheckModal, hasLabWrite, openAnomaly, openEditModal],
   );
   const groupedPatients = useMemo(() => groupByPatientAndCategory(rowsFiltered), [rowsFiltered]);
 
@@ -737,9 +812,13 @@ export default function LabResultListPage() {
       message.warning('请至少录入一条有效的检验项目（项目 + 结果值）');
       return;
     }
-    const types = filled.map((r) => r.test_type.trim().toLowerCase());
-    if (new Set(types).size !== types.length) {
-      message.error('同一检验项目不能重复，请删除或合并重复行');
+    const itemKeys = filled.map((r) => {
+      const type = r.test_type.trim().toLowerCase();
+      const timing = requiresSampleTiming(type) ? String(r.notes || '') : '';
+      return `${type}|${timing}`;
+    });
+    if (new Set(itemKeys).size !== itemKeys.length) {
+      message.error('同一检验项目在相同透析时点不能重复，请删除或合并重复行');
       return;
     }
 
@@ -1375,6 +1454,84 @@ export default function LabResultListPage() {
               </div>
             )}
           </Form.List>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="修改检验结果（重要）"
+        open={editOpen}
+        onOk={() => void saveEditModal()}
+        onCancel={() => {
+          setEditOpen(false);
+          setEditTarget(null);
+          editForm.resetFields();
+        }}
+        okText="我已确认，保存修改"
+        cancelText="取消"
+        confirmLoading={editSaving}
+        width={620}
+        destroyOnClose
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="重要提醒"
+          description="修改检验记录会重新计算异常/危急值状态，并可能影响复查提醒、质控统计、AI分析结论和危急值预警。请确认已核对原始化验单后再保存。"
+          style={{ marginBottom: 16 }}
+        />
+        {editTarget ? (
+          <div style={{ marginBottom: 12, color: '#475569', fontSize: 13 }}>
+            患者：<b>{editTarget.patient_name}</b>
+            <span style={{ marginLeft: 12 }}>
+              原记录：{LAB_TYPE_LABELS[editTarget.test_type] ?? editTarget.test_type} = {editTarget.value}
+              {editTarget.unit}
+            </span>
+          </div>
+        ) : null}
+        <Form form={editForm} layout="vertical">
+          <div className="grid-2" style={{ gap: '0 16px' }}>
+            <Form.Item name="test_type" label="检验项目" rules={[{ required: true, message: '请选择检验项目' }]}>
+              <Select
+                placeholder="按类别选项目"
+                options={LAB_TYPE_GROUPED_OPTIONS}
+                showSearch
+                optionFilterProp="label"
+              />
+            </Form.Item>
+            <Form.Item name="test_date" label="检测日期" rules={[{ required: true, message: '请选择检测日期' }]}>
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="value" label="结果值" rules={[{ required: true, message: '请输入结果值' }]}>
+              <Input placeholder="如 5.8" inputMode="decimal" />
+            </Form.Item>
+            <Form.Item name="unit" label="单位">
+              <Input placeholder="默认单位" />
+            </Form.Item>
+          </div>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.test_type !== cur.test_type}>
+            {({ getFieldValue }) => {
+              const type = getFieldValue('test_type');
+              const needsSampleTiming = requiresSampleTiming(type);
+              return (
+                <>
+                  {needsSampleTiming ? (
+                    <Form.Item
+                      name="sample_timing"
+                      label="透析时点"
+                      rules={[{ required: true, message: '请选择透前或透后' }]}
+                    >
+                      <Select options={[...SAMPLE_TIMING_OPTIONS]} placeholder="请选择透前/透后" />
+                    </Form.Item>
+                  ) : null}
+                  {type ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                      当前参考范围：{formatReferenceRange(type)}
+                    </Typography.Text>
+                  ) : null}
+                </>
+              );
+            }}
+          </Form.Item>
         </Form>
       </Modal>
 

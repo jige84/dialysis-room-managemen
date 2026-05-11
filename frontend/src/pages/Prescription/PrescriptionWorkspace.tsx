@@ -9,7 +9,7 @@ import dayjs from 'dayjs';
 import { HistoryOutlined, SaveOutlined, InfoCircleFilled, CheckCircleFilled, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import PageShell from '../../components/PageShell/PageShell';
-import { getDialyzerSelectOptions } from '../../constants/dialyzerConsumables';
+import { devicesApi, type ConsumableStockRow } from '../../api/devices';
 import { DIALYSIS_DEMO_PATIENTS, type DialysisDemoPatient } from '../../constants/dialysisDemoPatients';
 import {
   buildPrescriptionDefaultsFromDemo,
@@ -30,9 +30,17 @@ import {
   type PostDialysisSyncPayload,
 } from '../../utils/postDialysisAssessmentSync';
 import prescriptionsApi, { type PrescriptionRecord } from '../../api/prescriptions';
-import { patientsApi, type Patient } from '../../api/patients';
+import { patientsApi, type Patient, type PatientDetailRecord } from '../../api/patients';
 import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import { isUuid } from '../../utils/anomalyAnalysis';
+import {
+  LEGACY_DIALYZER_PREFIX,
+  buildDialyzerSelectOptions,
+  dialyzerDisplayShort,
+  dialyzerStringForForm,
+  parseDialyzerFormSelection,
+  resolveDialyzerFormValue,
+} from '../../utils/dialyzerCatalog';
 import {
   scheduleShiftLabel,
   sessionDialysisModeShort,
@@ -42,6 +50,7 @@ import {
   groupTodayScheduleRowsByShiftThenZone,
 } from '../../utils/dialysisTodayScheduleDisplay';
 import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantToDb } from '../../constants/prescriptionAnticoagulant';
+import { mergeShiftFromPatientProfileIntoFormValues } from '../../constants/dialysisSchedule';
 import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
 import { useAuthStore } from '../../stores/authStore';
 
@@ -83,10 +92,29 @@ const HDF_REPLACEMENT_MODE_LABEL: Record<string, string> = {
   both: '前后置换',
 };
 
+/** 血流速 / 透析液流速：界面默认值（HDF 常规更高透析液流量） */
+const DEFAULT_BLOOD_FLOW_ML_MIN = 260;
+const DEFAULT_DIALYSATE_FLOW_HD_ML_MIN = 500;
+const DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN = 800;
+
+/** 透析液离子与温度：新开方/表单缺省（均可修改）；钠曲线缺省为 fixed（固定钠） */
+const DEFAULT_DIALYSATE_NA_MMOL = 143;
+const DEFAULT_DIALYSATE_K_MMOL = 2.0;
+const DEFAULT_DIALYSATE_CA_MMOL = 1.5;
+const DEFAULT_DIALYSATE_TEMP_C = 36.5;
+
+function defaultDialysateFlowForMode(mode: string | undefined): number {
+  return mode === 'HDF' ? DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN : DEFAULT_DIALYSATE_FLOW_HD_ML_MIN;
+}
+
 const YES_NO_ASSESS_OPTIONS = [
   { value: 'no', label: '无' },
   { value: 'yes', label: '有' },
 ] as const;
+
+function defaultYesNoAssessField(v: unknown): 'yes' | 'no' {
+  return v === 'yes' || v === 'no' ? v : 'no';
+}
 
 const CITRATE_ANTICOAGULATION_MODE_OPTIONS = [
   { value: 'single_stage', label: '单段式（动脉端）' },
@@ -342,6 +370,8 @@ function enrichMappedPrescriptionForm(
       (form as Record<string, unknown>)[key] = stored[key];
     }
   }
+  form.preAssessEdema = defaultYesNoAssessField(form.preAssessEdema);
+  form.preAssessBleeding = defaultYesNoAssessField(form.preAssessBleeding);
   const mode = typeof form.mode === 'string' ? form.mode : undefined;
   const pre = coerceNumberField(form.preMachineWeight);
   const dry = coerceNumberField(form.dryWeight);
@@ -436,8 +466,6 @@ const PRESCRIPTION_HISTORY = [
   { key: '3', date: '2025-03-10', doctor: '任计阁', summary: 'HD · 3.5h · FX60 · 血流220 · 低分子肝素', status: '历史' },
 ];
 
-const DIALYZER_OPTIONS = getDialyzerSelectOptions();
-
 function frequencyPresetToPerWeek(preset: string | undefined): number {
   switch (preset) {
     case 'weekly_2':
@@ -471,13 +499,6 @@ function hemoModalityFromApi(raw: string | null | undefined): { mode: string; mo
   return { mode: 'other', modeOther: s };
 }
 
-function dialyzerStringForForm(model: string | null | undefined): string {
-  if (!model) return '';
-  const s = String(model).trim();
-  if (!s) return '';
-  return s.startsWith('透析器') ? s : `透析器 ${s}`;
-}
-
 function mapFormModeToHemodialysisModality(mode: string | undefined, modeOther: string | undefined): string {
   if (mode === 'other') {
     const t = String(modeOther ?? '').trim();
@@ -497,7 +518,10 @@ function mergePrescriptionNotesForDb(
   return a || b || undefined;
 }
 
-function mapCurrentPrescriptionToFormValues(rx: PrescriptionRecord): Record<string, unknown> {
+function mapCurrentPrescriptionToFormValues(
+  rx: PrescriptionRecord,
+  dialyzerStocks: ConsumableStockRow[],
+): Record<string, unknown> {
   const rawExtra = rx.form_extra;
   const formExtra =
     rawExtra != null && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
@@ -508,21 +532,33 @@ function mapCurrentPrescriptionToFormValues(rx: PrescriptionRecord): Record<stri
   const notesForSplit =
     rx.notes == null ? null : typeof rx.notes === 'string' ? rx.notes : String(rx.notes);
   const splitNotes = splitPrescriptionNotesFromDb(notesForSplit);
+  const coreModeForFlows = hemo.mode === 'other' ? 'HD' : hemo.mode;
+  const defaultDialysateForRx =
+    coreModeForFlows === 'HDF' ? DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN : DEFAULT_DIALYSATE_FLOW_HD_ML_MIN;
   const fromColumns: Record<string, unknown> = {
     ...freq,
     duration: Number(rx.duration_hours) || 4,
     mode: hemo.mode,
     modeOther: hemo.modeOther,
-    dialyzer: dialyzerStringForForm(rx.dialyzer_model),
-    bloodFlow: rx.blood_flow_rate ?? 250,
-    dialysateFlow: rx.dialysate_flow_rate ?? 500,
+    dialyzer: resolveDialyzerFormValue(
+      { dialyzer_model: rx.dialyzer_model ?? null, dialyzer_flux: rx.dialyzer_flux ?? null },
+      dialyzerStocks,
+    ),
+    bloodFlow:
+      rx.blood_flow_rate != null && Number.isFinite(Number(rx.blood_flow_rate))
+        ? Number(rx.blood_flow_rate)
+        : DEFAULT_BLOOD_FLOW_ML_MIN,
+    dialysateFlow:
+      rx.dialysate_flow_rate != null && Number.isFinite(Number(rx.dialysate_flow_rate))
+        ? Number(rx.dialysate_flow_rate)
+        : defaultDialysateForRx,
     anticoagulant: mapDbAnticoagulantToForm(rx.anticoagulant),
     heparinFirst: rx.heparin_prime_dose ?? undefined,
     heparinMaint: rx.heparin_maintain != null ? Number(rx.heparin_maintain) : undefined,
-    na: rx.dialysate_na != null ? Number(rx.dialysate_na) : 138,
-    k: rx.dialysate_k != null ? Number(rx.dialysate_k) : 2.0,
-    ca: rx.dialysate_ca != null ? Number(rx.dialysate_ca) : 1.5,
-    temp: rx.dialysate_temp != null ? Number(rx.dialysate_temp) : 36.5,
+    na: rx.dialysate_na != null ? Number(rx.dialysate_na) : DEFAULT_DIALYSATE_NA_MMOL,
+    k: rx.dialysate_k != null ? Number(rx.dialysate_k) : DEFAULT_DIALYSATE_K_MMOL,
+    ca: rx.dialysate_ca != null ? Number(rx.dialysate_ca) : DEFAULT_DIALYSATE_CA_MMOL,
+    temp: rx.dialysate_temp != null ? Number(rx.dialysate_temp) : DEFAULT_DIALYSATE_TEMP_C,
     dryWeight: rx.dry_weight != null ? Number(rx.dry_weight) : undefined,
     dryWeightChangeReason: rx.dry_weight_reason ?? '',
     hdfReplacementMode: rx.hdf_replacement_mode ?? undefined,
@@ -535,7 +571,7 @@ function mapCurrentPrescriptionToFormValues(rx: PrescriptionRecord): Record<stri
     hemodialysisRemark: rx.hemodialysis_remark != null ? String(rx.hemodialysis_remark) : '',
   };
   const m: Record<string, unknown> = { ...formExtra, ...fromColumns };
-  const dialysateNa = rx.dialysate_na != null ? Number(rx.dialysate_na) : 138;
+  const dialysateNa = rx.dialysate_na != null ? Number(rx.dialysate_na) : DEFAULT_DIALYSATE_NA_MMOL;
   return {
     ...m,
     hpHeparinExtraIU:
@@ -552,6 +588,10 @@ function mapCurrentPrescriptionToFormValues(rx: PrescriptionRecord): Record<stri
       typeof m.naCurveEnd === 'number' && Number.isFinite(m.naCurveEnd) ? m.naCurveEnd : dialysateNa,
     naCurveTimeStart: typeof m.naCurveTimeStart === 'string' ? m.naCurveTimeStart : '',
     naCurveTimeEnd: typeof m.naCurveTimeEnd === 'string' ? m.naCurveTimeEnd : '',
+    preAssessEdema: defaultYesNoAssessField(m.preAssessEdema),
+    preAssessBleeding: defaultYesNoAssessField(m.preAssessBleeding),
+    preAssessEdemaSite: typeof m.preAssessEdemaSite === 'string' ? m.preAssessEdemaSite : '',
+    preAssessBleedingDesc: typeof m.preAssessBleedingDesc === 'string' ? m.preAssessBleedingDesc : '',
   };
 }
 
@@ -674,9 +714,14 @@ export default function PrescriptionWorkspacePage() {
   const [scheduleTodayRows, setScheduleTodayRows] = useState<TodaySchedulePatientRow[]>([]);
   /** 选中患者时 GET /patients/:id 拉取的档案快照（机位等以服务端为准，避免列表缓存滞后） */
   const [patientDetailFromApi, setPatientDetailFromApi] = useState<Patient | null>(null);
+  const [dialyzerStocks, setDialyzerStocks] = useState<ConsumableStockRow[]>([]);
+  const dialyzerStocksRef = useRef<ConsumableStockRow[]>([]);
+  dialyzerStocksRef.current = dialyzerStocks;
 
   const frequencyPreset = Form.useWatch('frequencyPreset', form);
   const modeWatched = Form.useWatch('mode', form);
+  /** 用于仅在用户切换 HDF/非 HDF 时联动透析液流速，避免首帧覆盖服务端回填 */
+  const prevHemoModeRef = useRef<string | undefined>(undefined);
   const hpHeparinExtraIUWatched = Form.useWatch('hpHeparinExtraIU', form);
   const dryWeightWatched = Form.useWatch('dryWeight', form);
   const preMachineWeightWatched = Form.useWatch('preMachineWeight', form);
@@ -732,6 +777,24 @@ export default function PrescriptionWorkspacePage() {
       cancelled = true;
     };
   }, [selectedPatient]);
+
+  useEffect(() => {
+    prevHemoModeRef.current = undefined;
+  }, [selectedPatient]);
+
+  useEffect(() => {
+    if (modeWatched === undefined || modeWatched === null) return;
+    const cur = String(modeWatched);
+    const prev = prevHemoModeRef.current;
+    prevHemoModeRef.current = cur;
+    if (prev === undefined) return;
+    if (cur === 'HDF' && prev !== 'HDF') {
+      form.setFieldsValue({ dialysateFlow: DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN });
+    } else if (cur !== 'HDF' && prev === 'HDF') {
+      form.setFieldsValue({ dialysateFlow: DEFAULT_DIALYSATE_FLOW_HD_ML_MIN });
+    }
+  }, [modeWatched, form]);
+
   const naWatched = Form.useWatch('na', form);
   const kWatched = Form.useWatch('k', form);
   const caWatched = Form.useWatch('ca', form);
@@ -769,6 +832,52 @@ export default function PrescriptionWorkspacePage() {
   const citrateMonitorPointsWatched = Form.useWatch('citrateMonitorPoints', form);
   const citrateCoagulationSitesWatched = Form.useWatch('citrateCoagulationSites', form);
 
+  const dialyzerStockById = useMemo(() => {
+    const m = new Map<string, ConsumableStockRow>();
+    for (const r of dialyzerStocks) {
+      m.set(r.id, r);
+    }
+    return m;
+  }, [dialyzerStocks]);
+
+  const dialyzerOptions = useMemo(() => {
+    const base = buildDialyzerSelectOptions(dialyzerStocks);
+    const cur = dialyzerWatched;
+    if (typeof cur === 'string' && cur.startsWith(LEGACY_DIALYZER_PREFIX)) {
+      const exists = base.some((o) => o.value === cur);
+      if (!exists) {
+        const label = `${cur.slice(LEGACY_DIALYZER_PREFIX.length)}（未关联目录）`;
+        return [...base, { value: cur, label }];
+      }
+    }
+    return base;
+  }, [dialyzerStocks, dialyzerWatched]);
+
+  useEffect(() => {
+    const cur = form.getFieldValue('dialyzer');
+    if (cur == null || cur === '') return;
+    const s = String(cur);
+    if (isUuid(s)) return;
+
+    if (dialyzerStocks.length === 0) {
+      if (!s.startsWith(LEGACY_DIALYZER_PREFIX)) {
+        form.setFieldsValue({ dialyzer: `${LEGACY_DIALYZER_PREFIX}${dialyzerStringForForm(s)}` });
+      }
+      return;
+    }
+
+    const modelForResolve = s.startsWith(LEGACY_DIALYZER_PREFIX)
+      ? s.slice(LEGACY_DIALYZER_PREFIX.length)
+      : s;
+    const resolved = resolveDialyzerFormValue(
+      { dialyzer_model: modelForResolve, dialyzer_flux: null },
+      dialyzerStocks,
+    );
+    if (resolved !== s) {
+      form.setFieldsValue({ dialyzer: resolved });
+    }
+  }, [dialyzerStocks, form]);
+
   const patientInfo = PATIENTS.find((p) => p.value === selectedPatient);
 
   useEffect(() => {
@@ -781,6 +890,22 @@ export default function PrescriptionWorkspacePage() {
       .catch(() => {
         /* 演示环境可离线 */
       });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    devicesApi
+      .consumables()
+      .then((res: Awaited<ReturnType<typeof devicesApi.consumables>>) => {
+        const rows = res.data.data;
+        if (!cancelled && Array.isArray(rows)) setDialyzerStocks(rows);
+      })
+      .catch(() => {
+        /* 离线时仍可用内置预设选项 */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -806,6 +931,28 @@ export default function PrescriptionWorkspacePage() {
     }));
     return [...real, ...demo];
   }, [realPatients]);
+
+  const prescriptionFormInitialValues = useMemo(() => {
+    const demoDefaults = PATIENTS.find((p) => p.value === selectedPatient)?.defaults;
+    const dialysisBaseline = {
+      sodiumCurve: 'fixed' as const,
+      sodiumCurveCustom: '',
+      na: DEFAULT_DIALYSATE_NA_MMOL,
+      k: DEFAULT_DIALYSATE_K_MMOL,
+      ca: DEFAULT_DIALYSATE_CA_MMOL,
+      temp: DEFAULT_DIALYSATE_TEMP_C,
+      naCurveStart: DEFAULT_DIALYSATE_NA_MMOL,
+      naCurveEnd: DEFAULT_DIALYSATE_NA_MMOL,
+      naCurveTimeStart: '',
+      naCurveTimeEnd: '',
+    };
+    return {
+      preAssessEdema: 'no' as const,
+      preAssessBleeding: 'no' as const,
+      ...dialysisBaseline,
+      ...(demoDefaults ?? {}),
+    };
+  }, [selectedPatient]);
 
   /** 与透析工作台侧栏「今日上机名单」相同：先班次、再分区 */
   const scheduleTodayGrouped = useMemo(
@@ -921,7 +1068,10 @@ export default function PrescriptionWorkspacePage() {
     citrateMonitorPointsWatched,
     citrateCoagulationSitesWatched,
   ]);
-  const dialyzerShort = String(dialyzerWatched ?? '').replace(/^透析器\s*/, '') || '—';
+  const dialyzerShort = dialyzerDisplayShort(
+    typeof dialyzerWatched === 'string' ? dialyzerWatched : undefined,
+    dialyzerStockById,
+  );
 
   const applyPatientFormValues = useCallback(
     (patientValue: string) => {
@@ -976,6 +1126,14 @@ export default function PrescriptionWorkspacePage() {
         if (loadSeq !== prescriptionLoadSeqRef.current) return;
         setScheduleTodayRows(todayList);
 
+        let profilePat: PatientDetailRecord | null = null;
+        try {
+          const pr = await patientsApi.get(selectedPatient);
+          if (pr.data.code === 200 && pr.data.data) profilePat = pr.data.data;
+        } catch {
+          /* 档案失败仍可加载处方 */
+        }
+
         const res = await prescriptionsApi.getCurrent(selectedPatient);
         if (loadSeq !== prescriptionLoadSeqRef.current) return;
         const rx = res.data.data;
@@ -987,7 +1145,7 @@ export default function PrescriptionWorkspacePage() {
         });
 
         if (rx) {
-          const mappedRaw = mapCurrentPrescriptionToFormValues(rx);
+          const mappedRaw = mapCurrentPrescriptionToFormValues(rx, dialyzerStocksRef.current);
           const { form: mapped, ultrafiltrationManualFromLoad } = enrichMappedPrescriptionForm(
             mappedRaw,
             selectedPatient,
@@ -1009,6 +1167,7 @@ export default function PrescriptionWorkspacePage() {
             mapped.heparinFirst as number | undefined,
             mapped.hpHeparinExtraIU as number | undefined,
           );
+          mergeShiftFromPatientProfileIntoFormValues(mapped, profilePat);
           form.setFieldsValue(mapped);
         } else {
           hemodialysisRemarkRef.current = null;
@@ -1022,29 +1181,21 @@ export default function PrescriptionWorkspacePage() {
             dryWeight?: number;
             dryWeightChangeReason?: string;
           } = {};
-          try {
-            const pr = await patientsApi.get(selectedPatient);
-            if (pr.data.code === 200 && pr.data.data) {
-              const pat = pr.data.data;
-              fromProfile = {
-                anticoagulant: mapDbAnticoagulantToForm(pat.profile_anticoagulant ?? undefined),
-                heparinFirst: pat.profile_heparin_prime_dose ?? undefined,
-                heparinMaint:
-                  pat.profile_heparin_maintain != null ? Number(pat.profile_heparin_maintain) : undefined,
-                dryWeight:
-                  pat.profile_dry_weight != null
-                    ? Number(pat.profile_dry_weight)
-                    : undefined,
-                dryWeightChangeReason: pat.profile_dry_weight_reason ?? '',
-              };
-              if (pat.profile_dry_weight != null && Number.isFinite(Number(pat.profile_dry_weight))) {
-                const b = Number(pat.profile_dry_weight);
-                baselineDryWeightRef.current = b;
-                setBaselineDryWeight(b);
-              }
+          if (profilePat) {
+            const pat = profilePat;
+            fromProfile = {
+              anticoagulant: mapDbAnticoagulantToForm(pat.profile_anticoagulant ?? undefined),
+              heparinFirst: pat.profile_heparin_prime_dose ?? undefined,
+              heparinMaint:
+                pat.profile_heparin_maintain != null ? Number(pat.profile_heparin_maintain) : undefined,
+              dryWeight: pat.profile_dry_weight != null ? Number(pat.profile_dry_weight) : undefined,
+              dryWeightChangeReason: pat.profile_dry_weight_reason ?? '',
+            };
+            if (pat.profile_dry_weight != null && Number.isFinite(Number(pat.profile_dry_weight))) {
+              const b = Number(pat.profile_dry_weight);
+              baselineDryWeightRef.current = b;
+              setBaselineDryWeight(b);
             }
-          } catch {
-            /* 无当前处方时用档案抗凝失败则回退默认 */
           }
           const coreMode = 'HD';
           heparinUserEditedRef.current = false;
@@ -1054,7 +1205,7 @@ export default function PrescriptionWorkspacePage() {
             fromProfile.heparinFirst,
             500,
           );
-          form.setFieldsValue({
+          const freshValues: Record<string, unknown> = {
             frequencyPreset: 'weekly_3',
             frequencyCustom: '',
             duration: 4,
@@ -1062,14 +1213,33 @@ export default function PrescriptionWorkspacePage() {
             modeOther: '',
             sodiumCurve: 'fixed',
             sodiumCurveCustom: '',
+            na: DEFAULT_DIALYSATE_NA_MMOL,
+            k: DEFAULT_DIALYSATE_K_MMOL,
+            ca: DEFAULT_DIALYSATE_CA_MMOL,
+            temp: DEFAULT_DIALYSATE_TEMP_C,
+            naCurveStart: DEFAULT_DIALYSATE_NA_MMOL,
+            naCurveEnd: DEFAULT_DIALYSATE_NA_MMOL,
+            naCurveTimeStart: '',
+            naCurveTimeEnd: '',
+            bloodFlow: DEFAULT_BLOOD_FLOW_ML_MIN,
+            dialysateFlow: DEFAULT_DIALYSATE_FLOW_HD_ML_MIN,
+            preAssessEdema: 'no',
+            preAssessBleeding: 'no',
+            preAssessEdemaSite: '',
+            preAssessBleedingDesc: '',
             ...stored,
             ...fromProfile,
-          });
+          };
+          mergeShiftFromPatientProfileIntoFormValues(freshValues, profilePat);
+          form.setFieldsValue(freshValues);
         }
 
         if (todayRowForPatient) {
           const hm = hemoModalityFromApi(todayRowForPatient.session_dialysis_mode as string | undefined);
           form.setFieldsValue({ mode: hm.mode, modeOther: hm.modeOther });
+          if (hm.mode === 'HDF') {
+            form.setFieldsValue({ dialysateFlow: DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN });
+          }
           if (todayRowForPatient.schedule_remark != null && String(todayRowForPatient.schedule_remark).trim()) {
             const t = String(todayRowForPatient.schedule_remark).trim();
             hemodialysisRemarkRef.current = t;
@@ -1357,22 +1527,28 @@ export default function PrescriptionWorkspacePage() {
           ...rawFormValues,
           citrateDetail,
         });
+        const dialyzerParsed = parseDialyzerFormSelection(
+          typeof v.dialyzer === 'string' ? v.dialyzer : undefined,
+          dialyzerStockById,
+        );
         const saveResp = await prescriptionsApi.create(selectedPatient, {
           frequency_per_week: frequencyPresetToPerWeek(v.frequencyPreset as string | undefined),
           duration_hours: Number(v.duration) || 4,
-          dialyzer_model: String(v.dialyzer ?? ''),
-          blood_flow_rate: Number(v.bloodFlow) || 250,
-          dialysate_flow_rate: Number(v.dialysateFlow) || 500,
+          dialyzer_model: dialyzerParsed.dialyzer_model,
+          ...(dialyzerParsed.dialyzer_flux ? { dialyzer_flux: dialyzerParsed.dialyzer_flux } : {}),
+          blood_flow_rate: Number(v.bloodFlow) || DEFAULT_BLOOD_FLOW_ML_MIN,
+          dialysate_flow_rate:
+            Number(v.dialysateFlow) || defaultDialysateFlowForMode(v.mode as string | undefined),
           anticoagulant: mapFormAnticoagulantToDb(antKey),
           heparin_prime_dose: v.heparinFirst != null ? Number(v.heparinFirst) : undefined,
           heparin_maintain: v.heparinMaint != null ? Number(v.heparinMaint) : undefined,
           dry_weight: dryW,
           dry_weight_date: dateStr,
           dry_weight_reason: dryReason,
-          dialysate_na: v.na != null ? Number(v.na) : 138,
-          dialysate_ca: v.ca != null ? Number(v.ca) : 1.5,
-          dialysate_k: v.k != null ? Number(v.k) : 2.0,
-          dialysate_temp: v.temp != null ? Number(v.temp) : 36.5,
+          dialysate_na: v.na != null ? Number(v.na) : DEFAULT_DIALYSATE_NA_MMOL,
+          dialysate_ca: v.ca != null ? Number(v.ca) : DEFAULT_DIALYSATE_CA_MMOL,
+          dialysate_k: v.k != null ? Number(v.k) : DEFAULT_DIALYSATE_K_MMOL,
+          dialysate_temp: v.temp != null ? Number(v.temp) : DEFAULT_DIALYSATE_TEMP_C,
           notes: mergePrescriptionNotesForDb(
             typeof v.preAssessOther === 'string' ? v.preAssessOther : undefined,
             typeof v.notes === 'string' ? v.notes : undefined,
@@ -1401,7 +1577,7 @@ export default function PrescriptionWorkspacePage() {
         if (newRx) {
           try {
             skipPersistRef.current = true;
-            const mappedRaw = mapCurrentPrescriptionToFormValues(newRx as PrescriptionRecord);
+            const mappedRaw = mapCurrentPrescriptionToFormValues(newRx as PrescriptionRecord, dialyzerStocksRef.current);
             const { form: mapped, ultrafiltrationManualFromLoad } = enrichMappedPrescriptionForm(
               mappedRaw,
               selectedPatient,
@@ -1425,6 +1601,10 @@ export default function PrescriptionWorkspacePage() {
               mapped.heparinFirst as number | undefined,
               mapped.hpHeparinExtraIU as number | undefined,
             );
+            mergeShiftFromPatientProfileIntoFormValues(
+              mapped,
+              patientDetailFromApi?.id === selectedPatient ? patientDetailFromApi : null,
+            );
             form.setFieldsValue(mapped);
             const todayStr = dayjs().format('YYYY-MM-DD');
             const todayRowForPatient = scheduleTodayRows.find((r) => {
@@ -1434,6 +1614,9 @@ export default function PrescriptionWorkspacePage() {
             if (todayRowForPatient) {
               const hm = hemoModalityFromApi(todayRowForPatient.session_dialysis_mode as string | undefined);
               form.setFieldsValue({ mode: hm.mode, modeOther: hm.modeOther });
+              if (hm.mode === 'HDF') {
+                form.setFieldsValue({ dialysateFlow: DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN });
+              }
               if (todayRowForPatient.schedule_remark != null && String(todayRowForPatient.schedule_remark).trim()) {
                 const t = String(todayRowForPatient.schedule_remark).trim();
                 hemodialysisRemarkRef.current = t;
@@ -1810,7 +1993,7 @@ export default function PrescriptionWorkspacePage() {
             if (skipPersistRef.current) return;
             persistBasicParamsFromForm();
           }}
-          initialValues={PATIENTS.find((p) => p.value === selectedPatient)?.defaults}
+          initialValues={prescriptionFormInitialValues}
         >
           {patientInfo && (
             <div className="hd-record-section">
@@ -2060,7 +2243,7 @@ export default function PrescriptionWorkspacePage() {
                 </>
               )}
               <Form.Item label="透析器" name="dialyzer" rules={[{ required: true, message: '请选择透析器' }]}>
-                <Select options={DIALYZER_OPTIONS} showSearch optionFilterProp="label" placeholder="从耗材目录选择" />
+                <Select options={dialyzerOptions} showSearch optionFilterProp="label" placeholder="从耗材目录选择" />
               </Form.Item>
             </div>
             <Divider style={{ margin: '8px 0 16px', borderColor: '#DBEAFE' }} />

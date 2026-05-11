@@ -3,7 +3,7 @@
  * GET /api/patients/:id/consent-dialysis-image/:index（index 默认 0）
  */
 import { useEffect, useState } from 'react';
-import { Image, Spin } from 'antd';
+import { Image, Spin, Tooltip } from 'antd';
 import { getApiBaseUrl } from '../../config/apiBaseUrl';
 
 type Props = {
@@ -16,6 +16,7 @@ export default function PatientConsentDialysisImage({ patientId, index = 0 }: Pr
   const [src, setSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [errorText, setErrorText] = useState('影像暂不可预览');
 
   useEffect(() => {
     let cancelled = false;
@@ -24,20 +25,40 @@ export default function PatientConsentDialysisImage({ patientId, index = 0 }: Pr
     (async () => {
       setLoading(true);
       setFailed(false);
+      setErrorText('影像暂不可预览');
       try {
         const res = await fetch(
           `${getApiBaseUrl()}/patients/${patientId}/consent-dialysis-image/${index}`,
           { headers: token ? { Authorization: `Bearer ${token}` } : {} },
         );
         if (!res.ok) {
-          if (!cancelled) setFailed(true);
+          const fallback = res.status === 404 ? '影像文件未找到' : '影像加载失败';
+          let messageText = fallback;
+          try {
+            const body = await res.json();
+            if (typeof body?.message === 'string' && body.message.trim()) {
+              messageText = body.message.trim();
+            }
+          } catch {
+            /* 非 JSON 响应时使用默认提示 */
+          }
+          if (!cancelled) {
+            setErrorText(messageText);
+            setFailed(true);
+          }
           return;
         }
         const blob = await res.blob();
+        if (!blob.type.startsWith('image/')) {
+          throw new Error('接口未返回图片内容');
+        }
         objectUrl = URL.createObjectURL(blob);
         if (!cancelled) setSrc(objectUrl);
-      } catch {
-        if (!cancelled) setFailed(true);
+      } catch (err) {
+        if (!cancelled) {
+          setErrorText(err instanceof Error ? err.message : '影像加载失败');
+          setFailed(true);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -68,25 +89,27 @@ export default function PatientConsentDialysisImage({ patientId, index = 0 }: Pr
   }
   if (failed || !src) {
     return (
-      <div
-        style={{
-          width: 112,
-          height: 84,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          textAlign: 'center',
-          padding: 8,
-          borderRadius: 8,
-          border: '1px dashed #CBD5E1',
-          background: '#F8FAFC',
-          color: '#94A3B8',
-          fontSize: 12,
-          lineHeight: 1.4,
-        }}
-      >
-        影像暂不可预览
-      </div>
+      <Tooltip title={errorText}>
+        <div
+          style={{
+            width: 112,
+            height: 84,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            padding: 8,
+            borderRadius: 8,
+            border: '1px dashed #CBD5E1',
+            background: '#F8FAFC',
+            color: '#94A3B8',
+            fontSize: 12,
+            lineHeight: 1.4,
+          }}
+        >
+          {errorText}
+        </div>
+      </Tooltip>
     );
   }
   return (

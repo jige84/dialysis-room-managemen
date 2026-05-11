@@ -93,6 +93,64 @@ const LAB_REVIEW_CYCLE_DAYS = {
 
 const DEFAULT_REVIEW_CYCLE_DAYS = 90;
 
+function getSampleTimingFromNotes(notes) {
+  const text = String(notes || '').toLowerCase();
+  if (text.includes('sample_timing: post')) return 'post';
+  if (text.includes('sample_timing: pre')) return 'pre';
+  return '';
+}
+
+function isSampleTimingRequired(testType) {
+  const normalizedType = normalizeLabTestType(testType);
+  return normalizedType === 'b2mg' || ['bun', 'cr', 'k', 'na', 'ca', 'p', 'hco3', 'glu'].includes(normalizedType);
+}
+
+function buildLabResultMatchCondition(startIndex, testType, notes) {
+  const usesSampleTiming = isSampleTimingRequired(testType);
+  const sampleTiming = getSampleTimingFromNotes(notes);
+  const params = [];
+  let condition = `patient_id = $${startIndex} AND test_type = $${startIndex + 1} AND test_date = $${startIndex + 2}::date`;
+
+  if (usesSampleTiming && sampleTiming) {
+    condition += ` AND COALESCE(notes, '') ILIKE $${startIndex + 3}`;
+    params.push(`%sample_timing: ${sampleTiming}%`);
+  } else {
+    condition += ' AND COALESCE(notes, \'\') NOT ILIKE \'%sample_timing:%\'';
+  }
+
+  return { condition, params };
+}
+
+function labResultTimingKeySql(alias = '') {
+  const prefix = alias ? `${alias}.` : '';
+  return `
+    CASE
+      WHEN ${prefix}test_type IN ('b2mg','bun','cr','k','na','ca','p','hco3','glu') AND COALESCE(${prefix}notes, '') ILIKE '%sample_timing: post%' THEN 'post'
+      WHEN ${prefix}test_type IN ('b2mg','bun','cr','k','na','ca','p','hco3','glu') AND COALESCE(${prefix}notes, '') ILIKE '%sample_timing: pre%' THEN 'pre'
+      ELSE ''
+    END`;
+}
+
+function calculateLabFlags(testType, value) {
+  const target = LAB_TARGETS[testType] || {};
+  const numericValue = Number(value);
+  const is_abnormal = Boolean(
+    (target.low != null && numericValue < target.low)
+    || (target.high != null && numericValue > target.high),
+  );
+  const is_critical = Boolean(
+    (target.critical_low != null && numericValue < target.critical_low)
+    || (target.critical_high != null && numericValue > target.critical_high),
+  );
+
+  return {
+    target,
+    is_abnormal,
+    is_critical,
+    is_above_target: is_abnormal,
+  };
+}
+
 // ── 静态路由（必须在通配符路由之前）────────────────────────
 
 // GET /api/labs - 全科检验结果分页（检验列表页）
@@ -131,20 +189,32 @@ router.get('/', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'quality']
     }
 
     const where = conditions.join(' AND ');
+    const timingKey = labResultTimingKeySql('lr');
 
     const countRes = await pool.query(
-      `SELECT COUNT(*) FROM lab_results lr
-       JOIN patients p ON lr.patient_id = p.id
-       WHERE ${where}`,
+      `SELECT COUNT(*) FROM (
+         SELECT DISTINCT ON (lr.patient_id, lr.test_type, lr.test_date, ${timingKey}) lr.id
+         FROM lab_results lr
+         JOIN patients p ON lr.patient_id = p.id
+         WHERE ${where}
+         ORDER BY lr.patient_id, lr.test_type, lr.test_date, ${timingKey}, lr.created_at DESC, lr.id DESC
+       ) deduped`,
       params
     );
     const total = parseInt(countRes.rows[0].count);
 
     const { rows } = await pool.query(
-      `SELECT lr.*, p.name AS patient_name, p.gender AS patient_gender
-       FROM lab_results lr
+      `WITH deduped AS (
+         SELECT DISTINCT ON (lr.patient_id, lr.test_type, lr.test_date, ${timingKey})
+           lr.*
+         FROM lab_results lr
+         JOIN patients p ON lr.patient_id = p.id
+         WHERE ${where}
+         ORDER BY lr.patient_id, lr.test_type, lr.test_date, ${timingKey}, lr.created_at DESC, lr.id DESC
+       )
+       SELECT lr.*, p.name AS patient_name, p.gender AS patient_gender
+       FROM deduped lr
        JOIN patients p ON lr.patient_id = p.id
-       WHERE ${where}
        ORDER BY lr.test_date DESC, lr.created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, page_size, offset]
@@ -206,17 +276,18 @@ router.get('/recent', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'qua
     const endStr = formatDate(endDate);
 
     const offset = (page - 1) * pageSize;
+    const timingKey = labResultTimingKeySql('lr');
 
     const { rows } = await pool.query(
       `WITH latest AS (
-         SELECT DISTINCT ON (lr.patient_id, lr.test_type)
+         SELECT DISTINCT ON (lr.patient_id, lr.test_type, ${timingKey})
            lr.*
          FROM lab_results lr
          JOIN patients p0 ON p0.id = lr.patient_id
          WHERE p0.status = 'active'
            AND lr.test_date >= $1
            AND lr.test_date <= $2
-         ORDER BY lr.patient_id, lr.test_type, lr.test_date DESC, lr.created_at DESC, lr.id DESC
+         ORDER BY lr.patient_id, lr.test_type, ${timingKey}, lr.test_date DESC, lr.created_at DESC, lr.id DESC
        )
        SELECT
          latest.*,
@@ -244,7 +315,8 @@ router.get('/recent', auth, rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'qua
     const seenRecent = new Set();
     for (const row of rows) {
       const normalizedType = normalizeLabTestType(row.test_type);
-      const key = `${row.patient_id}:${normalizedType}`;
+      const timing = isSampleTimingRequired(normalizedType) ? getSampleTimingFromNotes(row.notes) : '';
+      const key = `${row.patient_id}:${normalizedType}:${timing}`;
       if (seenRecent.has(key)) continue;
       seenRecent.add(key);
       dedupedRows.push({ ...row, test_type: normalizedType });
@@ -468,14 +540,29 @@ router.get('/:patientId', auth, async (req, res, next) => {
 
     const where = conditions.join(' AND ');
 
-    const countRes = await pool.query(`SELECT COUNT(*) FROM lab_results WHERE ${where}`, params);
+    const timingKey = labResultTimingKeySql();
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM (
+         SELECT DISTINCT ON (patient_id, test_type, test_date, ${timingKey}) id
+         FROM lab_results
+         WHERE ${where}
+         ORDER BY patient_id, test_type, test_date, ${timingKey}, created_at DESC, id DESC
+       ) deduped`,
+      params
+    );
     const total = parseInt(countRes.rows[0].count);
 
     const { rows } = await pool.query(
-      `SELECT lr.*, u.real_name as entered_by_name
-       FROM lab_results lr LEFT JOIN users u ON lr.entered_by = u.id
-       WHERE ${where}
-       ORDER BY test_date DESC, test_type
+      `WITH deduped AS (
+         SELECT DISTINCT ON (patient_id, test_type, test_date, ${timingKey})
+           *
+         FROM lab_results
+         WHERE ${where}
+         ORDER BY patient_id, test_type, test_date, ${timingKey}, created_at DESC, id DESC
+       )
+       SELECT lr.*, u.real_name as entered_by_name
+       FROM deduped lr LEFT JOIN users u ON lr.entered_by = u.id
+       ORDER BY lr.test_date DESC, lr.created_at DESC, lr.test_type
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, page_size, offset]
     );
@@ -547,34 +634,59 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
       if (!test_type || value === undefined) continue;
       const normalizedTestType = normalizeLabTestType(test_type);
 
-      const target = LAB_TARGETS[normalizedTestType] || {};
-      const numericValue = Number(value);
-      const is_abnormal = Boolean(
-        (target.low != null && numericValue < target.low)
-        || (target.high != null && numericValue > target.high),
-      );
-      const is_critical = Boolean(
-        (target.critical_low != null && numericValue < target.critical_low)
-        || (target.critical_high != null && numericValue > target.critical_high),
-      );
-      const is_above_target = is_abnormal;
+      const { target, is_abnormal, is_critical, is_above_target } = calculateLabFlags(normalizedTestType, value);
 
+      const normalizedTestDate = test_date || formatDate(new Date());
+      const match = buildLabResultMatchCondition(15, normalizedTestType, notes);
       const { rows } = await pool.query(
-        `INSERT INTO lab_results (
-           patient_id, test_type, value, unit, test_date,
-           reference_low, reference_high, target_low, target_high,
-           is_abnormal, is_critical, is_above_target,
-           entered_by, notes
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-         RETURNING id, test_type, value, is_critical`,
+        `WITH existing AS (
+           SELECT id
+           FROM lab_results
+           WHERE ${match.condition}
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1
+         ),
+         updated AS (
+           UPDATE lab_results
+           SET value = $3,
+               unit = $4,
+               reference_low = $6,
+               reference_high = $7,
+               target_low = $8,
+               target_high = $9,
+               is_abnormal = $10,
+               is_critical = $11,
+               is_above_target = $12,
+               entered_by = $13,
+               notes = $14,
+               created_at = NOW()
+           WHERE id = (SELECT id FROM existing)
+           RETURNING id, test_type, value, is_critical
+         ),
+         inserted AS (
+           INSERT INTO lab_results (
+             patient_id, test_type, value, unit, test_date,
+             reference_low, reference_high, target_low, target_high,
+             is_abnormal, is_critical, is_above_target,
+             entered_by, notes
+           )
+           SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+           WHERE NOT EXISTS (SELECT 1 FROM existing)
+           RETURNING id, test_type, value, is_critical
+         )
+         SELECT * FROM updated
+         UNION ALL
+         SELECT * FROM inserted`,
         [
           req.params.patientId, normalizedTestType, value,
           unit || target.unit || '',
-          test_date || formatDate(new Date()),
+          normalizedTestDate,
           target.low || null, target.high || null,
           target.low || null, target.high || null,
           is_abnormal, is_critical, is_above_target,
-          req.user.id, notes
+          req.user.id, notes,
+          req.params.patientId, normalizedTestType, normalizedTestDate,
+          ...match.params
         ]
       );
       results.push(rows[0]);
@@ -606,6 +718,157 @@ router.post('/:patientId', auth, rbac(['admin','doctor','head_nurse']), async (r
 
     return created(res, results, `${results.length}条检验结果录入成功`);
   } catch (err) { next(err); }
+});
+
+// PATCH /api/labs/:id - 修改单条检验结果
+// labs:write 权限：admin, doctor, head_nurse。修改会重新计算异常/危急值状态。
+router.patch('/:id', auth, rbac(['admin','doctor','head_nurse']), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { test_type, value, unit, test_date, notes } = req.body || {};
+    if (!test_type) return error(res, 'test_type 为必填项', 400);
+    if (value === undefined || value === null || String(value).trim() === '') {
+      return error(res, 'value 为必填项', 400);
+    }
+
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return error(res, 'value 必须是有效数字', 400);
+
+    const normalizedTestType = normalizeLabTestType(test_type);
+    const normalizedTestDate = test_date || formatDate(new Date());
+    const parsedDate = new Date(normalizedTestDate);
+    if (Number.isNaN(parsedDate.getTime())) return error(res, 'test_date 格式无效（需为 YYYY-MM-DD）', 400);
+
+    if (isSampleTimingRequired(normalizedTestType) && !getSampleTimingFromNotes(notes)) {
+      return error(res, '该检验项目必须选择透前或透后', 400);
+    }
+
+    await client.query('BEGIN');
+    const { rows: currentRows } = await client.query(
+      `SELECT lr.id, lr.patient_id, p.name AS patient_name
+       FROM lab_results lr
+       JOIN patients p ON p.id = lr.patient_id
+       WHERE lr.id = $1
+       FOR UPDATE`,
+      [req.params.id],
+    );
+    if (currentRows.length === 0) {
+      await client.query('ROLLBACK');
+      return notFound(res, '检验记录不存在');
+    }
+
+    const current = currentRows[0];
+    const match = buildLabResultMatchCondition(2, normalizedTestType, notes);
+    const { rows: duplicateRows } = await client.query(
+      `SELECT id
+       FROM lab_results
+       WHERE ${match.condition}
+         AND id <> $1
+       LIMIT 1`,
+      [
+        req.params.id,
+        current.patient_id,
+        normalizedTestType,
+        normalizedTestDate,
+        ...match.params,
+      ],
+    );
+    if (duplicateRows.length > 0) {
+      await client.query('ROLLBACK');
+      return error(res, '同一患者、同一日期、同一检验项目已存在记录，请先合并或修改原记录', 409);
+    }
+
+    const { target, is_abnormal, is_critical, is_above_target } = calculateLabFlags(normalizedTestType, numericValue);
+    const { rows } = await client.query(
+      `UPDATE lab_results
+       SET test_type = $1,
+           value = $2,
+           unit = $3,
+           test_date = $4,
+           reference_low = $5,
+           reference_high = $6,
+           target_low = $7,
+           target_high = $8,
+           is_abnormal = $9,
+           is_critical = $10,
+           is_above_target = $11,
+           entered_by = $12,
+           notes = $13,
+           created_at = NOW()
+       WHERE id = $14
+       RETURNING id, patient_id, test_type, value, unit, test_date,
+                 reference_low, reference_high, target_low, target_high,
+                 is_abnormal, is_critical, is_above_target, notes`,
+      [
+        normalizedTestType,
+        numericValue,
+        unit || target.unit || '',
+        normalizedTestDate,
+        target.low || null,
+        target.high || null,
+        target.low || null,
+        target.high || null,
+        is_abnormal,
+        is_critical,
+        is_above_target,
+        req.user.id,
+        notes || null,
+        req.params.id,
+      ],
+    );
+
+    if (is_critical) {
+      const testLabel = normalizedTestType.toUpperCase();
+      const alertTitle = `检验危急值：${current.patient_name}`;
+      const alertMessage = `${current.patient_name} ${testLabel}=${numericValue}${unit || target.unit || ''}，请立即处理`;
+      const { rows: alertRows } = await client.query(
+        `SELECT id
+         FROM alerts
+         WHERE patient_id = $1
+           AND alert_type = 'lab_critical'
+           AND alert_rule_id = $2
+           AND status = 'active'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [current.patient_id, req.params.id],
+      );
+      if (alertRows[0]?.id) {
+        await client.query(
+          `UPDATE alerts
+           SET severity = 'critical',
+               title = $1,
+               message = $2,
+               status = 'active'
+           WHERE id = $3`,
+          [alertTitle, alertMessage, alertRows[0].id],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO alerts (patient_id, alert_rule_id, alert_type, severity, title, message, status)
+           VALUES ($1, $2, 'lab_critical', 'critical', $3, $4, 'active')`,
+          [current.patient_id, req.params.id, alertTitle, alertMessage],
+        );
+      }
+    } else {
+      await client.query(
+        `UPDATE alerts
+         SET status = 'auto_closed'
+         WHERE patient_id = $1
+           AND alert_type = 'lab_critical'
+           AND alert_rule_id = $2
+           AND status = 'active'`,
+        [current.patient_id, req.params.id],
+      );
+    }
+
+    await client.query('COMMIT');
+    return success(res, rows[0], '检验结果已修改');
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore rollback failure */ }
+    return next(err);
+  } finally {
+    client.release();
+  }
 });
 
 // PATCH /api/labs/:id/critical-confirm - 确认危急值

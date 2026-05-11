@@ -118,6 +118,9 @@ const labsApi = {
   add: (patientId: string, items: Partial<LabResult>[]) =>
     request.post<ApiResponse<LabResult[]>>(`/labs/${patientId}`, items),
 
+  update: (id: string, payload: Pick<Partial<LabResult>, 'test_type' | 'value' | 'unit' | 'test_date' | 'notes'>) =>
+    request.patch<ApiResponse<LabResult>>(`/labs/${id}`, payload),
+
   confirmCritical: (id: string) =>
     request.patch<ApiResponse<LabResult>>(`/labs/${id}/critical-confirm`),
 
