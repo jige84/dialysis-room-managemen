@@ -20,8 +20,9 @@ import {
   Space,
   Spin,
   Empty,
+  Dropdown,
 } from 'antd';
-import { SearchOutlined, PlusOutlined, ToolOutlined, EyeOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, ToolOutlined, EyeOutlined, DownOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageShell from '../../components/PageShell/PageShell';
 import { useAuthStore } from '../../stores/authStore';
@@ -200,6 +201,25 @@ export default function DevicesPage() {
       setLoading(false);
     }
   }, []);
+
+  const patchConsumableDialysisRole = useCallback(
+    async (r: ConsumableStockRow, role: 'membrane' | 'hemoperfusion' | null) => {
+      try {
+        await devicesApi.patchConsumableMeta(r.id, { hemodialysis_piece_role: role });
+        const hint =
+          role === 'hemoperfusion'
+            ? '已归类为灌流器（处方 HD+HP 下拉将同步显示）'
+            : role === 'membrane'
+              ? '已归类为透析膜材（透析器下拉）'
+              : '已清除归类（仍可按名称含「灌流」自动识别灌流器）';
+        message.success(hint);
+        await loadAll();
+      } catch {
+        /* request 层已提示 */
+      }
+    },
+    [loadAll],
+  );
 
   const loadTodayUsage = useCallback(async () => {
     setTodayUsageLoading(true);
@@ -529,6 +549,20 @@ export default function DevicesPage() {
         ),
     },
     {
+      title: '处方归类',
+      width: 110,
+      render: (_: unknown, r: ConsumableStockRow) => {
+        if (r.category !== 'dialyzer') return '—';
+        if (r.hemodialysis_piece_role === 'hemoperfusion') {
+          return <Tag color="purple">灌流器</Tag>;
+        }
+        if (r.hemodialysis_piece_role === 'membrane') {
+          return <Tag color="blue">透析膜材</Tag>;
+        }
+        return <Tag>自动</Tag>;
+      },
+    },
+    {
       title: '库存',
       render: (_: unknown, r: ConsumableStockRow) => {
         const lv = stockLevel(r);
@@ -581,6 +615,27 @@ export default function DevicesPage() {
               >
                 入库
               </Button>
+            )}
+            {canDeleteDeviceAsset && r.category === 'dialyzer' && (
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'hemoperfusion', label: '标记为灌流器（HD+HP 处方）' },
+                    { key: 'membrane', label: '标记为透析膜材（透析器）' },
+                    { key: 'auto', label: '清除归类（名称推断）' },
+                  ],
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    if (key === 'hemoperfusion') void patchConsumableDialysisRole(r, 'hemoperfusion');
+                    else if (key === 'membrane') void patchConsumableDialysisRole(r, 'membrane');
+                    else void patchConsumableDialysisRole(r, null);
+                  },
+                }}
+              >
+                <Button size="small">
+                  归类 <DownOutlined />
+                </Button>
+              </Dropdown>
             )}
             {canDeleteDeviceAsset && (
               <Button size="small" danger onClick={() => handleDeleteConsumable(r)}>
@@ -1742,6 +1797,13 @@ export default function DevicesPage() {
             if (!itemName && (stockCategoryLabel === '穿刺针（钝）' || stockCategoryLabel === '穿刺针（锐）') && v.gauge) {
               itemName = v.gauge;
             }
+            let pieceRole: 'membrane' | 'hemoperfusion' | undefined;
+            if (backendCategory === 'dialyzer') {
+              if (stockCategoryLabel === '灌流器') pieceRole = 'hemoperfusion';
+              else if (stockCategoryLabel === '透析器' || stockCategoryLabel === '血滤器') {
+                pieceRole = 'membrane';
+              }
+            }
             try {
               await devicesApi.createConsumableStock({
                 item_name: itemName,
@@ -1752,6 +1814,7 @@ export default function DevicesPage() {
                 manufacturer: v.manufacturer,
                 storage_location: v.storage_location,
                 alert_threshold: v.alert_threshold,
+                ...(pieceRole ? { hemodialysis_piece_role: pieceRole } : {}),
               });
               message.success('耗材目录已创建');
               setShowStockModal(false);

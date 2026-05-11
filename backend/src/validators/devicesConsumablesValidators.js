@@ -10,9 +10,17 @@ function validateConsumableCreatePayload(body) {
     registration_no,
     storage_location,
     alert_threshold,
+    hemodialysis_piece_role,
   } = payload;
   if (!item_name || !category || !unit) {
     return { ok: false, message: '品名、目录分类与单位为必填项' };
+  }
+  if (
+    hemodialysis_piece_role != null
+    && hemodialysis_piece_role !== ''
+    && !['membrane', 'hemoperfusion'].includes(hemodialysis_piece_role)
+  ) {
+    return { ok: false, message: 'hemodialysis_piece_role 无效' };
   }
   return {
     ok: true,
@@ -26,6 +34,7 @@ function validateConsumableCreatePayload(body) {
       registration_no: registration_no || null,
       storage_location: storage_location || null,
       alert_threshold: alert_threshold ?? 0,
+      hemodialysis_piece_role: hemodialysis_piece_role || null,
     },
   };
 }
@@ -94,8 +103,22 @@ function validateConsumableStockPatchPayload(body) {
   };
 }
 
+function validateConsumableMetaPatchPayload(body) {
+  const payload = body || {};
+  const { hemodialysis_piece_role: roleRaw } = payload;
+  if (roleRaw === undefined) {
+    return { ok: false, message: '缺少 hemodialysis_piece_role（可为 null 清除归类）' };
+  }
+  if (roleRaw !== null && roleRaw !== '' && !['membrane', 'hemoperfusion'].includes(roleRaw)) {
+    return { ok: false, message: 'hemodialysis_piece_role 须为 membrane、hemoperfusion 或 null' };
+  }
+  const role = roleRaw === '' ? null : roleRaw;
+  return { ok: true, value: { hemodialysis_piece_role: role } };
+}
+
 module.exports = {
   validateConsumableCreatePayload,
+  validateConsumableMetaPatchPayload,
   validateConsumableInboundPayload,
   normalizeConsumableOutboundLinesQuery,
   validateConsumablePatientUsageQuery,

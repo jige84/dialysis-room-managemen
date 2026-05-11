@@ -14,11 +14,17 @@ export const LEGACY_HP_PREFIX = 'legacy_hp|||';
 const PERFUSION_NAME_RE = /灌流/u;
 
 export function isHemoperfusionCatalogRow(row: ConsumableStockRow): boolean {
-  return row.category === 'dialyzer' && PERFUSION_NAME_RE.test(row.item_name);
+  if (row.category !== 'dialyzer') return false;
+  if (row.hemodialysis_piece_role === 'hemoperfusion') return true;
+  if (row.hemodialysis_piece_role === 'membrane') return false;
+  return PERFUSION_NAME_RE.test(row.item_name);
 }
 
 export function isDialysisMembraneCatalogRow(row: ConsumableStockRow): boolean {
-  return row.category === 'dialyzer' && !isHemoperfusionCatalogRow(row);
+  if (row.category !== 'dialyzer') return false;
+  if (row.hemodialysis_piece_role === 'hemoperfusion') return false;
+  if (row.hemodialysis_piece_role === 'membrane') return true;
+  return !PERFUSION_NAME_RE.test(row.item_name);
 }
 
 export function dialyzerStringForForm(model: string | null | undefined): string {

@@ -2351,7 +2351,7 @@ export default function PrescriptionWorkspacePage() {
                   label="灌流器"
                   name="hpCartridge"
                   rules={[{ required: true, message: '请选择灌流器（HD+HP）' }]}
-                  extra="与透析器组合用于 HD+HP；请在耗材目录中维护名称含「灌流」的条目。"
+                  extra="选项来自设备耗材仓库中有库存的目录项。若型号不含「灌流」字样，请到「设备与耗材」→ 耗材列表对该条目使用「归类 → 标记为灌流器」。新建目录时选择「灌流器」类会自动归类。"
                 >
                   <Select
                     options={hpCartridgeOptions}

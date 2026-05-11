@@ -16,7 +16,12 @@ async function createConsumable(db, payload, userId) {
     payload.storage_location,
     payload.alert_threshold,
     userId,
+    payload.hemodialysis_piece_role ?? null,
   ]);
+}
+
+async function patchConsumableMeta(db, stockItemId, hemodialysisPieceRole) {
+  return DevicesConsumablesRepository.patchConsumableStockMeta(db, stockItemId, hemodialysisPieceRole);
 }
 
 async function deleteConsumable(db, stockItemId) {
@@ -126,6 +131,7 @@ async function patchConsumableStock(db, stockItemId, payload, userId) {
 module.exports = {
   listConsumables,
   createConsumable,
+  patchConsumableMeta,
   deleteConsumable,
   getConsumableLastInbound,
   inboundConsumable,

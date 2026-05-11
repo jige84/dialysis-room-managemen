@@ -62,6 +62,8 @@ export interface ConsumableStockRow {
   registration_no?: string | null;
   storage_location?: string | null;
   batch_remaining_sum?: string | number;
+  /** 透析大类下：透析膜材 vs 灌流器，处方下拉分流 */
+  hemodialysis_piece_role?: 'membrane' | 'hemoperfusion' | null;
 }
 
 export interface LastInboundRow {
@@ -189,6 +191,12 @@ export interface CreateConsumableStockPayload {
   registration_no?: string;
   storage_location?: string;
   alert_threshold?: number;
+  /** 新建透析相关目录时写入仓库归类 */
+  hemodialysis_piece_role?: 'membrane' | 'hemoperfusion' | null;
+}
+
+export interface PatchConsumableMetaPayload {
+  hemodialysis_piece_role: 'membrane' | 'hemoperfusion' | null;
 }
 
 export interface CreateMachineAlertPayload {
@@ -241,6 +249,9 @@ export const devicesApi = {
 
   createConsumableStock: (data: CreateConsumableStockPayload) =>
     request.post<ApiResponse<ConsumableStockRow>>('/devices/consumables', data),
+
+  patchConsumableMeta: (id: string, data: PatchConsumableMetaPayload) =>
+    request.patch<ApiResponse<ConsumableStockRow>>(`/devices/consumables/${id}/meta`, data),
 
   deleteConsumableStock: (id: string) =>
     request.delete<ApiResponse<{ id: string; item_name: string; category: string }>>(`/devices/consumables/${id}`),

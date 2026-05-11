@@ -14,10 +14,20 @@ async function createConsumableStock(db, params) {
   return db.query(
     `INSERT INTO consumable_stocks (
       item_name, category, specification, unit, dialyzer_flux, manufacturer, registration_no, storage_location,
-      alert_threshold, current_stock, updated_by
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,0),0,$10)
+      alert_threshold, current_stock, updated_by, hemodialysis_piece_role
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,0),0,$10,$11)
     RETURNING *`,
     params,
+  );
+}
+
+async function patchConsumableStockMeta(db, stockItemId, hemodialysisPieceRole) {
+  return db.query(
+    `UPDATE consumable_stocks
+     SET hemodialysis_piece_role = $2, updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [stockItemId, hemodialysisPieceRole],
   );
 }
 
@@ -135,6 +145,7 @@ async function patchConsumableStockSet(db, quantity, notes, userId, stockItemId)
 module.exports = {
   listConsumableStocks,
   createConsumableStock,
+  patchConsumableStockMeta,
   deleteConsumableStock,
   getConsumableLastInbound,
   upsertConsumableBatch,

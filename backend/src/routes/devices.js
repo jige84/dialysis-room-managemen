@@ -35,6 +35,7 @@ const DevicesConsumablesService = require('../services/DevicesConsumablesService
 const {
   validateConsumableCreatePayload,
   validateConsumableInboundPayload,
+  validateConsumableMetaPatchPayload,
   normalizeConsumableOutboundLinesQuery,
   validateConsumablePatientUsageQuery,
   validateConsumableStockPatchPayload,
@@ -377,6 +378,25 @@ router.get('/consumables/:id/last-inbound', auth, async (req, res, next) => {
     const { rows } = await DevicesConsumablesService.getConsumableLastInbound(pool, req.params.id);
     return success(res, rows[0] || null);
   } catch (err) { next(err); }
+});
+
+router.patch('/consumables/:id/meta', auth, rbac(['admin', 'head_nurse', 'technician']), async (req, res, next) => {
+  try {
+    const valid = validateConsumableMetaPatchPayload(req.body);
+    if (!valid.ok) return error(res, valid.message);
+    const { rows } = await DevicesConsumablesService.patchConsumableMeta(
+      pool,
+      req.params.id,
+      valid.value.hemodialysis_piece_role,
+    );
+    if (rows.length === 0) return notFound(res, '耗材目录不存在');
+    return success(res, rows[0], '耗材归类已更新');
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_COLUMN) {
+      return error(res, '请先执行数据库迁移 062_consumable_stocks_hemodialysis_piece_role.sql', 503);
+    }
+    next(err);
+  }
 });
 
 router.post('/consumables/inbound', auth, rbac(['admin', 'head_nurse', 'nurse']), async (req, res, next) => {
