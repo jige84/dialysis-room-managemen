@@ -90,11 +90,14 @@ function scheduleDialysisModeLabel(mode: string | null | undefined): string {
   return map[u] || map[raw] || raw;
 }
 
-/** 排序键：优先透析机 machine_no，其次档案约定机位（格内展示常与之一致） */
+/**
+ * 排序键：与周视图格内卡片底部展示一致（仅渲染 machineStation），
+ * 故排序优先用档案约定机位；无展示文案时再退回透析机 machine_no。
+ */
 function scheduleSlotMachineLabelForSort(p: PatientSlot): string {
-  const no = p.machineNo?.trim();
-  if (no) return no;
-  return (p.machineStation ?? '').trim();
+  const station = (p.machineStation ?? '').trim();
+  if (station) return station;
+  return (p.machineNo ?? '').trim();
 }
 
 /**
