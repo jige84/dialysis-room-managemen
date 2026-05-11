@@ -42,3 +42,15 @@ export function buildPatientNameInitialsChain(name: string): string {
   }
   return parts.join('');
 }
+
+/**
+ * 表单「签名」默认值：含中文的展示名取逐字拼音首字母小写（如「杨晨」→ yc）；纯英文/数字登录名等则保持原样。
+ * 用户仍可手改：允许继续输入全名汉字或首字母缩写。
+ */
+export function defaultSignatureFromUserDisplayName(displayName: string): string {
+  const s = String(displayName ?? '').trim();
+  if (!s) return '';
+  if (!/[\u4e00-\u9fff]/.test(s)) return s;
+  const initials = buildPatientNameInitialsChain(s);
+  return initials || s;
+}

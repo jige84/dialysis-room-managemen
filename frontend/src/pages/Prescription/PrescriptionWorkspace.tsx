@@ -60,6 +60,7 @@ import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantTo
 import { mergeShiftFromPatientProfileIntoFormValues } from '../../constants/dialysisSchedule';
 import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
 import { useAuthStore } from '../../stores/authStore';
+import { defaultSignatureFromUserDisplayName } from '../../utils/patientNamePinyin';
 
 /** 今日排班名单侧栏宽度（与透析工作台同级） */
 const PRESCRIPTION_TODAY_SIDER_WIDTH = 192;
@@ -685,13 +686,15 @@ function buildCitrateDetailSummary(values: Record<string, unknown>): string {
   return lines.join('；');
 }
 
-/** 医生签名为空时填入当前登录用户（优先 real_name，否则 username；可修改） */
+/** 医生签名为空时填入当前用户默认签名（中文姓名→拼音首字母，如「杨晨」→ yc；可手改为全名） */
 function ensureDoctorSignatureFromCurrentUser(form: {
   getFieldValue: (name: string) => unknown;
   setFieldValue: (name: string, value: string) => void;
 }) {
   const u = useAuthStore.getState().user;
-  const name = u ? (u.real_name?.trim() || u.username?.trim() || '') : '';
+  const raw = u ? (u.real_name?.trim() || u.username?.trim() || '') : '';
+  if (!raw) return;
+  const name = defaultSignatureFromUserDisplayName(raw);
   if (!name) return;
   const cur = form.getFieldValue('doctorSignature');
   if (cur == null || String(cur).trim() === '') {
@@ -3083,7 +3086,10 @@ export default function PrescriptionWorkspacePage() {
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <Form.Item label="医生签名" name="doctorSignature" style={{ marginBottom: 8 }}>
-                <Input placeholder="默认当前登录用户姓名，可修改" style={{ width: 'min(220px, 100%)' }} />
+                <Input
+                  placeholder="默认拼音首字母，可填全名（如 杨晨 或 yc）"
+                  style={{ width: 'min(220px, 100%)' }}
+                />
               </Form.Item>
               <div
                 style={{
