@@ -99,6 +99,8 @@ export interface TodaySchedulePatientRow {
   schedule_remark?: string | null;
   /** 与档案同步的约定机位（schedules.machine_station） */
   machine_station?: string | null;
+  /** 档案维护的干体重（无处方干体重时工作台展示用） */
+  profile_dry_weight?: number | string | null;
   prescription_dry_weight?: number | string | null;
   dialysis_record_id?: string | null;
   dialysis_pre_weight?: number | string | null;

@@ -171,10 +171,25 @@ function accessDisplay(raw: string | null | undefined): string {
   return u;
 }
 
+/** 与患者列表一致：档案干体重优先，其次当前处方干体重 */
+function resolveDryWeightKg(
+  profile: TodaySchedulePatientRow['profile_dry_weight'],
+  prescription: TodaySchedulePatientRow['prescription_dry_weight'],
+): number | null {
+  const toNum = (v: unknown): number | null => {
+    if (v == null || v === '') return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
+  const fromProfile = toNum(profile);
+  if (fromProfile != null) return fromProfile;
+  return toNum(prescription);
+}
+
 /** 排班行 → 今日透析表格行 */
 export function mapScheduleRowToDashboardSession(row: TodaySchedulePatientRow): DashboardSessionRow {
   const name = (row.patient_name as string) || '患者';
-  const dry = row.prescription_dry_weight != null ? Number(row.prescription_dry_weight) : null;
+  const dry = resolveDryWeightKg(row.profile_dry_weight, row.prescription_dry_weight);
   const pre = row.dialysis_pre_weight != null ? Number(row.dialysis_pre_weight) : null;
   const uf = row.dialysis_uf_volume != null ? Number(row.dialysis_uf_volume) : null;
   const ufPct = row.dialysis_uf_pct_of_dry_weight != null ? Number(row.dialysis_uf_pct_of_dry_weight) : null;

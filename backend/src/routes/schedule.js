@@ -1276,6 +1276,7 @@ router.get('/today', auth, async (req, res, next) => {
 
     const { rows } = await pool.query(
       `SELECT s.*, p.name as patient_name, p.gender, p.dob, p.primary_diagnosis, p.isolation_zone,
+              p.profile_dry_weight,
               va.access_type, va.location as access_location,
               m.machine_no,
               pr.dry_weight AS prescription_dry_weight,
