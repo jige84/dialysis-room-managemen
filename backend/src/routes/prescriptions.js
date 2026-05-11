@@ -74,6 +74,14 @@ function pgParam(v) {
   return v === undefined ? null : v;
 }
 
+/** 处方保存时同步患者常用耗材下拉值（UUID 或 legacy 前缀串） */
+function sanitizeConsumableFormSelection(raw, maxLen = 200) {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
 /** node-pg 对 DATE 可能返回 Date 或 string，统一为 YYYY-MM-DD 供 ::date 绑定（勿用 toISOString 切片，避免 UTC 与服务器本地日历差一天） */
 function coercePgDateValue(v) {
   if (v == null) return null;
@@ -188,6 +196,8 @@ router.post('/:patientId', auth, rbac(['admin','doctor']),
       hdf_replacement_mode: bodyHdfReplacementMode,
       hdf_replacement_volume_l: bodyHdfReplacementVolumeL,
       form_extra: bodyFormExtra,
+      dialyzer_form_selection: bodyDialyzerFormSelection,
+      hp_cartridge_form_selection: bodyHpCartridgeFormSelection,
     } = req.body || {};
 
     const formExtra = serializeFormExtraForDb(bodyFormExtra);
@@ -378,6 +388,23 @@ router.post('/:patientId', auth, rbac(['admin','doctor']),
             : null,
           req.params.patientId,
         ],
+      );
+
+      const dialyzerSelParam = sanitizeConsumableFormSelection(bodyDialyzerFormSelection);
+      const hpSelParam = sanitizeConsumableFormSelection(bodyHpCartridgeFormSelection);
+      const isHdHpModality = normalizedHemoModality === 'HD_HP';
+      await clientQueryIgnoreUndefinedColumn(
+        client,
+        '同步 patients profile_dialyzer_selection / profile_hemoperfusion_selection',
+        `UPDATE patients SET
+            profile_dialyzer_selection = CASE WHEN $1::text IS NOT NULL THEN $1 ELSE profile_dialyzer_selection END,
+            profile_hemoperfusion_selection = CASE
+              WHEN $2::boolean AND $3::text IS NOT NULL THEN $3
+              ELSE profile_hemoperfusion_selection
+            END,
+            updated_at = NOW()
+         WHERE id = $4`,
+        [dialyzerSelParam, isHdHpModality, hpSelParam, req.params.patientId],
       );
 
       await client.query('COMMIT');

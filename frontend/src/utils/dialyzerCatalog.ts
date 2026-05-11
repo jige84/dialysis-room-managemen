@@ -1,11 +1,25 @@
 /**
- * 处方透析器字段 ↔ 耗材目录 consumable_stocks（category=dialyzer）对齐
+ * 处方透析器 / HD+HP 灌流器 ↔ 耗材目录 consumable_stocks（category=dialyzer）对齐。
+ * 灌流器在目录中与透析器同属 dialyzer 大类，通过名称含「灌流」识别。
  */
 import type { ConsumableStockRow } from '../api/devices';
 import { getDialyzerSelectOptions } from '../constants/dialyzerConsumables';
 import { isUuid } from './anomalyAnalysis';
 
 export const LEGACY_DIALYZER_PREFIX = 'legacy|||';
+
+/** 离线或未关联目录的灌流器字符串 */
+export const LEGACY_HP_PREFIX = 'legacy_hp|||';
+
+const PERFUSION_NAME_RE = /灌流/u;
+
+export function isHemoperfusionCatalogRow(row: ConsumableStockRow): boolean {
+  return row.category === 'dialyzer' && PERFUSION_NAME_RE.test(row.item_name);
+}
+
+export function isDialysisMembraneCatalogRow(row: ConsumableStockRow): boolean {
+  return row.category === 'dialyzer' && !isHemoperfusionCatalogRow(row);
+}
 
 export function dialyzerStringForForm(model: string | null | undefined): string {
   if (!model) return '';
@@ -41,6 +55,14 @@ function formatDialyzerStockLabel(row: ConsumableStockRow): string {
   return row.item_name;
 }
 
+function dialysisMembraneRows(stocks: ConsumableStockRow[]): ConsumableStockRow[] {
+  return stocks.filter(isDialysisMembraneCatalogRow);
+}
+
+function hemoperfusionRows(stocks: ConsumableStockRow[]): ConsumableStockRow[] {
+  return stocks.filter(isHemoperfusionCatalogRow);
+}
+
 /**
  * 将当前处方中的透析器映射为表单选项 value：优先耗材目录行 id；无目录时用 legacy 前缀字符串。
  */
@@ -54,7 +76,7 @@ export function resolveDialyzerFormValue(
 
   if (!rawModel && !inferredFlux) return '';
 
-  const rows = stocks.filter((s) => s.category === 'dialyzer');
+  const rows = dialysisMembraneRows(stocks);
   if (rows.length === 0) {
     return rawModel ? `${LEGACY_DIALYZER_PREFIX}${dialyzerStringForForm(rawModel)}` : '';
   }
@@ -97,7 +119,7 @@ export function resolveDialyzerFormValue(
 }
 
 export function buildDialyzerSelectOptions(stocks: ConsumableStockRow[]): { value: string; label: string }[] {
-  const rows = stocks.filter((s) => s.category === 'dialyzer');
+  const rows = dialysisMembraneRows(stocks);
   if (rows.length === 0) {
     return getDialyzerSelectOptions().map((o) => ({
       value: `${LEGACY_DIALYZER_PREFIX}${o.value}`,
@@ -110,6 +132,48 @@ export function buildDialyzerSelectOptions(stocks: ConsumableStockRow[]): { valu
       value: row.id,
       label: formatDialyzerStockLabel(row),
     }));
+}
+
+export function buildHemoperfusionSelectOptions(stocks: ConsumableStockRow[]): { value: string; label: string }[] {
+  const rows = hemoperfusionRows(stocks);
+  return [...rows]
+    .sort((a, b) => a.item_name.localeCompare(b.item_name, 'zh-CN'))
+    .map((row) => ({
+      value: row.id,
+      label: row.item_name,
+    }));
+}
+
+/**
+ * 历史处方 / 患者偏好中的灌流器型号 → 表单下拉 value
+ */
+export function resolveHpCartridgeFormValue(model: string | null | undefined, stocks: ConsumableStockRow[]): string {
+  const rawModel = model?.trim() ?? '';
+  if (!rawModel) return '';
+
+  const rows = hemoperfusionRows(stocks);
+  if (rows.length === 0) {
+    return `${LEGACY_HP_PREFIX}${rawModel}`;
+  }
+
+  const nm = normalizeDialyzerCatalogKey(rawModel);
+  const candidates = rows.filter((row) => {
+    const im = normalizeDialyzerCatalogKey(row.item_name);
+    if (!nm || !im) return false;
+    return (
+      nm === im ||
+      nm.includes(im) ||
+      im.includes(nm) ||
+      rawModel.includes(row.item_name) ||
+      row.item_name.includes(rawModel)
+    );
+  });
+
+  if (candidates.length === 0) {
+    return `${LEGACY_HP_PREFIX}${rawModel}`;
+  }
+
+  return candidates[0].id;
 }
 
 /** 提交处方：解析表单里的透析器选项 → DB 字段 */
@@ -129,7 +193,7 @@ export function parseDialyzerFormSelection(
   }
   if (isUuid(s)) {
     const row = stockById.get(s);
-    if (row) {
+    if (row && !isHemoperfusionCatalogRow(row)) {
       return {
         dialyzer_model: row.item_name,
         ...(row.dialyzer_flux ? { dialyzer_flux: row.dialyzer_flux } : {}),
@@ -141,6 +205,23 @@ export function parseDialyzerFormSelection(
     dialyzer_model: s,
     ...(inferred ? { dialyzer_flux: inferred } : {}),
   };
+}
+
+/** 表单灌流器选项 → 写入 form_extra / 展示的型号文本 */
+export function parseHpCartridgeFormSelection(
+  raw: string | undefined,
+  stockById: Map<string, ConsumableStockRow>,
+): { hemoperfusion_model: string } {
+  const s = String(raw ?? '').trim();
+  if (!s) return { hemoperfusion_model: '' };
+  if (s.startsWith(LEGACY_HP_PREFIX)) {
+    return { hemoperfusion_model: s.slice(LEGACY_HP_PREFIX.length).trim() };
+  }
+  if (isUuid(s)) {
+    const row = stockById.get(s);
+    if (row) return { hemoperfusion_model: row.item_name };
+  }
+  return { hemoperfusion_model: s };
 }
 
 export function dialyzerDisplayShort(
@@ -159,4 +240,20 @@ export function dialyzerDisplayShort(
   }
   const t = s.replace(/^透析器\s*/, '').trim();
   return t || '—';
+}
+
+export function hpCartridgeDisplayShort(
+  raw: string | undefined,
+  stockById: Map<string, ConsumableStockRow>,
+): string {
+  if (raw == null || raw === '') return '—';
+  const s = String(raw);
+  if (s.startsWith(LEGACY_HP_PREFIX)) {
+    return s.slice(LEGACY_HP_PREFIX.length).trim() || '—';
+  }
+  if (isUuid(s)) {
+    const row = stockById.get(s);
+    if (row) return row.item_name.trim() || row.item_name;
+  }
+  return s.trim() || '—';
 }

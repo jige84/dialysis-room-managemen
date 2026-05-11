@@ -35,11 +35,15 @@ import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import { isUuid } from '../../utils/anomalyAnalysis';
 import {
   LEGACY_DIALYZER_PREFIX,
+  LEGACY_HP_PREFIX,
   buildDialyzerSelectOptions,
+  buildHemoperfusionSelectOptions,
   dialyzerDisplayShort,
   dialyzerStringForForm,
+  hpCartridgeDisplayShort,
   parseDialyzerFormSelection,
   resolveDialyzerFormValue,
+  resolveHpCartridgeFormValue,
 } from '../../utils/dialyzerCatalog';
 import {
   scheduleShiftLabel,
@@ -228,6 +232,8 @@ type BasicParamsStored = Partial<{
   modeOther: string;
   hpHeparinExtraIU: number;
   dialyzer: string;
+  /** HD+HP：灌流器（耗材目录 UUID 或 legacy_hp|||型号） */
+  hpCartridge: string;
   bloodFlow: number;
   dialysateFlow: number;
   anticoagulant: string;
@@ -284,6 +290,7 @@ const BASIC_PARAM_KEYS = [
   'modeOther',
   'hpHeparinExtraIU',
   'dialyzer',
+  'hpCartridge',
   'bloodFlow',
   'dialysateFlow',
   'anticoagulant',
@@ -535,6 +542,12 @@ function mapCurrentPrescriptionToFormValues(
   const coreModeForFlows = hemo.mode === 'other' ? 'HD' : hemo.mode;
   const defaultDialysateForRx =
     coreModeForFlows === 'HDF' ? DEFAULT_DIALYSATE_FLOW_HDF_ML_MIN : DEFAULT_DIALYSATE_FLOW_HD_ML_MIN;
+  const hpStored =
+    typeof formExtra.hpCartridge === 'string'
+      ? formExtra.hpCartridge.trim()
+      : typeof formExtra.hp_cartridge === 'string'
+        ? formExtra.hp_cartridge.trim()
+        : '';
   const fromColumns: Record<string, unknown> = {
     ...freq,
     duration: Number(rx.duration_hours) || 4,
@@ -544,6 +557,14 @@ function mapCurrentPrescriptionToFormValues(
       { dialyzer_model: rx.dialyzer_model ?? null, dialyzer_flux: rx.dialyzer_flux ?? null },
       dialyzerStocks,
     ),
+    hpCartridge:
+      hpStored ||
+      (hemo.mode === 'HD_HP'
+        ? resolveHpCartridgeFormValue(
+            typeof formExtra.hemoperfusion_model === 'string' ? formExtra.hemoperfusion_model : '',
+            dialyzerStocks,
+          )
+        : ''),
     bloodFlow:
       rx.blood_flow_rate != null && Number.isFinite(Number(rx.blood_flow_rate))
         ? Number(rx.blood_flow_rate)
@@ -799,6 +820,7 @@ export default function PrescriptionWorkspacePage() {
   const kWatched = Form.useWatch('k', form);
   const caWatched = Form.useWatch('ca', form);
   const dialyzerWatched = Form.useWatch('dialyzer', form);
+  const hpCartridgeWatched = Form.useWatch('hpCartridge', form);
   const preAssessSbpLive = Form.useWatch('preAssessSbp', form);
   const preAssessDbpLive = Form.useWatch('preAssessDbp', form);
   const preAssessPulseLive = Form.useWatch('preAssessPulse', form);
@@ -853,6 +875,19 @@ export default function PrescriptionWorkspacePage() {
     return base;
   }, [dialyzerStocks, dialyzerWatched]);
 
+  const hpCartridgeOptions = useMemo(() => {
+    const base = buildHemoperfusionSelectOptions(dialyzerStocks);
+    const cur = hpCartridgeWatched;
+    if (typeof cur === 'string' && cur.startsWith(LEGACY_HP_PREFIX)) {
+      const exists = base.some((o) => o.value === cur);
+      if (!exists) {
+        const label = `${cur.slice(LEGACY_HP_PREFIX.length)}（未关联目录）`;
+        return [...base, { value: cur, label }];
+      }
+    }
+    return base;
+  }, [dialyzerStocks, hpCartridgeWatched]);
+
   useEffect(() => {
     const cur = form.getFieldValue('dialyzer');
     if (cur == null || cur === '') return;
@@ -877,6 +912,39 @@ export default function PrescriptionWorkspacePage() {
       form.setFieldsValue({ dialyzer: resolved });
     }
   }, [dialyzerStocks, form]);
+
+  useEffect(() => {
+    const cur = form.getFieldValue('hpCartridge');
+    if (cur == null || cur === '') return;
+    const s = String(cur);
+    if (isUuid(s)) return;
+
+    if (dialyzerStocks.length === 0) {
+      if (!s.startsWith(LEGACY_HP_PREFIX)) {
+        form.setFieldsValue({ hpCartridge: `${LEGACY_HP_PREFIX}${s.trim()}` });
+      }
+      return;
+    }
+
+    const modelForResolve = s.startsWith(LEGACY_HP_PREFIX) ? s.slice(LEGACY_HP_PREFIX.length) : s;
+    const resolved = resolveHpCartridgeFormValue(modelForResolve, dialyzerStocks);
+    if (resolved !== s) {
+      form.setFieldsValue({ hpCartridge: resolved });
+    }
+  }, [dialyzerStocks, form]);
+
+  useEffect(() => {
+    if (modeWatched !== 'HD_HP' || !isUuid(selectedPatient)) return;
+    const cur = form.getFieldValue('hpCartridge');
+    if (cur != null && String(cur).trim() !== '') return;
+    const pref =
+      patientDetailFromApi?.id === selectedPatient
+        ? patientDetailFromApi.profile_hemoperfusion_selection
+        : undefined;
+    if (typeof pref === 'string' && pref.trim()) {
+      form.setFieldsValue({ hpCartridge: pref.trim() });
+    }
+  }, [modeWatched, selectedPatient, patientDetailFromApi, form]);
 
   const patientInfo = PATIENTS.find((p) => p.value === selectedPatient);
 
@@ -945,6 +1013,7 @@ export default function PrescriptionWorkspacePage() {
       naCurveEnd: DEFAULT_DIALYSATE_NA_MMOL,
       naCurveTimeStart: '',
       naCurveTimeEnd: '',
+      hpCartridge: '',
     };
     return {
       preAssessEdema: 'no' as const,
@@ -1072,6 +1141,10 @@ export default function PrescriptionWorkspacePage() {
     typeof dialyzerWatched === 'string' ? dialyzerWatched : undefined,
     dialyzerStockById,
   );
+  const hpCartridgeShort = hpCartridgeDisplayShort(
+    typeof hpCartridgeWatched === 'string' ? hpCartridgeWatched : undefined,
+    dialyzerStockById,
+  );
 
   const applyPatientFormValues = useCallback(
     (patientValue: string) => {
@@ -1146,6 +1219,21 @@ export default function PrescriptionWorkspacePage() {
 
         if (rx) {
           const mappedRaw = mapCurrentPrescriptionToFormValues(rx, dialyzerStocksRef.current);
+          if (profilePat) {
+            const hmRx = hemoModalityFromApi(rx.hemodialysis_modality);
+            const dEmpty =
+              !mappedRaw.dialyzer ||
+              (typeof mappedRaw.dialyzer === 'string' && mappedRaw.dialyzer.trim() === '');
+            if (dEmpty && profilePat.profile_dialyzer_selection) {
+              mappedRaw.dialyzer = profilePat.profile_dialyzer_selection;
+            }
+            const hpEmpty =
+              !mappedRaw.hpCartridge ||
+              (typeof mappedRaw.hpCartridge === 'string' && mappedRaw.hpCartridge.trim() === '');
+            if (hmRx.mode === 'HD_HP' && hpEmpty && profilePat.profile_hemoperfusion_selection) {
+              mappedRaw.hpCartridge = profilePat.profile_hemoperfusion_selection;
+            }
+          }
           const { form: mapped, ultrafiltrationManualFromLoad } = enrichMappedPrescriptionForm(
             mappedRaw,
             selectedPatient,
@@ -1227,8 +1315,15 @@ export default function PrescriptionWorkspacePage() {
             preAssessBleeding: 'no',
             preAssessEdemaSite: '',
             preAssessBleedingDesc: '',
+            hpCartridge: '',
             ...stored,
             ...fromProfile,
+            ...(profilePat?.profile_dialyzer_selection
+              ? { dialyzer: profilePat.profile_dialyzer_selection }
+              : {}),
+            ...(profilePat?.profile_hemoperfusion_selection
+              ? { hpCartridge: profilePat.profile_hemoperfusion_selection }
+              : {}),
           };
           mergeShiftFromPatientProfileIntoFormValues(freshValues, profilePat);
           form.setFieldsValue(freshValues);
@@ -1569,6 +1664,9 @@ export default function PrescriptionWorkspacePage() {
           hdf_replacement_volume_l:
             v.mode === 'HDF' && v.hdfReplacementVolumeL != null ? Number(v.hdfReplacementVolumeL) : undefined,
           form_extra: formExtraPayload,
+          dialyzer_form_selection: typeof v.dialyzer === 'string' ? v.dialyzer : undefined,
+          hp_cartridge_form_selection:
+            v.mode === 'HD_HP' && typeof v.hpCartridge === 'string' ? v.hpCartridge : undefined,
         });
         const newRx = saveResp.data.data;
         savePrescriptionBasicParamsToStorage(selectedPatient, formExtraPayload);
@@ -2058,6 +2156,9 @@ export default function PrescriptionWorkspacePage() {
                       <RxReadonlyValue label="血流速" value={`${bloodFlowWatched ?? '—'} mL/min`} />
                       <RxReadonlyValue label="透析液流速" value={`${dialysateFlowWatched ?? '—'} mL/min`} />
                       <RxReadonlyValue label="透析器" value={dialyzerShort} />
+                      {modeWatched === 'HD_HP' && (
+                        <RxReadonlyValue label="灌流器" value={hpCartridgeShort} />
+                      )}
                       <RxReadonlyValue
                         label="Na / K / Ca"
                         value={`${naWatched ?? '—'} / ${kWatched ?? '—'} / ${caWatched ?? '—'}`}
@@ -2245,6 +2346,21 @@ export default function PrescriptionWorkspacePage() {
               <Form.Item label="透析器" name="dialyzer" rules={[{ required: true, message: '请选择透析器' }]}>
                 <Select options={dialyzerOptions} showSearch optionFilterProp="label" placeholder="从耗材目录选择" />
               </Form.Item>
+              {modeWatched === 'HD_HP' && (
+                <Form.Item
+                  label="灌流器"
+                  name="hpCartridge"
+                  rules={[{ required: true, message: '请选择灌流器（HD+HP）' }]}
+                  extra="与透析器组合用于 HD+HP；请在耗材目录中维护名称含「灌流」的条目。"
+                >
+                  <Select
+                    options={hpCartridgeOptions}
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="从耗材目录选择灌流器"
+                  />
+                </Form.Item>
+              )}
             </div>
             <Divider style={{ margin: '8px 0 16px', borderColor: '#DBEAFE' }} />
             <div style={{ fontSize: 13, fontWeight: 600, color: '#0369A1', marginBottom: 12 }}>血流与抗凝</div>

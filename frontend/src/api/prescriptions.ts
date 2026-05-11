@@ -58,8 +58,14 @@ const prescriptionsApi = {
   getHistory: (patientId: string) =>
     request.get<ApiResponse<PrescriptionRecord[]>>(`/prescriptions/${patientId}/history`),
 
-  create: (patientId: string, data: Partial<PrescriptionRecord> & { form_extra?: Record<string, unknown> | null }) =>
-    request.post<ApiResponse<PrescriptionRecord>>(`/prescriptions/${patientId}`, data),
+  create: (
+    patientId: string,
+    data: Partial<PrescriptionRecord> & {
+      form_extra?: Record<string, unknown> | null;
+      dialyzer_form_selection?: string;
+      hp_cartridge_form_selection?: string;
+    },
+  ) => request.post<ApiResponse<PrescriptionRecord>>(`/prescriptions/${patientId}`, data),
 
   checkMedication: (payload: { patientId: string; anticoagulantKey: string }) =>
     request.post<ApiResponse<MedicationCheckResult>>('/prescriptions/check', payload),

@@ -34,6 +34,10 @@ export interface Patient {
   profile_dry_weight_reason?: string | null;
   /** 当前有效处方干体重（列表等场景下与 profile_dry_weight 二选一：优先档案） */
   prescription_dry_weight?: number | string | null;
+  /** 处方工作台最近一次透析器下拉值，新开方默认带入 */
+  profile_dialyzer_selection?: string | null;
+  /** HD+HP 灌流器下拉记忆 */
+  profile_hemoperfusion_selection?: string | null;
   family_contact?: { name?: string; phone?: string } | null;
   address?: string | null;
   consent_dialysis?: boolean;

@@ -119,6 +119,7 @@ export function buildPrescriptionDefaultsFromDemo(demo: DialysisDemoPatient): Re
     mode,
     modeOther: '',
     dialyzer: dialyzerForForm(pr.dialyzer),
+    hpCartridge: '',
     bloodFlow: pr.bloodFlow,
     dialysateFlow: pr.dialysateFlow,
     anticoagulant: mapAnticoagulantCode(pr.anticoagulant),
