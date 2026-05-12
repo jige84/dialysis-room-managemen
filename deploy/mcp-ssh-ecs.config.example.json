@@ -1,0 +1,11 @@
+{
+  "_说明": "复制本文件为 deploy/mcp-ssh-ecs.config.local.json，再按说明填写。local 文件已被 .gitignore 忽略，切勿提交仓库。",
+  "host": "47.114.111.216",
+  "port": 22,
+  "username": "root",
+  "auth": "key",
+  "privateKeyPath": "C:\\Users\\你的Windows用户名\\.ssh\\id_ed25519",
+  "privateKey": "",
+  "passphrase": "",
+  "_填写规则": "二选一：优先填 privateKeyPath（推荐，指向本机私钥文件）。若留空则把整段 PEM 私钥粘贴到 privateKey（含 -----BEGIN ... ----- 行）。密钥文件有密码时填写 passphrase。"
+}

@@ -35,3 +35,6 @@ Thumbs.db
 scripts/cloud-sync-to-ecs.local.ps1
 scripts/cloud-sync-to-ecs.local.env
 
+# MCP / Cursor 连接 ECS 的 SSH 本地配置（含私钥路径或私钥正文，勿提交）
+deploy/mcp-ssh-ecs.config.local.json
+
