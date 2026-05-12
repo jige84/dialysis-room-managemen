@@ -1,6 +1,7 @@
 /**
  * 由透析演示患者数据生成处方工作台表单默认值（与 DialysisEntry 患者信息一致）
  */
+import dayjs from 'dayjs';
 import type { DialysisDemoPatient } from '../constants/dialysisDemoPatients';
 
 /** 与 PrescriptionWorkspace 保存的「基本参数」共用同一存储键，供透析录入页合并展示 */
@@ -136,6 +137,7 @@ export function buildPrescriptionDefaultsFromDemo(demo: DialysisDemoPatient): Re
     naCurveTimeStart: '',
     naCurveTimeEnd: '',
     dryWeight: demo.dryWeight,
+    dryWeightAssessmentDate: dayjs(),
     dryWeightChangeReason: '',
     preMachineWeight,
     ultrafiltrationMl: uf,

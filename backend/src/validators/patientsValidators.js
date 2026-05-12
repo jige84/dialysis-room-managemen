@@ -3,17 +3,65 @@ function hasOwn(body, key) {
 }
 
 const CUSTOM_SCHEDULE_NOTE_PREFIX = '[自定排班] ';
+const BIW5_SCHEDULE_NOTE_PREFIX = '[两周五次] ';
+
+function isBiw5DialysisScheduleCode(code) {
+  if (!code || typeof code !== 'string') return false;
+  return code === 'biw5_alt' || code.startsWith('biw5_alt_');
+}
+
+function isValidBiw5ScheduleNotes(notes) {
+  if (notes == null || notes === '') return true;
+  const t = String(notes).trim();
+  if (!t) return true;
+  if (t.startsWith(BIW5_SCHEDULE_NOTE_PREFIX)) {
+    try {
+      const raw = JSON.parse(t.slice(BIW5_SCHEDULE_NOTE_PREFIX.length));
+      if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return false;
+      const keys = Object.keys(raw);
+      if (!keys.every((k) => k === 'swapOddEvenWeeks' || k === 'memo')) return false;
+      if (raw.memo != null && typeof raw.memo !== 'string') return false;
+      if (raw.memo != null && String(raw.memo).length > 800) return false;
+      if (raw.swapOddEvenWeeks != null && typeof raw.swapOddEvenWeeks !== 'boolean') return false;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  return t.length <= 800;
+}
 
 function isValidCustomScheduleNotes(notes) {
   if (!notes || typeof notes !== 'string' || !notes.startsWith(CUSTOM_SCHEDULE_NOTE_PREFIX)) return false;
   try {
     const raw = JSON.parse(notes.slice(CUSTOM_SCHEDULE_NOTE_PREFIX.length));
+    if (Array.isArray(raw.weeklyDays)) return false;
     const isWeek = (week) => (
       Array.isArray(week?.weekdays)
       && week.weekdays.some((d) => Number.isInteger(Number(d)) && Number(d) >= 0 && Number(d) <= 6)
       && ['morning', 'afternoon', 'evening'].includes(String(week?.shift))
     );
     return isWeek(raw.week1) && isWeek(raw.week2);
+  } catch (_) {
+    return false;
+  }
+}
+
+function isValidWeeklyDayShiftsNotes(notes) {
+  if (!notes || typeof notes !== 'string' || !notes.startsWith(CUSTOM_SCHEDULE_NOTE_PREFIX)) return false;
+  try {
+    const raw = JSON.parse(notes.slice(CUSTOM_SCHEDULE_NOTE_PREFIX.length));
+    if (!Array.isArray(raw.weeklyDays) || !raw.weeklyDays.length) return false;
+    const seen = new Set();
+    for (const item of raw.weeklyDays) {
+      const wd = Number(item && item.wd);
+      const shift = String(item && item.shift);
+      if (!Number.isInteger(wd) || wd < 0 || wd > 6) return false;
+      if (!['morning', 'afternoon', 'evening'].includes(shift)) return false;
+      if (seen.has(wd)) return false;
+      seen.add(wd);
+    }
+    return true;
   } catch (_) {
     return false;
   }
@@ -50,6 +98,12 @@ function normalizeCreateScheduleFields(body) {
   }
   if (payload.dialysis_schedule_code === 'custom_cycle' && !isValidCustomScheduleNotes(scheduleNotes)) {
     return { ok: false, message: '自定排班方案不完整，请选择两周内的透析日和时段' };
+  }
+  if (payload.dialysis_schedule_code === 'weekly_day_shifts' && !isValidWeeklyDayShiftsNotes(scheduleNotes)) {
+    return { ok: false, message: '每周逐日排班不完整，请为每个透析日选择周几与时段' };
+  }
+  if (payload.dialysis_schedule_code && isBiw5DialysisScheduleCode(payload.dialysis_schedule_code) && !isValidBiw5ScheduleNotes(scheduleNotes)) {
+    return { ok: false, message: '两周五次补充说明格式无效' };
   }
 
   return {
@@ -102,6 +156,12 @@ function normalizeUpdateScheduleFields(body, existingPatient) {
   const nextNotes = hasDialysisNotesKey ? dialysisNotesVal : existing.dialysis_schedule_notes;
   if (nextDialysisCode === 'custom_cycle' && !isValidCustomScheduleNotes(nextNotes)) {
     return { ok: false, message: '自定排班方案不完整，请选择两周内的透析日和时段' };
+  }
+  if (nextDialysisCode === 'weekly_day_shifts' && !isValidWeeklyDayShiftsNotes(nextNotes)) {
+    return { ok: false, message: '每周逐日排班不完整，请为每个透析日选择周几与时段' };
+  }
+  if (isBiw5DialysisScheduleCode(nextDialysisCode) && !isValidBiw5ScheduleNotes(nextNotes)) {
+    return { ok: false, message: '两周五次补充说明格式无效' };
   }
 
   return {

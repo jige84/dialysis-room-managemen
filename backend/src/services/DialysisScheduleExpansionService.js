@@ -57,11 +57,23 @@ function enumerateWeekDates(weekStartMonday) {
 }
 
 const CUSTOM_SCHEDULE_NOTE_PREFIX = '[自定排班] ';
+const BIW5_SCHEDULE_NOTE_PREFIX = '[两周五次] ';
+
+function parseBiw5SwapFromNotes(notes) {
+  if (!notes || typeof notes !== 'string' || !notes.startsWith(BIW5_SCHEDULE_NOTE_PREFIX)) return false;
+  try {
+    const raw = JSON.parse(notes.slice(BIW5_SCHEDULE_NOTE_PREFIX.length));
+    return Boolean(raw && raw.swapOddEvenWeeks === true);
+  } catch (_) {
+    return false;
+  }
+}
 
 function parseCustomCyclePlan(notes) {
   if (!notes || typeof notes !== 'string' || !notes.startsWith(CUSTOM_SCHEDULE_NOTE_PREFIX)) return null;
   try {
     const raw = JSON.parse(notes.slice(CUSTOM_SCHEDULE_NOTE_PREFIX.length));
+    if (Array.isArray(raw.weeklyDays)) return null;
     const normalizeWeek = (week) => {
       const weekdays = Array.isArray(week && week.weekdays)
         ? week.weekdays
@@ -75,6 +87,28 @@ function parseCustomCyclePlan(notes) {
     const week1 = normalizeWeek(raw.week1);
     const week2 = normalizeWeek(raw.week2);
     return week1 && week2 ? { week1, week2 } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseWeeklyDayShiftsPlan(notes) {
+  if (!notes || typeof notes !== 'string' || !notes.startsWith(CUSTOM_SCHEDULE_NOTE_PREFIX)) return null;
+  try {
+    const raw = JSON.parse(notes.slice(CUSTOM_SCHEDULE_NOTE_PREFIX.length));
+    if (!Array.isArray(raw.weeklyDays) || !raw.weeklyDays.length) return null;
+    /** @type {Map<number, DbShift>} */
+    const byWd = new Map();
+    for (const item of raw.weeklyDays) {
+      const wd = Number(item && item.wd);
+      const shift = item && item.shift;
+      if (!Number.isInteger(wd) || wd < 0 || wd > 6) return null;
+      if (!['morning', 'afternoon', 'evening'].includes(String(shift))) return null;
+      byWd.set(wd, /** @type {DbShift} */ (shift));
+    }
+    if (byWd.size === 0) return null;
+    const days = [...byWd.entries()].sort((a, b) => a[0] - b[0]).map(([wd, sh]) => ({ wd, shift: sh }));
+    return { days };
   } catch (_) {
     return null;
   }
@@ -107,17 +141,39 @@ function expandDialysisScheduleCode(code, anchorDate, weekStartMonday, notes) {
     return slots;
   }
 
-  if (code === 'biw5_alt') {
-    const defaultShift = /** @type {DbShift} */ ('morning');
+  const biw5ShiftByCode = {
+    biw5_alt: /** @type {DbShift} */ ('morning'),
+    biw5_alt_morning: /** @type {DbShift} */ ('morning'),
+    biw5_alt_afternoon: /** @type {DbShift} */ ('afternoon'),
+    biw5_alt_evening: /** @type {DbShift} */ ('evening'),
+  };
+  const biw5Shift = biw5ShiftByCode[code];
+  if (biw5Shift) {
+    const swap = parseBiw5SwapFromNotes(notes);
     for (const ds of dates) {
       const wn = isoWeekNumber(new Date(`${ds}T12:00:00`));
-      const odd = wn % 2 === 1;
+      const isoOdd = wn % 2 === 1;
+      const useWeek1Pattern = swap ? !isoOdd : isoOdd;
       const wd = weekdayJs(ds);
-      if (odd && (wd === 1 || wd === 4 || wd === 6)) {
-        slots.push({ scheduledDate: ds, shift: defaultShift });
+      if (useWeek1Pattern && (wd === 1 || wd === 4 || wd === 6)) {
+        slots.push({ scheduledDate: ds, shift: biw5Shift });
       }
-      if (!odd && (wd === 2 || wd === 5)) {
-        slots.push({ scheduledDate: ds, shift: defaultShift });
+      if (!useWeek1Pattern && (wd === 2 || wd === 5)) {
+        slots.push({ scheduledDate: ds, shift: biw5Shift });
+      }
+    }
+    return slots;
+  }
+
+  if (code === 'weekly_day_shifts') {
+    const plan = parseWeeklyDayShiftsPlan(notes);
+    if (!plan) return [];
+    const shiftByWd = new Map(plan.days.map((d) => [d.wd, d.shift]));
+    for (const ds of dates) {
+      const wd = weekdayJs(ds);
+      const sh = shiftByWd.get(wd);
+      if (sh) {
+        slots.push({ scheduledDate: ds, shift: sh });
       }
     }
     return slots;
@@ -164,4 +220,5 @@ module.exports = {
   enumerateWeekDates,
   isoWeekNumber,
   parseCustomCyclePlan,
+  parseWeeklyDayShiftsPlan,
 };

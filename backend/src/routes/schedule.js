@@ -865,7 +865,7 @@ router.post(
     }
 
     const note =
-      '两周五次(biw5_alt)按 ISO 周序号奇偶周：奇周周一/四/六，偶周周二/五；时段默认上午。隔日(qod)时段默认上午。';
+      '两周五次：按 ISO 周奇偶，奇周周一/四/六、偶周周二/五；时段由 biw5_alt_morning / biw5_alt_afternoon / biw5_alt_evening 决定（历史码 biw5_alt 视同上午）。可在备注中使用 [两周五次] JSON 勾选 swapOddEvenWeeks 对调奇偶周与两周模板。隔日(qod)默认上午。';
 
     return success(
       res,

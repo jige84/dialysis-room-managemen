@@ -71,6 +71,27 @@ const biw = expandDialysisScheduleCode('biw5_alt', null, weekStart);
 assert(biw.length >= 1, 'biw5_alt 当周至少应有一天');
 assert(biw.every((s) => s.shift === 'morning'));
 
+const biwPm = expandDialysisScheduleCode('biw5_alt_afternoon', null, weekStart);
+assert.strictEqual(biwPm.length, biw.length);
+assert(biwPm.every((s) => s.shift === 'afternoon'));
+
+const biwSwapNotes = `[两周五次] ${JSON.stringify({ swapOddEvenWeeks: true })}`;
+const biwSwapped = expandDialysisScheduleCode('biw5_alt_morning', null, weekStart, biwSwapNotes);
+assert.notDeepStrictEqual(biw, biwSwapped, '对调奇偶周后同一自然周内落位日应变化');
+
+const weeklyNotes = `[自定排班] ${JSON.stringify({
+  weeklyDays: [
+    { wd: 1, shift: 'morning' },
+    { wd: 3, shift: 'afternoon' },
+    { wd: 6, shift: 'evening' },
+  ],
+})}`;
+const weeklySlots = expandDialysisScheduleCode('weekly_day_shifts', null, weekStart, weeklyNotes);
+assert.strictEqual(weeklySlots.length, 3);
+assert(weeklySlots.some((s) => s.scheduledDate === '2026-04-06' && s.shift === 'morning'));
+assert(weeklySlots.some((s) => s.scheduledDate === '2026-04-08' && s.shift === 'afternoon'));
+assert(weeklySlots.some((s) => s.scheduledDate === '2026-04-11' && s.shift === 'evening'));
+
 assert.deepStrictEqual(expandDialysisScheduleCode('other', null, weekStart), []);
 
 console.log('Schedule unit tests OK (expansion + week start + isolation map)');

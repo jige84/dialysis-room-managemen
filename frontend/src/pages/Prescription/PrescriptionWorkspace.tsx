@@ -4,8 +4,12 @@
  * 主要功能：处方表单编辑；历史版本 Modal；保存时对接 prescriptions API。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Select, Button, InputNumber, Input, Form, Divider, Table, Modal, message, Tag, Alert, TimePicker, Collapse, Tooltip } from 'antd';
+import {
+  Card, Select, Button, InputNumber, Input, Form, Divider, Table, Modal, message, Tag, Alert,
+  TimePicker, Collapse, Tooltip, DatePicker,
+} from 'antd';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import { HistoryOutlined, SaveOutlined, InfoCircleFilled, CheckCircleFilled, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import PageShell from '../../components/PageShell/PageShell';
@@ -23,6 +27,7 @@ import {
   PRESCRIPTION_NOTES_COMBINED_SEPARATOR,
   splitPrescriptionNotesFromDb,
 } from '../../utils/prescriptionFormFromDemo';
+import { parseApiDateOnlyNullable } from '../../utils/medicalDate';
 import {
   readPostDialysisSync,
   writePostDialysisSync,
@@ -584,6 +589,7 @@ function mapCurrentPrescriptionToFormValues(
     ca: rx.dialysate_ca != null ? Number(rx.dialysate_ca) : DEFAULT_DIALYSATE_CA_MMOL,
     temp: rx.dialysate_temp != null ? Number(rx.dialysate_temp) : DEFAULT_DIALYSATE_TEMP_C,
     dryWeight: rx.dry_weight != null ? Number(rx.dry_weight) : undefined,
+    dryWeightAssessmentDate: parseApiDateOnlyNullable(rx.dry_weight_date) ?? dayjs(),
     dryWeightChangeReason: rx.dry_weight_reason ?? '',
     hdfReplacementMode: rx.hdf_replacement_mode ?? undefined,
     hdfReplacementVolumeL:
@@ -1108,6 +1114,7 @@ export default function PrescriptionWorkspacePage() {
     return {
       preAssessEdema: 'no' as const,
       preAssessBleeding: 'no' as const,
+      dryWeightAssessmentDate: dayjs(),
       ...dialysisBaseline,
       ...(demoDefaults ?? {}),
     };
@@ -1377,6 +1384,7 @@ export default function PrescriptionWorkspacePage() {
             heparinFirst?: number;
             heparinMaint?: number;
             dryWeight?: number;
+            dryWeightAssessmentDate?: Dayjs;
             dryWeightChangeReason?: string;
           } = {};
           if (profilePat) {
@@ -1387,6 +1395,8 @@ export default function PrescriptionWorkspacePage() {
               heparinMaint:
                 pat.profile_heparin_maintain != null ? Number(pat.profile_heparin_maintain) : undefined,
               dryWeight: pat.profile_dry_weight != null ? Number(pat.profile_dry_weight) : undefined,
+              dryWeightAssessmentDate:
+                parseApiDateOnlyNullable(pat.profile_dry_weight_date) ?? dayjs(),
               dryWeightChangeReason: pat.profile_dry_weight_reason ?? '',
             };
             if (pat.profile_dry_weight != null && Number.isFinite(Number(pat.profile_dry_weight))) {
@@ -1721,7 +1731,11 @@ export default function PrescriptionWorkspacePage() {
 
       const runSave = async () => {
         const dryW = Number(v.dryWeight);
-        const dateStr = dayjs().format('YYYY-MM-DD');
+        const dwDateRaw = v.dryWeightAssessmentDate as Dayjs | undefined;
+        const dateStr =
+          dwDateRaw && dayjs(dwDateRaw).isValid()
+            ? dayjs(dwDateRaw).format('YYYY-MM-DD')
+            : dayjs().format('YYYY-MM-DD');
         const dryReason =
           typeof v.dryWeightChangeReason === 'string' && v.dryWeightChangeReason.trim()
             ? v.dryWeightChangeReason.trim()
@@ -1849,6 +1863,15 @@ export default function PrescriptionWorkspacePage() {
             message.warning('处方已保存，本地表单回填异常，请重新选择患者或刷新页面');
             skipPersistRef.current = false;
           }
+        }
+
+        try {
+          const prRefresh = await patientsApi.get(selectedPatient);
+          if (prRefresh.data.code === 200 && prRefresh.data.data) {
+            setPatientDetailFromApi(prRefresh.data.data);
+          }
+        } catch {
+          /* 档案刷新失败不影响保存结果 */
         }
 
         message.success('透析处方已保存，护士下次录入时将自动带入');
@@ -2715,6 +2738,13 @@ export default function PrescriptionWorkspacePage() {
                   <Form.Item label={<>干体重目标 (kg) <span style={{ color: '#F43F5E' }}>*</span></>} name="dryWeight">
                     <InputNumber min={20} max={200} step={0.5} style={{ width: '100%', fontWeight: 600 }} />
                   </Form.Item>
+                  <Form.Item
+                    label={<>干体重评估日期 <span style={{ color: '#F43F5E' }}>*</span></>}
+                    name="dryWeightAssessmentDate"
+                    rules={[{ required: true, message: '请选择干体重评估日期' }]}
+                  >
+                    <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" allowClear={false} />
+                  </Form.Item>
                 </div>
                 <Form.Item
                   label="干体重调整原因"
@@ -2758,6 +2788,13 @@ export default function PrescriptionWorkspacePage() {
               <div className="grid-4" style={{ gap: 16, marginBottom: 8 }}>
                 <Form.Item label={<>干体重目标 (kg) <span style={{ color: '#F43F5E' }}>*</span></>} name="dryWeight">
                   <InputNumber min={20} max={200} step={0.5} style={{ width: '100%', fontWeight: 600 }} />
+                </Form.Item>
+                <Form.Item
+                  label={<>干体重评估日期 <span style={{ color: '#F43F5E' }}>*</span></>}
+                  name="dryWeightAssessmentDate"
+                  rules={[{ required: true, message: '请选择干体重评估日期' }]}
+                >
+                  <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" allowClear={false} />
                 </Form.Item>
                 <Form.Item label="上机前体重 (kg)" name="preMachineWeight">
                   <InputNumber min={20} max={200} step={0.1} style={{ width: '100%' }} />

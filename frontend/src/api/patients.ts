@@ -44,7 +44,7 @@ export interface Patient {
   consent_dialysis_date?: string | null;
   present_illness?: string | null;
   past_history?: string | null;
-  /** 透析排班预设代码，如 tiw_mwf_morning、biw5_alt、qod、other */
+  /** 透析排班预设代码，如 tiw_mwf_morning、biw5_alt_morning、qod、other */
   dialysis_schedule_code?: string | null;
   /** 透析时间补充/调整说明 */
   dialysis_schedule_notes?: string | null;

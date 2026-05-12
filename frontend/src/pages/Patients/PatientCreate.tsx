@@ -20,7 +20,7 @@ import {
 import type { UploadFile } from 'antd/es/upload/interface';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import PageShell from '../../components/PageShell/PageShell';
 import ConsentDialysisImageUpload from '../../components/ConsentDialysisImageUpload/ConsentDialysisImageUpload';
@@ -32,7 +32,10 @@ import {
   DIALYSIS_SCHEDULE_OPTIONS,
   DIALYSIS_SHIFT_OPTIONS,
   WEEKDAY_OPTIONS,
+  isBiw5DialysisScheduleCode,
+  serializeBiw5ScheduleNotes,
   serializeCustomCyclePlan,
+  serializeWeeklyDayShiftsPlan,
   type DialysisShift,
 } from '../../constants/dialysisSchedule';
 
@@ -67,6 +70,8 @@ type FormValues = {
   custom_week1_shift?: DialysisShift;
   custom_week2_days?: number[];
   custom_week2_shift?: DialysisShift;
+  weekly_dialysis_slots?: { weekday: number; shift: DialysisShift }[];
+  biw5_swap_week_patterns?: boolean;
   /** 责任护士（本科室护士/护士长账号，表单校验必填） */
   responsible_nurse_id?: string;
   /** 知情同意书影像（必填，表单校验） */
@@ -172,8 +177,31 @@ export default function PatientCreatePage() {
 
       const code = values.dialysis_schedule_code?.trim();
       if (code) payload.dialysis_schedule_code = code;
-      let notes = values.dialysis_schedule_notes?.trim();
-      if (code === 'custom_cycle') {
+      let notes: string | undefined = values.dialysis_schedule_notes?.trim() || undefined;
+      if (code === 'weekly_day_shifts') {
+        const rows = values.weekly_dialysis_slots ?? [];
+        const picked = rows.filter(
+          (r): r is { weekday: number; shift: DialysisShift } =>
+            r != null
+            && Number.isInteger(r.weekday)
+            && r.weekday >= 0
+            && r.weekday <= 6
+            && ['morning', 'afternoon', 'evening'].includes(String(r.shift)),
+        );
+        if (!picked.length) {
+          message.error('请至少保留一行并选择周几与时段');
+          setLoading(false);
+          return;
+        }
+        const lastByWd = new Map<number, DialysisShift>();
+        for (const r of picked) {
+          lastByWd.set(r.weekday, r.shift);
+        }
+        const days = [...lastByWd.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([wd, shift]) => ({ wd, shift }));
+        notes = serializeWeeklyDayShiftsPlan(days);
+      } else if (code === 'custom_cycle') {
         const week1Days = values.custom_week1_days ?? [];
         const week2Days = values.custom_week2_days ?? [];
         if (!week1Days.length || !values.custom_week1_shift || !week2Days.length || !values.custom_week2_shift) {
@@ -185,6 +213,12 @@ export default function PatientCreatePage() {
           week1: { weekdays: week1Days, shift: values.custom_week1_shift },
           week2: { weekdays: week2Days, shift: values.custom_week2_shift },
         });
+      } else if (code && isBiw5DialysisScheduleCode(code)) {
+        const swap = Boolean(values.biw5_swap_week_patterns);
+        const memo = values.dialysis_schedule_notes?.trim() || '';
+        notes = swap || memo
+          ? serializeBiw5ScheduleNotes({ swapOddEvenWeeks: swap || undefined, memo: memo || undefined })
+          : undefined;
       }
       if (notes) payload.dialysis_schedule_notes = notes;
       if (code === 'qod' && values.dialysis_schedule_anchor_date) {
@@ -379,6 +413,7 @@ export default function PatientCreatePage() {
             dialysis_schedule_adjust: false,
             custom_week1_shift: 'morning',
             custom_week2_shift: 'morning',
+            biw5_swap_week_patterns: false,
             consent_dialysis_image: [],
           }}
         >
@@ -480,6 +515,17 @@ export default function PatientCreatePage() {
                 options={[...DIALYSIS_SCHEDULE_OPTIONS]}
               />
             </Form.Item>
+            {isBiw5DialysisScheduleCode(watchDialysisScheduleCode) ? (
+              <Form.Item
+                name="biw5_swap_week_patterns"
+                label="两周五次 · 奇偶周对调"
+                valuePropName="checked"
+                style={{ gridColumn: 'span 2' }}
+                tooltip="默认：奇 ISO 周按周一、四、六；偶周按周二、五。勾选后对调（奇周周二、五；偶周周一、四、六）。"
+              >
+                <Checkbox>对调两周透析日模板（与 ISO 周奇偶的对应关系互换）</Checkbox>
+              </Form.Item>
+            ) : null}
             <Form.Item
               name="dialysis_schedule_adjust"
               label="补充/调整规则"
@@ -488,7 +534,7 @@ export default function PatientCreatePage() {
             >
               <Switch checkedChildren="已开启" unCheckedChildren="关闭" />
             </Form.Item>
-            {(watchDialysisScheduleAdjust || watchDialysisScheduleCode === 'other') ? (
+            {(watchDialysisScheduleAdjust || watchDialysisScheduleCode === 'other' || isBiw5DialysisScheduleCode(watchDialysisScheduleCode)) ? (
               <Form.Item
                 name="dialysis_schedule_notes"
                 label="透析时间说明（可手动输入）"
@@ -504,6 +550,54 @@ export default function PatientCreatePage() {
                   showCount
                 />
               </Form.Item>
+            ) : null}
+            {watchDialysisScheduleCode === 'weekly_day_shifts' ? (
+              <div style={{ gridColumn: 'span 2' }}>
+                <div style={{ fontSize: 12, color: '#64748B', marginBottom: 8 }}>
+                  每周按下方规则重复：每个透析日单独选择周几与时段（同一周几多行时以后一行为准）。
+                </div>
+                <Form.List name="weekly_dialysis_slots" initialValue={[{ weekday: 1, shift: 'morning' }]}>
+                  {(fields, { add, remove }) => (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {fields.map(({ key, name, ...restField }) => (
+                        <Space key={key} wrap align="baseline">
+                          <Form.Item
+                            {...restField}
+                            name={[name, 'weekday']}
+                            rules={[{ required: true, message: '请选择周几' }]}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Select
+                              options={[...WEEKDAY_OPTIONS]}
+                              placeholder="周几"
+                              style={{ width: 120 }}
+                            />
+                          </Form.Item>
+                          <Form.Item
+                            {...restField}
+                            name={[name, 'shift']}
+                            rules={[{ required: true, message: '请选择时段' }]}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Select options={DIALYSIS_SHIFT_OPTIONS} placeholder="时段" style={{ width: 110 }} />
+                          </Form.Item>
+                          <Button
+                            type="link"
+                            danger
+                            disabled={fields.length <= 1}
+                            onClick={() => remove(name)}
+                          >
+                            删除
+                          </Button>
+                        </Space>
+                      ))}
+                      <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ weekday: undefined, shift: 'morning' })}>
+                        添加透析日
+                      </Button>
+                    </div>
+                  )}
+                </Form.List>
+              </div>
             ) : null}
             {watchDialysisScheduleCode === 'custom_cycle' ? (
               <div style={{ gridColumn: 'span 2' }}>

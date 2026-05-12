@@ -20,6 +20,9 @@ const ALLOWED_SCHEDULE_CODES = new Set([
   'tiw_tts_afternoon',
   'tiw_tts_evening',
   'biw5_alt',
+  'biw5_alt_morning',
+  'biw5_alt_afternoon',
+  'biw5_alt_evening',
   'qod',
   'other',
 ]);

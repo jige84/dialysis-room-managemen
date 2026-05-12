@@ -39,6 +39,47 @@ test('patientsValidators: update schedule normalization keeps anchor behavior', 
   assert.equal(keepQodNoAnchor.ok, false);
 });
 
+test('patientsValidators: weekly_day_shifts notes validation', () => {
+  const okNotes = `[自定排班] ${JSON.stringify({
+    weeklyDays: [
+      { wd: 1, shift: 'morning' },
+      { wd: 2, shift: 'evening' },
+    ],
+  })}`;
+  const createOk = normalizeCreateScheduleFields({
+    dialysis_schedule_code: 'weekly_day_shifts',
+    dialysis_schedule_notes: okNotes,
+  });
+  assert.equal(createOk.ok, true);
+
+  const dupWd = `[自定排班] ${JSON.stringify({
+    weeklyDays: [
+      { wd: 1, shift: 'morning' },
+      { wd: 1, shift: 'afternoon' },
+    ],
+  })}`;
+  const createDup = normalizeCreateScheduleFields({
+    dialysis_schedule_code: 'weekly_day_shifts',
+    dialysis_schedule_notes: dupWd,
+  });
+  assert.equal(createDup.ok, false);
+});
+
+test('patientsValidators: biw5 structured notes validation', () => {
+  const okNotes = `[两周五次] ${JSON.stringify({ swapOddEvenWeeks: true, memo: '节假日按科室通知' })}`;
+  const createOk = normalizeCreateScheduleFields({
+    dialysis_schedule_code: 'biw5_alt_morning',
+    dialysis_schedule_notes: okNotes,
+  });
+  assert.equal(createOk.ok, true);
+
+  const bad = normalizeCreateScheduleFields({
+    dialysis_schedule_code: 'biw5_alt_morning',
+    dialysis_schedule_notes: '[两周五次] {"extra":1}',
+  });
+  assert.equal(bad.ok, false);
+});
+
 test('patientsValidators: dry weight parser validates range and required date', () => {
   const invalidRange = parseUpdateProfileDryWeight({
     profile_dry_weight: 10,
