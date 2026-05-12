@@ -61,7 +61,7 @@ import { mergeShiftFromPatientProfileIntoFormValues } from '../../constants/dial
 import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
 import { useAuthStore } from '../../stores/authStore';
 import { usersApi } from '../../api/users';
-import { expandSignatureInputWithCandidates } from '../../utils/signatureRealNameExpand';
+import { SignatureNameAutoComplete } from '../../components/SignatureNameAutoComplete/SignatureNameAutoComplete';
 
 /** 今日排班名单侧栏宽度（与透析工作台同级） */
 const PRESCRIPTION_TODAY_SIDER_WIDTH = 192;
@@ -3104,13 +3104,11 @@ export default function PrescriptionWorkspacePage() {
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <Form.Item label="医生签名" name="doctorSignature" style={{ marginBottom: 8 }}>
-                <Input
+                <SignatureNameAutoComplete
+                  names={signatureRealNames}
+                  watchForm={form}
+                  fieldName="doctorSignature"
                   style={{ width: 'min(220px, 100%)' }}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
-                    form.setFieldValue('doctorSignature', next);
-                  }}
                 />
               </Form.Item>
               <div

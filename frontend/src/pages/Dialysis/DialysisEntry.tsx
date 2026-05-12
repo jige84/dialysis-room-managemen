@@ -73,7 +73,7 @@ import {
 } from '../../utils/dialysisEntryDraft';
 import { calcSpKtv, calcUrr } from '../../utils/ktv';
 import { isMenuKeyAllowed } from '../../utils/menuAccess';
-import { expandSignatureInputWithCandidates } from '../../utils/signatureRealNameExpand';
+import { SignatureNameAutoComplete } from '../../components/SignatureNameAutoComplete/SignatureNameAutoComplete';
 import { usersApi } from '../../api/users';
 
 // ── 演示数据（与透析处方工作台共用） ─────────────────────────
@@ -3161,12 +3161,10 @@ export default function DialysisEntryPage() {
                 rules={[{ required: true, message: '请填写或确认穿刺护士签名' }]}
                 style={{ marginBottom: 0 }}
               >
-                <Input
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
-                    form.setFieldValue('nurse_puncture_sign', next);
-                  }}
+                <SignatureNameAutoComplete
+                  names={signatureRealNames}
+                  watchForm={form}
+                  fieldName="nurse_puncture_sign"
                 />
               </Form.Item>
               <Form.Item
@@ -3175,21 +3173,17 @@ export default function DialysisEntryPage() {
                 rules={[{ required: true, message: '请填写或确认上机护士签名' }]}
                 style={{ marginBottom: 0 }}
               >
-                <Input
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
-                    form.setFieldValue('nurse_on_machine_sign', next);
-                  }}
+                <SignatureNameAutoComplete
+                  names={signatureRealNames}
+                  watchForm={form}
+                  fieldName="nurse_on_machine_sign"
                 />
               </Form.Item>
               <Form.Item label={<FieldLabel text="二次核对护士" />} name="nurse_double_check_sign" style={{ marginBottom: 0 }}>
-                <Input
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
-                    form.setFieldValue('nurse_double_check_sign', next);
-                  }}
+                <SignatureNameAutoComplete
+                  names={signatureRealNames}
+                  watchForm={form}
+                  fieldName="nurse_double_check_sign"
                 />
               </Form.Item>
             </Grid>
@@ -4038,13 +4032,11 @@ export default function DialysisEntryPage() {
                   rules={[{ required: true, message: '请填写或确认记录护士签名' }]}
                   style={{ marginBottom: 10 }}
                 >
-                  <Input
+                  <SignatureNameAutoComplete
+                    names={signatureRealNames}
+                    watchForm={form}
+                    fieldName="nurse_record_sign"
                     prefix={<span style={{ color: '#7C3AED' }}>✍</span>}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const next = expandSignatureInputWithCandidates(v, signatureRealNames);
-                      form.setFieldValue('nurse_record_sign', next);
-                    }}
                   />
                 </Form.Item>
                 <Form.Item label={<FieldLabel text="记录日期" />} style={{ marginBottom: 0 }}>
@@ -4113,12 +4105,10 @@ export default function DialysisEntryPage() {
                       style={{ marginBottom: 12 }}
                     >
                       {field.key === 'nurse' ? (
-                        <Input
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            const next = expandSignatureInputWithCandidates(v, signatureRealNames);
-                            treatmentForm.setFieldValue(field.key, next);
-                          }}
+                        <SignatureNameAutoComplete
+                          names={signatureRealNames}
+                          watchForm={treatmentForm}
+                          fieldName={field.key}
                         />
                       ) : (
                         <Input placeholder={field.placeholder} />
