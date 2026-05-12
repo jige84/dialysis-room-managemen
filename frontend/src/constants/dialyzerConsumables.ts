@@ -3,7 +3,8 @@
  */
 export const DIALYZER_CONSUMABLE_NAMES = [
   '透析器 FX80（高通量）',
-  '透析器 FX60（低通量）',
+  /** FX60 为高通量膜材；离线预设须与耗材目录/临床一致，避免床旁只读区误显「低通量」 */
+  '透析器 FX60（高通量）',
 ] as const;
 
 export type DialyzerConsumableName = (typeof DIALYZER_CONSUMABLE_NAMES)[number];

@@ -62,7 +62,7 @@ export const DIALYSIS_DEMO_PATIENTS: DialysisDemoPatient[] = [
       duration: 4.0,
       dialysateFlow: 500,
       anticoagulant: '低分子肝素',
-      dialyzer: 'FX60（低通量）',
+      dialyzer: 'FX60（高通量）',
       na: 143,
       k: 2.0,
       ca: 1.5,

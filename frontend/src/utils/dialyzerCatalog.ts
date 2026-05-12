@@ -61,6 +61,32 @@ function formatDialyzerStockLabel(row: ConsumableStockRow): string {
   return row.item_name;
 }
 
+/** 去掉型号末尾「（高通量）/（低通量）」等，便于与 dialyzer_flux 列重新组合 */
+const DIALYZER_FLUX_SUFFIX_RE = /[（(]\s*(?:高通量|低通量)\s*[）)]\s*$/u;
+
+function stripDialyzerFluxSuffixFromModelText(s: string): string {
+  return s.replace(DIALYZER_FLUX_SUFFIX_RE, '').trim();
+}
+
+/**
+ * 透析工作台 / 报表等：处方库表 dialyzer_model 可能与 dialyzer_flux 不同步（历史内置预设、旧文案）。
+ * 展示以 dialyzer_flux 为准；未维护通量列时回退为型号字段原文（去「透析器」前缀）。
+ */
+export function dialyzerShortFromPrescriptionFields(
+  dialyzerModel: string | null | undefined,
+  dialyzerFlux: string | null | undefined,
+): string {
+  const raw = String(dialyzerModel ?? '').trim();
+  if (!raw) return '—';
+  const withoutPrefix = raw.replace(/^透析器\s*/u, '').trim();
+  const base = stripDialyzerFluxSuffixFromModelText(withoutPrefix);
+  if (!base) return '—';
+  const flux = String(dialyzerFlux ?? '').trim().toLowerCase();
+  if (flux === 'high') return `${base}（高通量）`;
+  if (flux === 'low') return `${base}（低通量）`;
+  return withoutPrefix || '—';
+}
+
 function dialysisMembraneRows(stocks: ConsumableStockRow[]): ConsumableStockRow[] {
   return stocks.filter(isDialysisMembraneCatalogRow);
 }
@@ -247,7 +273,11 @@ export function dialyzerDisplayShort(
   }
   if (isUuid(s)) {
     const row = stockById.get(s);
-    if (row) return row.item_name.replace(/^透析器\s*/, '').trim() || row.item_name;
+    if (row && !isHemoperfusionCatalogRow(row)) {
+      const label = formatDialyzerStockLabel(row);
+      return label.replace(/^透析器\s*/u, '').trim() || label;
+    }
+    if (row) return row.item_name.replace(/^透析器\s*/u, '').trim() || row.item_name;
   }
   const t = s.replace(/^透析器\s*/, '').trim();
   return t || '—';

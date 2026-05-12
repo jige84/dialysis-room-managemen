@@ -42,6 +42,7 @@ import {
   loadPrescriptionBasicParamsFromStorage,
   splitPrescriptionNotesFromDb,
 } from '../../utils/prescriptionFormFromDemo';
+import { dialyzerShortFromPrescriptionFields } from '../../utils/dialyzerCatalog';
 import {
   readPostDialysisSync,
   writePostDialysisSync,
@@ -1142,10 +1143,10 @@ function SectionBody({ children, style }: { children: React.ReactNode; style?: R
 }
 
 // ── 网格布局辅助 ──────────────────────────────────────────
-function Grid({ cols = 4, gap = 14, children, style }: {
+function Grid({ cols = 4, gap = 10, children, style }: {
   cols?: number; gap?: number; children: React.ReactNode; style?: React.CSSProperties;
 }) {
-  const minWidth = cols >= 4 ? 168 : cols === 3 ? 220 : 260;
+  const minWidth = cols >= 4 ? 152 : cols === 3 ? 200 : 248;
   return (
     <div style={{
       display: 'grid',
@@ -2178,7 +2179,7 @@ export default function DialysisEntryPage() {
       bloodFlow: normNum(rx.blood_flow_rate) ?? 0,
       dialysateFlow: normNum(rx.dialysate_flow_rate) ?? 0,
       duration: dur,
-      dialyzerShort: dialyzerShortFromFormValue(rx.dialyzer_model ?? ''),
+      dialyzerShort: dialyzerShortFromPrescriptionFields(rx.dialyzer_model, rx.dialyzer_flux),
       anticoagulantLabel: anticoagulantLabelFromCode(String(rx.anticoagulant ?? '')),
       heparinFirst: normNum(rx.heparin_prime_dose) ?? null,
       heparinMaint: normNum(rx.heparin_maintain) ?? null,
@@ -2641,7 +2642,7 @@ export default function DialysisEntryPage() {
             onChange={(val) => val && setSessionDate(val)}
             style={{ width: 130 }}
             format="YYYY-MM-DD"
-            size="middle"
+            size="small"
           />
         </div>
         <div className="hd-filter-bar__right">
@@ -2666,7 +2667,7 @@ export default function DialysisEntryPage() {
       <Form
         form={form}
         layout="vertical"
-        size="middle"
+        size="small"
         disabled={isDialysisReadOnly}
         initialValues={nurseSignatureInitialValues}
         onValuesChange={() => {
@@ -2704,7 +2705,7 @@ export default function DialysisEntryPage() {
                   </span>
                 </div>
 
-                <div className="hd-split-panels" style={{ marginBottom: 16 }}>
+                <div className="hd-split-panels" style={{ marginBottom: 10 }}>
                   <div className="hd-summary-block">
                     <div className="hd-summary-block__title">
                       处方参数
@@ -2766,7 +2767,7 @@ export default function DialysisEntryPage() {
                   <div className="hd-summary-block__title">
                     体重与超滤（与处方工作台「超滤量」一致：(上机前体重−干体重)×1000 + 附加（HD/HDF +200mL，HD+HP +500mL）；处方为只读）
                   </div>
-                  <Grid cols={4} gap={14}>
+                  <Grid cols={4} gap={10}>
                     <ReadonlyValue label="干体重（处方）" value={`${dryWeight} kg`} color="#1D4ED8" bg="#EFF6FF" border="#BFDBFE" />
                     <ReadonlyValue label="上机前体重（处方）" value={`${rxPreview.preMachineWeightRx} kg`} />
                     <ReadonlyValue
@@ -2825,7 +2826,7 @@ export default function DialysisEntryPage() {
                       </span>
                     </div>
 
-                    <div className="hd-split-panels" style={{ marginBottom: 16 }}>
+                    <div className="hd-split-panels" style={{ marginBottom: 10 }}>
                       <div className="hd-summary-block">
                         <div className="hd-summary-block__title">
                           处方参数（数据库当前处方）
@@ -2935,7 +2936,7 @@ export default function DialysisEntryPage() {
                       <div className="hd-summary-block__title">
                         体重与超滤（与处方工作台公式一致；上机前体重默认取干体重，请在第⑦段改为实测值）
                       </div>
-                      <Grid cols={4} gap={14}>
+                      <Grid cols={4} gap={10}>
                         <ReadonlyValue label="干体重（处方）" value={`${dryWeight ?? '—'} kg`} color="#1D4ED8" bg="#EFF6FF" border="#BFDBFE" />
                         <ReadonlyValue label="上机前体重（用于估算）" value={`${realPatientRxPreview.preMachineWeightRx} kg`} />
                         <ReadonlyValue
@@ -2988,9 +2989,9 @@ export default function DialysisEntryPage() {
           <SectionBody>
             {/* 通路类型选择条 */}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              padding: '8px 12px', background: '#F0F9FF',
-              borderRadius: 8, border: '1px solid #BAE6FD', marginBottom: 14,
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 10px', background: '#F0F9FF',
+              borderRadius: 8, border: '1px solid #BAE6FD', marginBottom: 10,
             }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: '#0369A1', whiteSpace: 'nowrap' }}>通路类型</span>
               <Radio.Group
@@ -3015,7 +3016,7 @@ export default function DialysisEntryPage() {
             {/* AVF / AVG 字段 */}
             {(accessType === 'AVF' || accessType === 'AVG') && (
               <>
-                <Grid cols={4} gap={14} style={{ marginBottom: 12 }}>
+                <Grid cols={4} gap={10} style={{ marginBottom: 12 }}>
                   <Form.Item label={<FieldLabel text="震颤" />} style={{ marginBottom: 0 }}>
                     <Select defaultValue="strong" options={[
                       { value: 'strong', label: '强' },
@@ -3079,7 +3080,7 @@ export default function DialysisEntryPage() {
 
             {/* TCC / NCC 字段 */}
             {(accessType === 'TCC' || accessType === 'NCC') && (
-              <Grid cols={4} gap={14}>
+              <Grid cols={4} gap={10}>
                 <Form.Item label={<FieldLabel text="导管位置" />} style={{ marginBottom: 0 }}>
                   <Select
                     value={catheterLocation || undefined}
@@ -3154,7 +3155,7 @@ export default function DialysisEntryPage() {
         <Section>
           <SectionTitle step={3} color="#7C3AED" title="护士签名（上机前）" />
           <SectionBody>
-            <Grid cols={3} gap={14}>
+            <Grid cols={3} gap={10}>
               <Form.Item
                 label={<FieldLabel text="穿刺护士" required />}
                 name="nurse_puncture_sign"
@@ -3214,7 +3215,7 @@ export default function DialysisEntryPage() {
               </div>
             }
           />
-          <SectionBody style={{ padding: '12px 18px' }}>
+          <SectionBody style={{ padding: '8px 10px' }}>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>
@@ -3301,7 +3302,7 @@ export default function DialysisEntryPage() {
         </Section>
 
         {/* ══════════════════ ⑤ 医嘱执行 + 并发症（并排） ══════════════════ */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
 
           {/* 医嘱执行 */}
           <Section style={{ marginBottom: 0 }}>
@@ -3671,14 +3672,14 @@ export default function DialysisEntryPage() {
               <Alert
                 type="info"
                 showIcon
-                style={{ marginBottom: 14 }}
+                style={{ marginBottom: 10 }}
                 message="透后数据已由医生在透析处方工作台填写"
                 description="与「透析处方管理」页共用同一份数据，此处无需重复填写；如需更正请由医生在处方页修改。"
               />
             )}
 
             <SubsectionTitle first>体重、时间与液体</SubsectionTitle>
-            <Grid cols={4} gap={14} style={{ marginBottom: 10 }}>
+            <Grid cols={4} gap={10} style={{ marginBottom: 10 }}>
               <Form.Item label={<FieldLabel text="实际透析时长" required />} style={{ marginBottom: 0 }}>
                 <InputNumber
                   min={0} max={8} step={0.1} precision={1}
@@ -3719,7 +3720,7 @@ export default function DialysisEntryPage() {
                 <InputNumber min={0} max={10000} style={{ width: '100%' }} addonAfter="mL" />
               </Form.Item>
             </Grid>
-            <div style={{ marginBottom: 14 }}>
+            <div style={{ marginBottom: 10 }}>
               <FieldLabel text="实际脱水量（自动）" />
               <div style={{
                 marginTop: 4, padding: '8px 12px',
@@ -3739,7 +3740,7 @@ export default function DialysisEntryPage() {
             </div>
 
             <SubsectionTitle>透后生命体征</SubsectionTitle>
-            <Grid cols={3} gap={14} style={{ marginBottom: 14 }}>
+            <Grid cols={3} gap={10} style={{ marginBottom: 10 }}>
               <Form.Item name="post_sbp" label={<FieldLabel text="收缩压" />} style={{ marginBottom: 0 }}>
                 <InputNumber min={60} max={250} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
@@ -3752,7 +3753,7 @@ export default function DialysisEntryPage() {
             </Grid>
 
             <SubsectionTitle>凝血与通路</SubsectionTitle>
-            <Grid cols={3} gap={14} style={{ marginBottom: 14 }}>
+            <Grid cols={3} gap={10} style={{ marginBottom: 10 }}>
               <Form.Item label={<FieldLabel text="凝血分级" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="0" options={[
                   { value: '0', label: '0级（无凝血）' },
@@ -3770,7 +3771,7 @@ export default function DialysisEntryPage() {
             </Grid>
 
             <SubsectionTitle>透析过程与设备</SubsectionTitle>
-            <Grid cols={3} gap={14} style={{ marginBottom: 14 }}>
+            <Grid cols={3} gap={10} style={{ marginBottom: 10 }}>
               <Form.Item label={<FieldLabel text="透析期间患者状态" />} style={{ marginBottom: 0 }}>
                 <Select defaultValue="stable" options={[
                   { value: 'stable', label: '平稳' },
@@ -3794,7 +3795,7 @@ export default function DialysisEntryPage() {
             </Grid>
 
             <SubsectionTitle>护理确认</SubsectionTitle>
-            <Grid cols={2} gap={20} style={{ marginBottom: 14 }}>
+            <Grid cols={2} gap={12} style={{ marginBottom: 10 }}>
               <Form.Item label={<FieldLabel text="局部皮肤完好" />} style={{ marginBottom: 0 }}>
                 <Radio.Group defaultValue="yes" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   <Radio value="yes">是</Radio>
@@ -3810,7 +3811,7 @@ export default function DialysisEntryPage() {
             </Grid>
 
             <SubsectionTitle>尿素（Kt/V / URR）</SubsectionTitle>
-            <Grid cols={2} gap={14} style={{ marginBottom: 14, maxWidth: 560 }}>
+            <Grid cols={2} gap={10} style={{ marginBottom: 10, maxWidth: 560 }}>
               <Form.Item label={<FieldLabel text="透前 BUN" />} style={{ marginBottom: 0 }}>
                 <InputNumber min={1} max={100} step={0.1} precision={1} style={{ width: '100%' }}
                   value={preBun ?? undefined}
@@ -3845,7 +3846,7 @@ export default function DialysisEntryPage() {
               <Alert
                 type="error" showIcon
                 message="BUN 数值异常（透后BUN应小于透前BUN），请核查数据。"
-                style={{ marginBottom: 14 }}
+                style={{ marginBottom: 10 }}
                 action={
                   canAnomaly && isRealPatientId(selectedPatient) ? (
                     <Button
@@ -3867,11 +3868,11 @@ export default function DialysisEntryPage() {
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: 12, marginBottom: 14,
+              gap: 8, marginBottom: 10,
             }}>
               {/* spKt/V */}
               <div style={{
-                padding: '14px 16px', borderRadius: 10, textAlign: 'center',
+                padding: '10px 12px', borderRadius: 8, textAlign: 'center',
                 background: ktv === null
                   ? '#F8FAFC'
                   : ktvAdequate ? 'linear-gradient(135deg,#ECFDF5,#D1FAE5)' : 'linear-gradient(135deg,#FFFBEB,#FEF3C7)',
@@ -3883,7 +3884,7 @@ export default function DialysisEntryPage() {
                 {ktv !== null ? (
                   <>
                     <div style={{
-                      fontFamily: 'DM Mono, monospace', fontSize: 32, fontWeight: 700, lineHeight: 1.1,
+                      fontFamily: 'DM Mono, monospace', fontSize: 26, fontWeight: 700, lineHeight: 1.1,
                       color: ktvAdequate ? '#059669' : '#D97706',
                     }}>{ktv}</div>
                     <Tag
@@ -3918,7 +3919,7 @@ export default function DialysisEntryPage() {
 
               {/* URR */}
               <div style={{
-                padding: '14px 16px', borderRadius: 10, textAlign: 'center',
+                padding: '10px 12px', borderRadius: 8, textAlign: 'center',
                 background: urr === null
                   ? '#F8FAFC'
                   : urrAdequate ? 'linear-gradient(135deg,#ECFDF5,#D1FAE5)' : 'linear-gradient(135deg,#FFFBEB,#FEF3C7)',
@@ -3930,7 +3931,7 @@ export default function DialysisEntryPage() {
                 {urr !== null ? (
                   <>
                     <div style={{
-                      fontFamily: 'DM Mono, monospace', fontSize: 32, fontWeight: 700, lineHeight: 1.1,
+                      fontFamily: 'DM Mono, monospace', fontSize: 26, fontWeight: 700, lineHeight: 1.1,
                       color: urrAdequate ? '#059669' : '#D97706',
                     }}>{urr}%</div>
                     <Tag
@@ -3965,7 +3966,7 @@ export default function DialysisEntryPage() {
 
               {/* 超滤量 */}
               <div style={{
-                padding: '14px 16px', borderRadius: 10, textAlign: 'center',
+                padding: '10px 12px', borderRadius: 8, textAlign: 'center',
                 background: computedUF === null
                   ? '#F8FAFC'
                   : ufAlert ? 'linear-gradient(135deg,#FFF1F2,#FFE4E6)' : 'linear-gradient(135deg,#F0F9FF,#E0F2FE)',
@@ -3977,9 +3978,9 @@ export default function DialysisEntryPage() {
                 {computedUF !== null ? (
                   <>
                     <div style={{
-                      fontFamily: 'DM Mono, monospace', fontSize: 28, fontWeight: 700, lineHeight: 1.1,
+                      fontFamily: 'DM Mono, monospace', fontSize: 24, fontWeight: 700, lineHeight: 1.1,
                       color: ufAlert ? '#BE123C' : '#0284C7',
-                    }}>{computedUF} <span style={{ fontSize: 16 }}>mL</span></div>
+                    }}>{computedUF} <span style={{ fontSize: 14 }}>mL</span></div>
                     <div style={{ marginTop: 4 }}>
                       {ufPercent && (
                         <Tag
@@ -4021,11 +4022,11 @@ export default function DialysisEntryPage() {
             </div>
 
             {/* 备注 + 签名 */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'flex-start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'flex-start' }}>
               <Form.Item name="remark" label={<FieldLabel text="护士备注" />} style={{ marginBottom: 0 }}>
                 <Input.TextArea rows={3} placeholder="记录本次透析特殊情况、护理观察、患者反馈等…" />
               </Form.Item>
-              <div style={{ width: 280 }}>
+              <div style={{ width: 252 }}>
                 <Form.Item
                   label={<FieldLabel text="护士签名" required />}
                   name="nurse_record_sign"
@@ -4259,10 +4260,10 @@ export default function DialysisEntryPage() {
                 <WarningFilled /> 存在紧急并发症，请确认已通知医生
               </span>
             )}
-            <Button icon={<HistoryOutlined />} onClick={openHistoryQueryModal} size="large">
+            <Button icon={<HistoryOutlined />} onClick={openHistoryQueryModal} size="middle">
               历史记录查询
             </Button>
-            <Button icon={<PrinterOutlined />} onClick={handlePrint} size="large">
+            <Button icon={<PrinterOutlined />} onClick={handlePrint} size="middle">
               打印记录单
             </Button>
             <Button
@@ -4270,7 +4271,7 @@ export default function DialysisEntryPage() {
               icon={<SaveOutlined />}
               loading={loading}
               onClick={handleSubmit}
-              size="large"
+              size="middle"
               disabled={isDialysisReadOnly}
             >
               保存透析记录
