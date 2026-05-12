@@ -3740,17 +3740,22 @@ export default function DialysisEntryPage() {
             </div>
 
             <SubsectionTitle>透后生命体征</SubsectionTitle>
-            <Grid cols={3} gap={10} style={{ marginBottom: 10 }}>
-              <Form.Item name="post_sbp" label={<FieldLabel text="收缩压" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={60} max={250} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
+            <div className="hd-post-vitals-row">
+              <Form.Item name="post_sbp" label={<FieldLabel text="收缩压" />}>
+                <InputNumber min={60} max={250} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
-              <Form.Item name="post_dbp" label={<FieldLabel text="舒张压" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={40} max={160} style={{ width: '100%' }} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
+              <Form.Item name="post_dbp" label={<FieldLabel text="舒张压" />}>
+                <InputNumber min={40} max={160} addonAfter="mmHg" disabled={postDialysisLockedByDoctor} />
               </Form.Item>
-              <Form.Item name="post_pulse" label={<FieldLabel text="脉搏" />} style={{ marginBottom: 0 }}>
-                <InputNumber min={30} max={220} style={{ width: '100%' }} addonAfter="次/分" disabled={postDialysisLockedByDoctor} />
+              <Form.Item name="post_pulse" label={<FieldLabel text="脉搏" />}>
+                <InputNumber
+                  min={30}
+                  max={220}
+                  addonAfter={<span className="hd-input-unit-nowrap">次/分</span>}
+                  disabled={postDialysisLockedByDoctor}
+                />
               </Form.Item>
-            </Grid>
+            </div>
 
             <SubsectionTitle>凝血与通路</SubsectionTitle>
             <Grid cols={3} gap={10} style={{ marginBottom: 10 }}>

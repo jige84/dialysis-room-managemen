@@ -434,6 +434,10 @@
   margin-bottom: 12px;
 }
 
+.hd-dialysis-workspace-layout > .ant-layout-content .hd-page-shell--full .hd-post-vitals-row .ant-form-item {
+  margin-bottom: 0;
+}
+
 .hd-record-section {
   margin-bottom: 14px;
   overflow: hidden;
@@ -519,6 +523,34 @@
 
 .hd-subsection-title--first {
   margin-top: 0;
+}
+
+/** 透后生命体征：收缩压/舒张压/脉搏横向紧凑，单位后缀不换行 */
+.hd-post-vitals-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  margin-bottom: 10px;
+  max-width: 520px;
+}
+
+.hd-post-vitals-row .ant-form-item {
+  margin-bottom: 0;
+}
+
+.hd-post-vitals-row .ant-input-number {
+  width: 156px;
+  max-width: 100%;
+}
+
+.hd-post-vitals-row .ant-input-number-group-addon {
+  white-space: nowrap;
+}
+
+/** 表单项单位（如 次/分）作 addon 时强制单行 */
+.hd-input-unit-nowrap {
+  white-space: nowrap;
 }
 
 .hd-split-panels {
