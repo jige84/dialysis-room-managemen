@@ -176,6 +176,8 @@ export interface PreparedPrescription {
   dialyzer_model: string | null;
   dialyzer_area?: number | null;
   dialyzer_flux?: string | null;
+  /** 个别序列化层可能为驼峰，与 dialyzer_flux 二选一 */
+  dialyzerFlux?: string | null;
   dry_weight: number | null;
   dry_weight_date: string | null;
   anticoagulant: string | null;
