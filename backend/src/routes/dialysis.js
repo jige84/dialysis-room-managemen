@@ -60,9 +60,11 @@ router.get('/session-draft', auth, async (req, res, next) => {
     if (!valid.ok) return error(res, valid.message);
     const { patient_id, session_date } = valid.value;
     const { rows } = await pool.query(
-      `SELECT payload, updated_at, updated_by
-       FROM dialysis_session_drafts
-       WHERE patient_id = $1 AND session_date = $2::date
+      `SELECT d.payload, d.updated_at, d.updated_by, d.draft_owner_id,
+              u.real_name AS draft_owner_name
+       FROM dialysis_session_drafts d
+       LEFT JOIN users u ON u.id = d.draft_owner_id
+       WHERE d.patient_id = $1 AND d.session_date = $2::date
        LIMIT 1`,
       [patient_id, session_date],
     );
@@ -95,17 +97,28 @@ router.put(
       if (Buffer.byteLength(jsonStr, 'utf8') > MAX_SESSION_DRAFT_BYTES) {
         return error(res, '草稿体积过大', 413);
       }
+      const uid = req.user.id;
+      const isAdmin = req.user.role === 'admin';
       const { rows } = await pool.query(
-        `INSERT INTO dialysis_session_drafts (patient_id, session_date, payload, updated_at, updated_by)
-         VALUES ($1, $2::date, $3::jsonb, NOW(), $4)
+        `INSERT INTO dialysis_session_drafts (
+           patient_id, session_date, payload, updated_at, updated_by, draft_owner_id
+         )
+         VALUES ($1, $2::date, $3::jsonb, NOW(), $4, $4)
          ON CONFLICT (patient_id, session_date)
          DO UPDATE SET
            payload = EXCLUDED.payload,
            updated_at = NOW(),
-           updated_by = EXCLUDED.updated_by
-         RETURNING patient_id, session_date, updated_at, updated_by`,
-        [patient_id, session_date, payload, req.user.id],
+           updated_by = EXCLUDED.updated_by,
+           draft_owner_id = COALESCE(dialysis_session_drafts.draft_owner_id, EXCLUDED.draft_owner_id)
+         WHERE dialysis_session_drafts.draft_owner_id IS NULL
+            OR dialysis_session_drafts.draft_owner_id = EXCLUDED.updated_by
+            OR $5 = true
+         RETURNING patient_id, session_date, updated_at, updated_by, draft_owner_id`,
+        [patient_id, session_date, payload, uid, isAdmin],
       );
+      if (!rows.length) {
+        return error(res, '仅首位录入人员可修改云端草稿，其他账号仅可查看', 403);
+      }
       return success(res, rows[0], '会话草稿已保存');
     } catch (err) {
       if (err.code === '42P01') {
@@ -503,6 +516,13 @@ router.post('/',
       } finally {
         client.release();
       }
+
+      await pool
+        .query(
+          `DELETE FROM dialysis_session_drafts WHERE patient_id = $1 AND session_date = $2::date`,
+          [patient_id, session_date],
+        )
+        .catch(() => {});
 
       // ufPct 由 calcUFPercent 返回百分比值（如 5.3 表示 5.3%）
       // 超滤量超过干体重5% → 触发 HIGH 级预警（medical-domain-rules §5）

@@ -1272,6 +1272,10 @@ export default function DialysisEntryPage() {
     [currentMenuPermissions, currentRole],
   );
   const isDialysisReadOnly = !canWriteDialysis;
+  const currentUserId = useAuthStore((s) => s.user?.id ?? '');
+  const [remoteDraftOwnerId, setRemoteDraftOwnerId] = useState<string | null>(null);
+  const [remoteDraftOwnerName, setRemoteDraftOwnerName] = useState<string | null>(null);
+
   const [anomalyOpen, setAnomalyOpen] = useState(false);
   const [anomalyCtx, setAnomalyCtx] = useState<{
     anomalyType: AnomalyType;
@@ -1283,6 +1287,45 @@ export default function DialysisEntryPage() {
   const [openedRecordDetail, setOpenedRecordDetail] = useState<DialysisRecordDetail | null>(null);
   /** 选中的日期（DatePicker），默认今日（与本地日历日对齐） */
   const [sessionDate, setSessionDate] = useState<Dayjs>(() => dayjs().startOf('day'));
+
+  const isRemoteDraftViewOnly = useMemo(
+    () =>
+      isRealPatientId(selectedPatient) &&
+      !!remoteDraftOwnerId &&
+      remoteDraftOwnerId !== currentUserId &&
+      currentRole !== 'admin',
+    [selectedPatient, remoteDraftOwnerId, currentUserId, currentRole],
+  );
+  const isDialysisFormDisabled = isDialysisReadOnly || isRemoteDraftViewOnly;
+  const remoteDraftViewerOnlyRef = useRef(false);
+  useEffect(() => {
+    remoteDraftViewerOnlyRef.current = isRemoteDraftViewOnly;
+  }, [isRemoteDraftViewOnly]);
+
+  useEffect(() => {
+    setRemoteDraftOwnerId(null);
+    setRemoteDraftOwnerName(null);
+  }, [selectedPatient, sessionDate]);
+
+  /** 从 GET/PUT 会话草稿接口同步「录入人」元数据，用于他人只读 */
+  const applySessionDraftOwnerFromApiData = useCallback((data: unknown) => {
+    if (data == null || typeof data !== 'object' || Array.isArray(data)) {
+      setRemoteDraftOwnerId(null);
+      setRemoteDraftOwnerName(null);
+      return;
+    }
+    const rec = data as Record<string, unknown>;
+    const oid = rec.draft_owner_id;
+    if (oid === undefined || oid === null || oid === '') {
+      setRemoteDraftOwnerId(null);
+      setRemoteDraftOwnerName(null);
+      return;
+    }
+    setRemoteDraftOwnerId(String(oid));
+    const nm = rec.draft_owner_name;
+    setRemoteDraftOwnerName(typeof nm === 'string' && nm.trim() ? nm.trim() : null);
+  }, []);
+
   /** 与处方工作台 mergePrescriptionDefaultsForPatient 同源（演示默认值 + 医生保存的参数），仅展示只读 */
   const [rxDefaults, setRxDefaults] = useState<Record<string, unknown> | null>(null);
   /** 真实患者：从 /api/dialysis/prepare 获取的处方与医嘱数据 */
@@ -1466,6 +1509,7 @@ export default function DialysisEntryPage() {
     if (draftDebounceTimerRef.current) clearTimeout(draftDebounceTimerRef.current);
     draftDebounceTimerRef.current = setTimeout(() => {
       draftDebounceTimerRef.current = null;
+      if (remoteDraftViewerOnlyRef.current) return;
       const key = dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD'));
       const snap = collectDialysisEntryDraftSnapshot();
       saveDialysisEntryDraft(key, snap);
@@ -1480,6 +1524,7 @@ export default function DialysisEntryPage() {
           .then((res) => {
             const u = res.data?.data?.updated_at;
             if (u) lastMergedRemoteDraftMsRef.current = new Date(u).getTime();
+            applySessionDraftOwnerFromApiData(res.data?.data ?? null);
           })
           .catch(() => {
             /* 表未迁移或离线：仅本地草稿 */
@@ -1493,6 +1538,7 @@ export default function DialysisEntryPage() {
     realPrepareData,
     collectDialysisEntryDraftSnapshot,
     canWriteDialysis,
+    applySessionDraftOwnerFromApiData,
   ]);
 
   useEffect(
@@ -2119,10 +2165,12 @@ export default function DialysisEntryPage() {
       try {
         const res = await dialysisApi.getSessionDraft(selectedPatient, sessionDate.format('YYYY-MM-DD'));
         if (cancelled) return;
-        const row = res.data?.data;
-        if (row?.payload) {
-          remoteSnap = parseDialysisEntryDraftSnapshot(row.payload);
-          remoteMs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+        const row = res.data?.data ?? null;
+        applySessionDraftOwnerFromApiData(row);
+        if (row && typeof row === 'object' && 'payload' in row && row.payload != null) {
+          remoteSnap = parseDialysisEntryDraftSnapshot(row.payload as unknown);
+          const upd = (row as { updated_at?: string }).updated_at;
+          remoteMs = upd ? new Date(upd).getTime() : 0;
         }
       } catch {
         /* 表未迁移或离线 */
@@ -2156,6 +2204,7 @@ export default function DialysisEntryPage() {
     realPrepareData,
     prepareRefreshNonce,
     applyDialysisEntryDraftSnapshot,
+    applySessionDraftOwnerFromApiData,
   ]);
 
   /** 多用户：轮询服务端草稿（本地约 4s 无编辑时才合并，减少打断正在录入） */
@@ -2170,9 +2219,10 @@ export default function DialysisEntryPage() {
       void dialysisApi
         .getSessionDraft(selectedPatient, sessionDate.format('YYYY-MM-DD'))
         .then((res) => {
-          const row = res.data?.data;
-          if (!row?.payload) return;
-          const snap = parseDialysisEntryDraftSnapshot(row.payload);
+          const row = res.data?.data ?? null;
+          applySessionDraftOwnerFromApiData(row);
+          if (!row || typeof row !== 'object' || !('payload' in row) || !row.payload) return;
+          const snap = parseDialysisEntryDraftSnapshot(row.payload as unknown);
           if (!snap) return;
           const remoteMs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
           if (remoteMs <= lastMergedRemoteDraftMsRef.current) return;
@@ -2185,7 +2235,7 @@ export default function DialysisEntryPage() {
     };
     const id = window.setInterval(tick, 5000);
     return () => window.clearInterval(id);
-  }, [recordIdFromUrl, selectedPatient, sessionDate, realPrepareData, applyDialysisEntryDraftSnapshot]);
+  }, [recordIdFromUrl, selectedPatient, sessionDate, realPrepareData, applyDialysisEntryDraftSnapshot, applySessionDraftOwnerFromApiData]);
 
   /** 干体重（处方）展示依赖 state；草稿恢复可能曾把 null 写回，此处与 prepare 处方再对齐一次 */
   useEffect(() => {
@@ -2371,6 +2421,7 @@ export default function DialysisEntryPage() {
 
   useEffect(() => {
     if (!selectedPatient) return;
+    if (isRemoteDraftViewOnly) return;
     if (readPostDialysisSync(selectedPatient)?.filledBy === 'doctor') return;
     const hasAny =
       postSbpWatch != null ||
@@ -2392,11 +2443,11 @@ export default function DialysisEntryPage() {
       setPostDialysisSyncMeta(readPostDialysisSync(selectedPatient));
     }, 450);
     return () => window.clearTimeout(t);
-  }, [selectedPatient, postWeight, postSbpWatch, postDbpWatch, postPulseWatch]);
+  }, [selectedPatient, postWeight, postSbpWatch, postDbpWatch, postPulseWatch, isRemoteDraftViewOnly]);
 
   const handleVitalChange = useCallback(
     (rowId: string, field: string, val: string) => {
-      if (isDialysisReadOnly) {
+      if (isDialysisFormDisabled) {
         return;
       }
       /** 生命体征护士签名：仅系统按当前登录用户写入，不允许手改 */
@@ -2419,12 +2470,12 @@ export default function DialysisEntryPage() {
       );
       schedulePersistDialysisDraft();
     },
-    [isDialysisReadOnly, signerLabel, schedulePersistDialysisDraft],
+    [isDialysisFormDisabled, signerLabel, schedulePersistDialysisDraft],
   );
 
   const handleVitalTimeChange = useCallback(
     (rowId: string, val: string) => {
-      if (isDialysisReadOnly) return;
+      if (isDialysisFormDisabled) return;
       const t =
         typeof val === 'string' && /^\d{2}:\d{2}$/.test(val.trim())
           ? val.trim()
@@ -2432,12 +2483,16 @@ export default function DialysisEntryPage() {
       setVitalRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, time: t } : row)));
       schedulePersistDialysisDraft();
     },
-    [isDialysisReadOnly, schedulePersistDialysisDraft],
+    [isDialysisFormDisabled, schedulePersistDialysisDraft],
   );
 
   const handleAddVitalRow = () => {
-    if (isDialysisReadOnly) {
-      message.warning('当前账号在透析工作台为只读权限');
+    if (isDialysisFormDisabled) {
+      message.warning(
+        isRemoteDraftViewOnly
+          ? '已由其他人员录入本班草稿，您仅可查看'
+          : '当前账号在透析工作台为只读权限',
+      );
       return;
     }
     setVitalRows((prev) => [...prev, createVitalSignRow()]);
@@ -2457,7 +2512,7 @@ export default function DialysisEntryPage() {
 
   /** 生命体征「护士签名」列：可写模式下始终与当前登录用户姓名一致 */
   useEffect(() => {
-    if (!signerLabel || isDialysisReadOnly) return;
+    if (!signerLabel || isDialysisFormDisabled) return;
     let persist = false;
     setVitalRows((prev) => {
       let changed = false;
@@ -2477,11 +2532,15 @@ export default function DialysisEntryPage() {
       return changed ? next : prev;
     });
     if (persist) schedulePersistDialysisDraft();
-  }, [signerLabel, isDialysisReadOnly, selectedPatient, schedulePersistDialysisDraft]);
+  }, [signerLabel, isDialysisFormDisabled, selectedPatient, schedulePersistDialysisDraft]);
 
   const handleRemoveVitalRow = (rowId: string) => {
-    if (isDialysisReadOnly) {
-      message.warning('当前账号在透析工作台为只读权限');
+    if (isDialysisFormDisabled) {
+      message.warning(
+        isRemoteDraftViewOnly
+          ? '已由其他人员录入本班草稿，您仅可查看'
+          : '当前账号在透析工作台为只读权限',
+      );
       return;
     }
     setVitalRows(prev => {
@@ -2492,8 +2551,12 @@ export default function DialysisEntryPage() {
   };
 
   const handleOrderToggle = (key: string, checked: boolean) => {
-    if (isDialysisReadOnly) {
-      message.warning('当前账号在透析工作台为只读权限');
+    if (isDialysisFormDisabled) {
+      message.warning(
+        isRemoteDraftViewOnly
+          ? '已由其他人员录入本班草稿，您仅可查看'
+          : '当前账号在透析工作台为只读权限',
+      );
       return;
     }
     setOrders((prev) => ({ ...prev, [key]: checked }));
@@ -2502,8 +2565,12 @@ export default function DialysisEntryPage() {
 
   /** 组合医嘱：一次勾选同步主药 + 所有子药 */
   const handleComboGroupToggle = (g: DialysisOrderExecGroup, checked: boolean) => {
-    if (isDialysisReadOnly) {
-      message.warning('当前账号在透析工作台为只读权限');
+    if (isDialysisFormDisabled) {
+      message.warning(
+        isRemoteDraftViewOnly
+          ? '已由其他人员录入本班草稿，您仅可查看'
+          : '当前账号在透析工作台为只读权限',
+      );
       return;
     }
     setOrders((prev) => {
@@ -2515,8 +2582,12 @@ export default function DialysisEntryPage() {
   };
 
   const handleSubmit = async () => {
-    if (isDialysisReadOnly) {
-      message.warning('当前账号在透析工作台为只读权限，无法保存');
+    if (isDialysisFormDisabled) {
+      message.warning(
+        isRemoteDraftViewOnly
+          ? '已由其他人员录入本班草稿，您仅可查看，无法保存'
+          : '当前账号在透析工作台为只读权限，无法保存',
+      );
       return;
     }
     if (!selectedPatient) { message.warning('请先选择患者'); return; }
@@ -2746,6 +2817,19 @@ export default function DialysisEntryPage() {
           description="可查看透析工作台信息，但不可新增、编辑或保存透析记录。"
         />
       ) : null}
+      {isRemoteDraftViewOnly ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 10 }}
+          message="他人正在录入本班草稿（只读查看）"
+          description={
+            remoteDraftOwnerName
+              ? `云端录入人：${remoteDraftOwnerName}。您可实时查看同步内容，不可修改或保存；如需接管请联系管理员。`
+              : '云端已有其他账号写入草稿。您可实时查看同步内容，不可修改或保存；如需接管请联系管理员。'
+          }
+        />
+      ) : null}
 
       <div className="hd-filter-bar">
         <div className="hd-filter-bar__left">
@@ -2770,7 +2854,7 @@ export default function DialysisEntryPage() {
             icon={<SaveOutlined />}
             loading={loading}
             onClick={handleSubmit}
-            disabled={isDialysisReadOnly}
+            disabled={isDialysisFormDisabled}
           >
             {recordIdFromUrl ? '保存为新记录' : '保存记录'}
           </Button>
@@ -2781,10 +2865,10 @@ export default function DialysisEntryPage() {
         form={form}
         layout="vertical"
         size="small"
-        disabled={isDialysisReadOnly}
+        disabled={isDialysisFormDisabled}
         initialValues={nurseSignatureInitialValues}
         onValuesChange={() => {
-          if (isDialysisReadOnly) return;
+          if (isDialysisFormDisabled) return;
           schedulePersistDialysisDraft();
         }}
       >
@@ -3321,7 +3405,7 @@ export default function DialysisEntryPage() {
                   onClick={handleAddVitalRow}
                   type="primary"
                   ghost
-                  disabled={isDialysisReadOnly}
+                  disabled={isDialysisFormDisabled}
                 >
                   新增记录
                 </Button>
@@ -3365,7 +3449,7 @@ export default function DialysisEntryPage() {
                         padding: '4px 6px', border: '1px solid #E2E8F0',
                         textAlign: 'center', verticalAlign: 'middle',
                       }}>
-                        {isDialysisReadOnly ? (
+                        {isDialysisFormDisabled ? (
                           <span style={{
                             display: 'inline-block', fontWeight: 600, color: '#1D4ED8',
                             fontSize: 12, whiteSpace: 'nowrap', fontFamily: 'DM Mono, monospace',
@@ -3400,8 +3484,8 @@ export default function DialysisEntryPage() {
                             type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
-                            readOnly={field === 'signature' || isDialysisReadOnly}
-                            disabled={isDialysisReadOnly}
+                            readOnly={field === 'signature' || isDialysisFormDisabled}
+                            disabled={isDialysisFormDisabled}
                             style={{
                               width: '100%', padding: '4px 6px',
                               border: '1px solid transparent',
@@ -3428,7 +3512,7 @@ export default function DialysisEntryPage() {
                           icon={<DeleteOutlined />}
                           onClick={() => handleRemoveVitalRow(row.id)}
                           type="text"
-                          disabled={isDialysisReadOnly}
+                          disabled={isDialysisFormDisabled}
                         />
                       </td>
                     </tr>
@@ -3639,8 +3723,12 @@ export default function DialysisEntryPage() {
                         padding: '8px 10px', cursor: 'pointer',
                       }}
                         onClick={() => {
-                          if (isDialysisReadOnly) {
-                            message.warning('当前账号在透析工作台为只读权限');
+                          if (isDialysisFormDisabled) {
+                            message.warning(
+                              isRemoteDraftViewOnly
+                                ? '他人正在录入本班草稿，您仅可查看'
+                                : '当前账号在透析工作台为只读权限',
+                            );
                             return;
                           }
                           if (active) return; // 已选中时只能通过右侧X取消
@@ -3674,10 +3762,14 @@ export default function DialysisEntryPage() {
                               size="small" type="link"
                               icon={hasFilled ? <EditOutlined /> : <FileTextOutlined />}
                               style={{ padding: '0 4px', fontSize: 12, color: c.emergency ? '#DC2626' : '#0369A1' }}
-                              disabled={isDialysisReadOnly}
+                              disabled={isDialysisFormDisabled}
                               onClick={() => {
-                                if (isDialysisReadOnly) {
-                                  message.warning('当前账号在透析工作台为只读权限');
+                                if (isDialysisFormDisabled) {
+                                  message.warning(
+                                    isRemoteDraftViewOnly
+                                      ? '他人正在录入本班草稿，您仅可查看'
+                                      : '当前账号在透析工作台为只读权限',
+                                  );
                                   return;
                                 }
                                 setTreatmentModalTarget(c.value);
@@ -3695,10 +3787,14 @@ export default function DialysisEntryPage() {
                               size="small" type="text" danger
                               icon={<CloseOutlined />}
                               style={{ padding: '0 4px', fontSize: 11 }}
-                              disabled={isDialysisReadOnly}
+                              disabled={isDialysisFormDisabled}
                               onClick={() => {
-                                if (isDialysisReadOnly) {
-                                  message.warning('当前账号在透析工作台为只读权限');
+                                if (isDialysisFormDisabled) {
+                                  message.warning(
+                                    isRemoteDraftViewOnly
+                                      ? '他人正在录入本班草稿，您仅可查看'
+                                      : '当前账号在透析工作台为只读权限',
+                                  );
                                   return;
                                 }
                                 setComplications(prev => prev.filter(x => x !== c.value));
@@ -4208,10 +4304,14 @@ export default function DialysisEntryPage() {
               width={620}
               okText="保存处理记录"
               cancelText="取消"
-              okButtonProps={{ disabled: isDialysisReadOnly }}
+              okButtonProps={{ disabled: isDialysisFormDisabled }}
               onOk={() => {
-                if (isDialysisReadOnly) {
-                  message.warning('当前账号在透析工作台为只读权限');
+                if (isDialysisFormDisabled) {
+                  message.warning(
+                    isRemoteDraftViewOnly
+                      ? '他人正在录入本班草稿，您仅可查看'
+                      : '当前账号在透析工作台为只读权限',
+                  );
                   return;
                 }
                 treatmentForm.validateFields().then(values => {
@@ -4415,7 +4515,7 @@ export default function DialysisEntryPage() {
               loading={loading}
               onClick={handleSubmit}
               size="middle"
-              disabled={isDialysisReadOnly}
+              disabled={isDialysisFormDisabled}
             >
               保存透析记录
             </Button>

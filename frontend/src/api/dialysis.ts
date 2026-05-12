@@ -367,6 +367,8 @@ export const dialysisApi = {
         payload: DialysisEntryDraftSnapshot;
         updated_at: string;
         updated_by: string | null;
+        draft_owner_id?: string | null;
+        draft_owner_name?: string | null;
       } | null>
     >('/dialysis/session-draft', {
       params: { patient_id: patientId, date: sessionDate, _cb: Date.now() },
@@ -379,7 +381,13 @@ export const dialysisApi = {
     payload: DialysisEntryDraftSnapshot;
   }) =>
     request.put<
-      ApiResponse<{ patient_id: string; session_date: string; updated_at: string; updated_by: string | null }>
+      ApiResponse<{
+        patient_id: string;
+        session_date: string;
+        updated_at: string;
+        updated_by: string | null;
+        draft_owner_id?: string | null;
+      }>
     >('/dialysis/session-draft', body),
 };
 
