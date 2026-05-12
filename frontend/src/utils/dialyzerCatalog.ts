@@ -61,16 +61,26 @@ function formatDialyzerStockLabel(row: ConsumableStockRow): string {
   return row.item_name;
 }
 
-/** 去掉型号末尾「（高通量）/（低通量）」等，便于与 dialyzer_flux 列重新组合 */
-const DIALYZER_FLUX_SUFFIX_RE = /[（(]\s*(?:高通量|低通量)\s*[）)]\s*$/u;
+/** 去掉型号末尾「（高通量）/（低通量）」等（含半角括号、括号前空格），便于与 dialyzer_flux 列重新组合 */
+const DIALYZER_FLUX_SUFFIX_RE = /\s*[(（]\s*(?:高通量|低通量)\s*[)）]\s*$/iu;
 
 function stripDialyzerFluxSuffixFromModelText(s: string): string {
   return s.replace(DIALYZER_FLUX_SUFFIX_RE, '').trim();
 }
 
+export function pickDialyzerFluxFromRx(rx: unknown): string | null | undefined {
+  if (rx == null || typeof rx !== 'object') return null;
+  const o = rx as Record<string, unknown>;
+  const v = o.dialyzer_flux ?? o.dialyzerFlux;
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+}
+
 /**
  * 透析工作台 / 报表等：处方库表 dialyzer_model 可能与 dialyzer_flux 不同步（历史内置预设、旧文案）。
- * 展示以 dialyzer_flux 为准；未维护通量列时回退为型号字段原文（去「透析器」前缀）。
+ * 展示以 dialyzer_flux 为准（含 high/low）。
+ * 若库未存通量：不再沿用型号字段里自带的「高/低通量」字样（易与耗材目录不一致），只展示去通量后的型号。
  */
 export function dialyzerShortFromPrescriptionFields(
   dialyzerModel: string | null | undefined,
@@ -81,10 +91,12 @@ export function dialyzerShortFromPrescriptionFields(
   const withoutPrefix = raw.replace(/^透析器\s*/u, '').trim();
   const base = stripDialyzerFluxSuffixFromModelText(withoutPrefix);
   if (!base) return '—';
-  const flux = String(dialyzerFlux ?? '').trim().toLowerCase();
+  const flux = String(dialyzerFlux ?? '')
+    .trim()
+    .toLowerCase();
   if (flux === 'high') return `${base}（高通量）`;
   if (flux === 'low') return `${base}（低通量）`;
-  return withoutPrefix || '—';
+  return base;
 }
 
 function dialysisMembraneRows(stocks: ConsumableStockRow[]): ConsumableStockRow[] {

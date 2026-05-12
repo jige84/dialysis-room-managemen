@@ -42,7 +42,7 @@ import {
   loadPrescriptionBasicParamsFromStorage,
   splitPrescriptionNotesFromDb,
 } from '../../utils/prescriptionFormFromDemo';
-import { dialyzerShortFromPrescriptionFields } from '../../utils/dialyzerCatalog';
+import { dialyzerShortFromPrescriptionFields, pickDialyzerFluxFromRx } from '../../utils/dialyzerCatalog';
 import {
   readPostDialysisSync,
   writePostDialysisSync,
@@ -2179,7 +2179,7 @@ export default function DialysisEntryPage() {
       bloodFlow: normNum(rx.blood_flow_rate) ?? 0,
       dialysateFlow: normNum(rx.dialysate_flow_rate) ?? 0,
       duration: dur,
-      dialyzerShort: dialyzerShortFromPrescriptionFields(rx.dialyzer_model, rx.dialyzer_flux),
+      dialyzerShort: dialyzerShortFromPrescriptionFields(rx.dialyzer_model, pickDialyzerFluxFromRx(rx)),
       anticoagulantLabel: anticoagulantLabelFromCode(String(rx.anticoagulant ?? '')),
       heparinFirst: normNum(rx.heparin_prime_dose) ?? null,
       heparinMaint: normNum(rx.heparin_maintain) ?? null,
