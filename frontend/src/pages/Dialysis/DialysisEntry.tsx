@@ -79,7 +79,6 @@ import { usersApi } from '../../api/users';
 // ── 演示数据（与透析处方工作台共用） ─────────────────────────
 const PATIENTS_LIST = DIALYSIS_DEMO_PATIENTS;
 
-const SIGNATURE_REAL_NAME_DATALIST_ID = 'hd-signature-real-names';
 
 const COMPLICATIONS = [
   { value: 'hypotension',  label: '低血压',       emergency: false },
@@ -619,7 +618,7 @@ function mergeDraftOrdersWithSessions(
 
 type VitalSignRow = { id: string; time: string; values: Record<string, string> };
 
-/** 生命体征行：除签名外任一有内容即视为「已填数据」，此时再自动带填写人签名 */
+/** 生命体征行：除签名外任一有内容即视为「已填数据」，此时护士签名固定为当前登录用户姓名 */
 const VITAL_SIGN_DATA_KEYS = ['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark'] as const;
 
 function vitalSignRowHasData(values: Record<string, string>): boolean {
@@ -2299,17 +2298,19 @@ export default function DialysisEntryPage() {
       if (isDialysisReadOnly) {
         return;
       }
-      let nextVal = val;
+      /** 生命体征护士签名：仅系统按当前登录用户写入，不允许手改 */
       if (field === 'signature') {
-        nextVal = expandSignatureInputWithCandidates(val, signatureRealNames);
+        return;
       }
       setVitalRows((prev) =>
         prev.map((row) => {
           if (row.id !== rowId) return row;
-          const nextValues = { ...row.values, [field]: nextVal };
-          if (field !== 'signature' && signerLabel) {
-            if (vitalSignRowHasData(nextValues) && !String(nextValues.signature ?? '').trim()) {
+          const nextValues = { ...row.values, [field]: val };
+          if (signerLabel) {
+            if (vitalSignRowHasData(nextValues)) {
               nextValues.signature = signerLabel;
+            } else {
+              nextValues.signature = '';
             }
           }
           return { ...row, values: nextValues };
@@ -2317,7 +2318,7 @@ export default function DialysisEntryPage() {
       );
       schedulePersistDialysisDraft();
     },
-    [isDialysisReadOnly, signerLabel, signatureRealNames, schedulePersistDialysisDraft],
+    [isDialysisReadOnly, signerLabel, schedulePersistDialysisDraft],
   );
 
   const handleAddVitalRow = () => {
@@ -2339,6 +2340,30 @@ export default function DialysisEntryPage() {
       }
     });
   }, [signerLabel, selectedPatient, form]);
+
+  /** 生命体征「护士签名」列：可写模式下始终与当前登录用户姓名一致 */
+  useEffect(() => {
+    if (!signerLabel || isDialysisReadOnly) return;
+    let persist = false;
+    setVitalRows((prev) => {
+      let changed = false;
+      const next = prev.map((row) => {
+        if (!vitalSignRowHasData(row.values)) {
+          if (String(row.values.signature ?? '').trim() !== '') {
+            changed = true;
+            return { ...row, values: { ...row.values, signature: '' } };
+          }
+          return row;
+        }
+        if (row.values.signature === signerLabel) return row;
+        changed = true;
+        return { ...row, values: { ...row.values, signature: signerLabel } };
+      });
+      if (changed) persist = true;
+      return changed ? next : prev;
+    });
+    if (persist) schedulePersistDialysisDraft();
+  }, [signerLabel, isDialysisReadOnly, selectedPatient, schedulePersistDialysisDraft]);
 
   const handleRemoveVitalRow = (rowId: string) => {
     if (isDialysisReadOnly) {
@@ -2391,7 +2416,7 @@ export default function DialysisEntryPage() {
       return !row.values.signature?.trim();
     });
     if (hasUnsignedVitalRow) {
-      message.warning('已填写数据的每一行生命体征须填写护士签名（录入数据后将自动带出本人姓名，可改为他人）');
+      message.warning('已填写数据的生命体征行须有护士签名；请确认已登录且用户资料中有姓名。');
       return;
     }
 
@@ -2649,12 +2674,6 @@ export default function DialysisEntryPage() {
           schedulePersistDialysisDraft();
         }}
       >
-        <datalist id={SIGNATURE_REAL_NAME_DATALIST_ID}>
-          {signatureRealNames.map((n) => (
-            <option key={n} value={n} />
-          ))}
-        </datalist>
-
         {/* ══════════════════ ① 患者信息 + 处方 + 体重 ══════════════════ */}
         <Section>
           <SectionTitle step={1} color="#1D4ED8" title="患者信息 · 处方参数 · 体重超滤" />
@@ -3143,7 +3162,6 @@ export default function DialysisEntryPage() {
                 style={{ marginBottom: 0 }}
               >
                 <Input
-                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
                   onChange={(e) => {
                     const v = e.target.value;
                     const next = expandSignatureInputWithCandidates(v, signatureRealNames);
@@ -3158,7 +3176,6 @@ export default function DialysisEntryPage() {
                 style={{ marginBottom: 0 }}
               >
                 <Input
-                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
                   onChange={(e) => {
                     const v = e.target.value;
                     const next = expandSignatureInputWithCandidates(v, signatureRealNames);
@@ -3168,7 +3185,6 @@ export default function DialysisEntryPage() {
               </Form.Item>
               <Form.Item label={<FieldLabel text="二次核对护士" />} name="nurse_double_check_sign" style={{ marginBottom: 0 }}>
                 <Input
-                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
                   onChange={(e) => {
                     const v = e.target.value;
                     const next = expandSignatureInputWithCandidates(v, signatureRealNames);
@@ -3189,7 +3205,7 @@ export default function DialysisEntryPage() {
             extra={
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, color: '#64748B' }}>
-                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间由系统自动生成
+                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间由系统自动生成 · 护士签名为当前登录账号自动填入
                 </span>
                 <Button
                   size="small"
@@ -3251,8 +3267,7 @@ export default function DialysisEntryPage() {
                             type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
-                            list={field === 'signature' ? SIGNATURE_REAL_NAME_DATALIST_ID : undefined}
-                            readOnly={isDialysisReadOnly}
+                            readOnly={field === 'signature' || isDialysisReadOnly}
                             disabled={isDialysisReadOnly}
                             style={{
                               width: '100%', padding: '4px 6px',
@@ -4024,7 +4039,6 @@ export default function DialysisEntryPage() {
                   style={{ marginBottom: 10 }}
                 >
                   <Input
-                    list={SIGNATURE_REAL_NAME_DATALIST_ID}
                     prefix={<span style={{ color: '#7C3AED' }}>✍</span>}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -4100,7 +4114,6 @@ export default function DialysisEntryPage() {
                     >
                       {field.key === 'nurse' ? (
                         <Input
-                          list={SIGNATURE_REAL_NAME_DATALIST_ID}
                           onChange={(e) => {
                             const v = e.target.value;
                             const next = expandSignatureInputWithCandidates(v, signatureRealNames);

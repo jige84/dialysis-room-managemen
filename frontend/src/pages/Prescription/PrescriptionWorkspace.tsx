@@ -66,11 +66,6 @@ import { expandSignatureInputWithCandidates } from '../../utils/signatureRealNam
 /** 今日排班名单侧栏宽度（与透析工作台同级） */
 const PRESCRIPTION_TODAY_SIDER_WIDTH = 192;
 
-/** 与透析录入页一致：HTML5 datalist，候选为用户管理中的真实姓名 */
-const SIGNATURE_REAL_NAME_DATALIST_ID = 'hd-signature-real-names';
-
-
-
 const FREQUENCY_PRESET_OPTIONS = [
   { value: 'weekly_2', label: '每周2次' },
   { value: 'weekly_3', label: '每周3次' },
@@ -748,7 +743,7 @@ export default function PrescriptionWorkspacePage() {
   /** 选中患者时 GET /patients/:id 拉取的档案快照（机位等以服务端为准，避免列表缓存滞后） */
   const [patientDetailFromApi, setPatientDetailFromApi] = useState<Patient | null>(null);
   const [dialyzerStocks, setDialyzerStocks] = useState<ConsumableStockRow[]>([]);
-  /** 用户管理中启用用户的真实姓名，供医生签名首字母展开与 datalist */
+  /** 用户管理中启用用户的真实姓名，供医生签名首字母展开 */
   const [signatureRealNames, setSignatureRealNames] = useState<string[]>([]);
   /** 已成功拉取 /devices/consumables：透析器下拉严格跟仓库，不再混入内置 FX 等预设 */
   const [consumablesCatalogSynced, setConsumablesCatalogSynced] = useState(false);
@@ -2289,11 +2284,6 @@ export default function PrescriptionWorkspacePage() {
           }}
           initialValues={prescriptionFormInitialValues}
         >
-          <datalist id={SIGNATURE_REAL_NAME_DATALIST_ID}>
-            {signatureRealNames.map((n) => (
-              <option key={n} value={n} />
-            ))}
-          </datalist>
           {patientInfo && (
             <div className="hd-record-section">
               <div className="hd-record-section__header">
@@ -3115,7 +3105,6 @@ export default function PrescriptionWorkspacePage() {
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <Form.Item label="医生签名" name="doctorSignature" style={{ marginBottom: 8 }}>
                 <Input
-                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
                   style={{ width: 'min(220px, 100%)' }}
                   onChange={(e) => {
                     const v = e.target.value;
