@@ -4,6 +4,7 @@
  * 主要功能：列表/详情/创建/备注；准备数据（处方+医嘱）；每日/月度统计；Kt/V趋势。
  */
 import request, { type ApiResponse, type PagedData } from './request';
+import type { DialysisEntryDraftSnapshot } from '../utils/dialysisEntryDraft';
 
 // ─── 基础枚举 ──────────────────────────────────────────────────────────────
 
@@ -358,6 +359,28 @@ export const dialysisApi = {
   /** 患者 Kt/V 趋势（最近30次） */
   ktvTrend: (patientId: string) =>
     request.get<ApiResponse<KtvTrendPoint[]>>(`/dialysis/stats/ktv-trend/${patientId}`),
+
+  /** 多用户同步：按患者+透析日拉取服务端会话草稿 */
+  getSessionDraft: (patientId: string, sessionDate: string) =>
+    request.get<
+      ApiResponse<{
+        payload: DialysisEntryDraftSnapshot;
+        updated_at: string;
+        updated_by: string | null;
+      } | null>
+    >('/dialysis/session-draft', {
+      params: { patient_id: patientId, date: sessionDate, _cb: Date.now() },
+    }),
+
+  /** 多用户同步：上传会话草稿（护士/护士长/管理员） */
+  putSessionDraft: (body: {
+    patient_id: string;
+    session_date: string;
+    payload: DialysisEntryDraftSnapshot;
+  }) =>
+    request.put<
+      ApiResponse<{ patient_id: string; session_date: string; updated_at: string; updated_by: string | null }>
+    >('/dialysis/session-draft', body),
 };
 
 export default dialysisApi;

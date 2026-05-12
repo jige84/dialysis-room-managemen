@@ -64,6 +64,11 @@ export function loadDialysisEntryDraft(key: string): DialysisEntryDraftSnapshot 
   }
 }
 
+/** 校验服务端返回的 payload 是否为当前版本草稿快照 */
+export function parseDialysisEntryDraftSnapshot(raw: unknown): DialysisEntryDraftSnapshot | null {
+  return isSnapshot(raw) ? raw : null;
+}
+
 export function saveDialysisEntryDraft(key: string, snapshot: DialysisEntryDraftSnapshot): void {
   if (typeof sessionStorage === 'undefined') return;
   try {

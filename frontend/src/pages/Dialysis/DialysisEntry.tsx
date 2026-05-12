@@ -32,7 +32,7 @@ import { patientsApi, type Patient } from '../../api/patients';
 import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
 import {
   shiftCodeToChinese,
-  computePrescriptionUltrafiltrationMl,
+  resolvePrescriptionUltrafiltrationDisplayedMl,
   dialyzerShortFromFormValue,
   anticoagulantLabelFromCode,
   frequencyPresetLabel,
@@ -68,6 +68,7 @@ import {
   type DialysisEntryDraftSnapshot,
   dialysisEntryDraftStorageKey,
   loadDialysisEntryDraft,
+  parseDialysisEntryDraftSnapshot,
   removeDialysisEntryDraft,
   saveDialysisEntryDraft,
   serializeFormValuesForDraft,
@@ -721,7 +722,7 @@ function buildRxPrintBundle(
   const preM = rx.preMachineWeight as number;
   const dur = rx.duration as number;
   if (!Number.isFinite(dw) || !Number.isFinite(preM) || !Number.isFinite(dur)) return null;
-  const ufMl = computePrescriptionUltrafiltrationMl(preM, dw, mode);
+  const ufMl = resolvePrescriptionUltrafiltrationDisplayedMl(preM, dw, mode, rx.ultrafiltrationMl);
   const ufRate = dur > 0 ? (ufMl / dur).toFixed(0) : null;
   const ufPerHrPerDryKg = dur > 0 && dw > 0 ? ((ufMl / dur) / dw).toFixed(2) : null;
 
@@ -1332,6 +1333,8 @@ export default function DialysisEntryPage() {
   const draftDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressDraftSaveUntilRef = useRef(0);
   const [draftSavedAtIso, setDraftSavedAtIso] = useState<string | null>(null);
+  const lastLocalDraftTouchRef = useRef(0);
+  const lastMergedRemoteDraftMsRef = useRef(0);
   const hydratedRecordRef = useRef<string>('');
 
   const collectDraftSnapshotWithSessionDate = useCallback(
@@ -1458,14 +1461,39 @@ export default function DialysisEntryPage() {
     if (Date.now() < suppressDraftSaveUntilRef.current) return;
     if (isRealPatientId(selectedPatient) && realPrepareData === null) return;
 
+    lastLocalDraftTouchRef.current = Date.now();
+
     if (draftDebounceTimerRef.current) clearTimeout(draftDebounceTimerRef.current);
     draftDebounceTimerRef.current = setTimeout(() => {
       draftDebounceTimerRef.current = null;
       const key = dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD'));
-      saveDialysisEntryDraft(key, collectDialysisEntryDraftSnapshot());
-      setDraftSavedAtIso(new Date().toISOString());
+      const snap = collectDialysisEntryDraftSnapshot();
+      saveDialysisEntryDraft(key, snap);
+      setDraftSavedAtIso(snap.savedAt);
+      if (isRealPatientId(selectedPatient) && canWriteDialysis) {
+        void dialysisApi
+          .putSessionDraft({
+            patient_id: selectedPatient,
+            session_date: sessionDate.format('YYYY-MM-DD'),
+            payload: snap,
+          })
+          .then((res) => {
+            const u = res.data?.data?.updated_at;
+            if (u) lastMergedRemoteDraftMsRef.current = new Date(u).getTime();
+          })
+          .catch(() => {
+            /* 表未迁移或离线：仅本地草稿 */
+          });
+      }
     }, 600);
-  }, [recordIdFromUrl, selectedPatient, sessionDate, realPrepareData, collectDialysisEntryDraftSnapshot]);
+  }, [
+    recordIdFromUrl,
+    selectedPatient,
+    sessionDate,
+    realPrepareData,
+    collectDialysisEntryDraftSnapshot,
+    canWriteDialysis,
+  ]);
 
   useEffect(
     () => () => {
@@ -1933,7 +1961,7 @@ export default function DialysisEntryPage() {
     const preM = rxDefaults.preMachineWeight as number;
     const dur = rxDefaults.duration as number;
     if (!Number.isFinite(dw) || !Number.isFinite(preM) || !Number.isFinite(dur)) return null;
-    const ufMl = computePrescriptionUltrafiltrationMl(preM, dw, mode);
+    const ufMl = resolvePrescriptionUltrafiltrationDisplayedMl(preM, dw, mode, rxDefaults.ultrafiltrationMl);
     const ufRate = dur > 0 ? (ufMl / dur).toFixed(0) : null;
     const ufPerHrPerDryKg = dur > 0 && dw > 0 ? ((ufMl / dur) / dw).toFixed(2) : null;
     const ufAlert = ufMl / (dw * 1000) > 0.05;
@@ -2061,7 +2089,7 @@ export default function DialysisEntryPage() {
     );
   }, [selectedPatient, sessionDate, realPrepareData]);
 
-  /** prepare 就绪后恢复 sessionStorage 草稿（与处方刷新后再次叠加，以本地未入库编辑为准） */
+  /** prepare 就绪后恢复草稿：服务端较新则优先（多用户同屏），否则用本机 sessionStorage */
   useEffect(() => {
     if (recordIdFromUrl) {
       setDraftSavedAtIso(null);
@@ -2071,13 +2099,56 @@ export default function DialysisEntryPage() {
     if (isRealPatientId(selectedPatient) && realPrepareData === null) return;
 
     const key = dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD'));
-    const draft = loadDialysisEntryDraft(key);
-    if (!draft) {
-      setDraftSavedAtIso(null);
+    let cancelled = false;
+
+    if (!isRealPatientId(selectedPatient)) {
+      const draft = loadDialysisEntryDraft(key);
+      if (!draft) {
+        setDraftSavedAtIso(null);
+        return;
+      }
+      applyDialysisEntryDraftSnapshot(draft);
+      setDraftSavedAtIso(draft.savedAt);
       return;
     }
-    applyDialysisEntryDraftSnapshot(draft);
-    setDraftSavedAtIso(draft.savedAt);
+
+    (async () => {
+      const local = loadDialysisEntryDraft(key);
+      let remoteSnap: DialysisEntryDraftSnapshot | null = null;
+      let remoteMs = 0;
+      try {
+        const res = await dialysisApi.getSessionDraft(selectedPatient, sessionDate.format('YYYY-MM-DD'));
+        if (cancelled) return;
+        const row = res.data?.data;
+        if (row?.payload) {
+          remoteSnap = parseDialysisEntryDraftSnapshot(row.payload);
+          remoteMs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+        }
+      } catch {
+        /* 表未迁移或离线 */
+      }
+      if (cancelled) return;
+
+      const localMs = local?.savedAt ? new Date(local.savedAt).getTime() : 0;
+
+      if (remoteSnap && remoteMs >= localMs - 500) {
+        applyDialysisEntryDraftSnapshot(remoteSnap);
+        saveDialysisEntryDraft(key, remoteSnap);
+        setDraftSavedAtIso(remoteSnap.savedAt);
+        lastMergedRemoteDraftMsRef.current = remoteMs;
+        return;
+      }
+      if (local) {
+        applyDialysisEntryDraftSnapshot(local);
+        setDraftSavedAtIso(local.savedAt);
+        return;
+      }
+      setDraftSavedAtIso(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     recordIdFromUrl,
     selectedPatient,
@@ -2086,6 +2157,35 @@ export default function DialysisEntryPage() {
     prepareRefreshNonce,
     applyDialysisEntryDraftSnapshot,
   ]);
+
+  /** 多用户：轮询服务端草稿（本地约 4s 无编辑时才合并，减少打断正在录入） */
+  useEffect(() => {
+    if (recordIdFromUrl) return;
+    if (!selectedPatient || !isRealPatientId(selectedPatient)) return;
+    if (realPrepareData === null) return;
+
+    const key = dialysisEntryDraftStorageKey(selectedPatient, sessionDate.format('YYYY-MM-DD'));
+    const tick = () => {
+      if (Date.now() - lastLocalDraftTouchRef.current < 4000) return;
+      void dialysisApi
+        .getSessionDraft(selectedPatient, sessionDate.format('YYYY-MM-DD'))
+        .then((res) => {
+          const row = res.data?.data;
+          if (!row?.payload) return;
+          const snap = parseDialysisEntryDraftSnapshot(row.payload);
+          if (!snap) return;
+          const remoteMs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+          if (remoteMs <= lastMergedRemoteDraftMsRef.current) return;
+          applyDialysisEntryDraftSnapshot(snap);
+          saveDialysisEntryDraft(key, snap);
+          setDraftSavedAtIso(snap.savedAt);
+          lastMergedRemoteDraftMsRef.current = remoteMs;
+        })
+        .catch(() => {});
+    };
+    const id = window.setInterval(tick, 5000);
+    return () => window.clearInterval(id);
+  }, [recordIdFromUrl, selectedPatient, sessionDate, realPrepareData, applyDialysisEntryDraftSnapshot]);
 
   /** 干体重（处方）展示依赖 state；草稿恢复可能曾把 null 写回，此处与 prepare 处方再对齐一次 */
   useEffect(() => {
@@ -2141,7 +2241,7 @@ export default function DialysisEntryPage() {
       preWeightWatch != null && Number.isFinite(Number(preWeightWatch))
         ? Number(preWeightWatch)
         : preFromExtra ?? dw;
-    const ufMl = computePrescriptionUltrafiltrationMl(preM, dw, modeCode);
+    const ufMl = resolvePrescriptionUltrafiltrationDisplayedMl(preM, dw, modeCode, fe.ultrafiltrationMl);
     const ufRate = dur > 0 ? (ufMl / dur).toFixed(0) : null;
     const ufPerHrPerDryKg = dur > 0 && dw > 0 ? ((ufMl / dur) / dw).toFixed(2) : null;
     const ufAlert = ufMl / (dw * 1000) > 0.05;
@@ -2320,6 +2420,19 @@ export default function DialysisEntryPage() {
       schedulePersistDialysisDraft();
     },
     [isDialysisReadOnly, signerLabel, schedulePersistDialysisDraft],
+  );
+
+  const handleVitalTimeChange = useCallback(
+    (rowId: string, val: string) => {
+      if (isDialysisReadOnly) return;
+      const t =
+        typeof val === 'string' && /^\d{2}:\d{2}$/.test(val.trim())
+          ? val.trim()
+          : dayjs().format('HH:mm');
+      setVitalRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, time: t } : row)));
+      schedulePersistDialysisDraft();
+    },
+    [isDialysisReadOnly, schedulePersistDialysisDraft],
   );
 
   const handleAddVitalRow = () => {
@@ -3200,7 +3313,7 @@ export default function DialysisEntryPage() {
             extra={
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, color: '#64748B' }}>
-                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间由系统自动生成 · 护士签名为当前登录账号自动填入
+                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间可手动选择 · 护士签名为当前登录账号自动填入
                 </span>
                 <Button
                   size="small"
@@ -3221,7 +3334,7 @@ export default function DialysisEntryPage() {
                 <thead>
                   <tr>
                     {[
-                      { label: '时间', width: 60 },
+                      { label: '时间', width: 92 },
                       { label: '收缩压\n(mmHg)', width: 70 },
                       { label: '舒张压\n(mmHg)', width: 70 },
                       { label: '脉搏\n(次/分)', width: 70 },
@@ -3249,12 +3362,37 @@ export default function DialysisEntryPage() {
                   {vitalRows.map((row, idx) => (
                     <tr key={row.id} style={{ background: idx % 2 === 0 ? '#fff' : '#FAFBFC' }}>
                       <td style={{
-                        padding: '5px 8px', border: '1px solid #E2E8F0',
-                        fontWeight: 600, color: '#1D4ED8', textAlign: 'center',
-                        fontSize: 12, whiteSpace: 'nowrap',
-                        fontFamily: 'DM Mono, monospace',
+                        padding: '4px 6px', border: '1px solid #E2E8F0',
+                        textAlign: 'center', verticalAlign: 'middle',
                       }}>
-                        {row.time}
+                        {isDialysisReadOnly ? (
+                          <span style={{
+                            display: 'inline-block', fontWeight: 600, color: '#1D4ED8',
+                            fontSize: 12, whiteSpace: 'nowrap', fontFamily: 'DM Mono, monospace',
+                            padding: '4px 0',
+                          }}>
+                            {row.time}
+                          </span>
+                        ) : (
+                          <input
+                            type="time"
+                            step={60}
+                            value={
+                              typeof row.time === 'string' && /^\d{2}:\d{2}$/.test(row.time.trim())
+                                ? row.time.trim()
+                                : ''
+                            }
+                            onChange={(e) =>
+                              handleVitalTimeChange(row.id, e.target.value || dayjs().format('HH:mm'))
+                            }
+                            style={{
+                              width: '100%', maxWidth: 96, padding: '3px 4px',
+                              border: '1px solid #E2E8F0', borderRadius: 4, fontSize: 12,
+                              fontFamily: 'DM Mono, monospace', color: '#1D4ED8', fontWeight: 600,
+                              background: '#fff',
+                            }}
+                          />
+                        )}
                       </td>
                       {['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark', 'signature'].map(field => (
                         <td key={field} style={{ padding: 3, border: '1px solid #E2E8F0', textAlign: 'center' }}>

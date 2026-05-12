@@ -19,6 +19,8 @@ const {
   validateYearMonthQuery,
   validateCreateDialysisPayload,
   validateDialysisNotePayload,
+  validateSessionDraftQuery,
+  validateSessionDraftPutBody,
 } = require('../validators/dialysisValidators');
 const { success, created, paginated, error, notFound } = require('../utils/response');
 const { formatDate, getMonthRange } = require('../utils/dateUtils');
@@ -48,6 +50,75 @@ router.get('/prepare', auth, async (req, res, next) => {
     return success(res, data, '透析准备数据加载成功');
   } catch (err) { next(err); }
 });
+
+const MAX_SESSION_DRAFT_BYTES = 1_500_000;
+
+// GET /api/dialysis/session-draft?patient_id=&date= — 工作台多用户轮询拉取同患者同日草稿
+router.get('/session-draft', auth, async (req, res, next) => {
+  try {
+    const valid = validateSessionDraftQuery(req.query);
+    if (!valid.ok) return error(res, valid.message);
+    const { patient_id, session_date } = valid.value;
+    const { rows } = await pool.query(
+      `SELECT payload, updated_at, updated_by
+       FROM dialysis_session_drafts
+       WHERE patient_id = $1 AND session_date = $2::date
+       LIMIT 1`,
+      [patient_id, session_date],
+    );
+    if (rows.length === 0) return success(res, null);
+    return success(res, rows[0]);
+  } catch (err) {
+    if (err.code === '42P01') {
+      return error(
+        res,
+        '会话草稿表未创建，请执行 migrations/065_dialysis_session_drafts.sql',
+        503,
+      );
+    }
+    next(err);
+  }
+});
+
+// PUT /api/dialysis/session-draft — 护士/护士长/管理员上传临时草稿（与 sessionStorage 并行）
+// 不写 audit_logs：payload 体积大且 debounce 高频，避免审计表膨胀与响应变慢
+router.put(
+  '/session-draft',
+  auth,
+  rbac(['admin', 'nurse', 'head_nurse']),
+  async (req, res, next) => {
+    try {
+      const valid = validateSessionDraftPutBody(req.body);
+      if (!valid.ok) return error(res, valid.message);
+      const { patient_id, session_date, payload } = valid.value;
+      const jsonStr = JSON.stringify(payload);
+      if (Buffer.byteLength(jsonStr, 'utf8') > MAX_SESSION_DRAFT_BYTES) {
+        return error(res, '草稿体积过大', 413);
+      }
+      const { rows } = await pool.query(
+        `INSERT INTO dialysis_session_drafts (patient_id, session_date, payload, updated_at, updated_by)
+         VALUES ($1, $2::date, $3::jsonb, NOW(), $4)
+         ON CONFLICT (patient_id, session_date)
+         DO UPDATE SET
+           payload = EXCLUDED.payload,
+           updated_at = NOW(),
+           updated_by = EXCLUDED.updated_by
+         RETURNING patient_id, session_date, updated_at, updated_by`,
+        [patient_id, session_date, payload, req.user.id],
+      );
+      return success(res, rows[0], '会话草稿已保存');
+    } catch (err) {
+      if (err.code === '42P01') {
+        return error(
+          res,
+          '会话草稿表未创建，请执行 migrations/065_dialysis_session_drafts.sql',
+          503,
+        );
+      }
+      next(err);
+    }
+  },
+);
 
 // GET /api/dialysis/stats/daily?date=xxx
 router.get('/stats/daily', auth, async (req, res, next) => {

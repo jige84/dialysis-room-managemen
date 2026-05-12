@@ -1596,11 +1596,6 @@ export default function PrescriptionWorkspacePage() {
 
   useEffect(() => {
     if (skipPersistRef.current) return;
-    ufUserEditedRef.current = false;
-  }, [dryWeightWatched, preMachineWeightWatched, modeWatched]);
-
-  useEffect(() => {
-    if (skipPersistRef.current) return;
     if (ufUserEditedRef.current) return;
     const u = computeUltrafiltrationMl(preMachineWeightWatched, dryWeightWatched, modeWatched);
     if (u == null) return;
@@ -2296,6 +2291,15 @@ export default function PrescriptionWorkspacePage() {
           onValuesChange={(changed) => {
             if ('ultrafiltrationMl' in changed && !ufProgrammaticRef.current) {
               ufUserEditedRef.current = true;
+            }
+            if (
+              !skipPersistRef.current &&
+              ('dryWeight' in changed ||
+                'preMachineWeight' in changed ||
+                'mode' in changed ||
+                'modeOther' in changed)
+            ) {
+              ufUserEditedRef.current = false;
             }
             if ('heparinFirst' in changed && !heparinProgrammaticRef.current) {
               heparinUserEditedRef.current = true;

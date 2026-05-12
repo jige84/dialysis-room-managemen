@@ -68,6 +68,23 @@ export function computePrescriptionUltrafiltrationMl(preKg: number, dryKg: numbe
   return Math.round(diffMl + extra);
 }
 
+/**
+ * 展示用超滤量：若 form_extra 已存合法 ultrafiltrationMl（医生手改），优先于公式。
+ * 与透析工作台、打印摘要一致。
+ */
+export function resolvePrescriptionUltrafiltrationDisplayedMl(
+  preKg: number,
+  dryKg: number,
+  mode: string,
+  storedMl: unknown,
+): number {
+  const n = typeof storedMl === 'number' ? storedMl : Number(storedMl);
+  if (Number.isFinite(n) && n >= 0 && n <= 100_000) {
+    return Math.round(n);
+  }
+  return computePrescriptionUltrafiltrationMl(preKg, dryKg, mode);
+}
+
 /** 与处方工作台摘要「透析器」展示一致：去掉「透析器」前缀 */
 export function dialyzerShortFromFormValue(dialyzer: string | undefined): string {
   if (!dialyzer) return '—';
