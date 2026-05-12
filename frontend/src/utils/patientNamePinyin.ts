@@ -43,14 +43,25 @@ export function buildPatientNameInitialsChain(name: string): string {
   return parts.join('');
 }
 
-/**
- * 表单「签名」默认值：含中文的展示名取逐字拼音首字母小写（如「杨晨」→ yc）；纯英文/数字登录名等则保持原样。
- * 用户仍可手改：允许继续输入全名汉字或首字母缩写。
- */
-export function defaultSignatureFromUserDisplayName(displayName: string): string {
-  const s = String(displayName ?? '').trim();
-  if (!s) return '';
-  if (!/[\u4e00-\u9fff]/.test(s)) return s;
-  const initials = buildPatientNameInitialsChain(s);
-  return initials || s;
+/** 与 buildPatientNameInitialsChain 逐字一致：每个参与首字母链的字符及其对应小写首字母 */
+export function buildRealNameInitialSegments(realName: string): Array<{ char: string; initial: string }> {
+  const s = String(realName ?? '').trim();
+  if (!s) return [];
+  const out: Array<{ char: string; initial: string }> = [];
+  for (const ch of Array.from(s)) {
+    if (/[A-Za-z]/.test(ch)) {
+      out.push({ char: ch, initial: ch.toLowerCase() });
+      continue;
+    }
+    if (/[\u4e00-\u9fff]/.test(ch)) {
+      try {
+        const py = pinyin(ch, { pattern: 'first', toneType: 'none', type: 'string' });
+        const c = py.trim().charAt(0).toLowerCase();
+        if (c >= 'a' && c <= 'z') out.push({ char: ch, initial: c });
+      } catch {
+        /* 单字失败则跳过 */
+      }
+    }
+  }
+  return out;
 }

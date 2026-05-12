@@ -60,10 +60,14 @@ import { ANTICOAGULANT_OPTIONS, mapDbAnticoagulantToForm, mapFormAnticoagulantTo
 import { mergeShiftFromPatientProfileIntoFormValues } from '../../constants/dialysisSchedule';
 import { HD_PRESCRIPTION_SAVED_EVENT } from '../../constants/prescriptionSyncEvents';
 import { useAuthStore } from '../../stores/authStore';
-import { defaultSignatureFromUserDisplayName } from '../../utils/patientNamePinyin';
+import { usersApi } from '../../api/users';
+import { expandSignatureInputWithCandidates } from '../../utils/signatureRealNameExpand';
 
 /** 今日排班名单侧栏宽度（与透析工作台同级） */
 const PRESCRIPTION_TODAY_SIDER_WIDTH = 192;
+
+/** 与透析录入页一致：HTML5 datalist，候选为用户管理中的真实姓名 */
+const SIGNATURE_REAL_NAME_DATALIST_ID = 'hd-signature-real-names';
 
 
 
@@ -686,15 +690,13 @@ function buildCitrateDetailSummary(values: Record<string, unknown>): string {
   return lines.join('；');
 }
 
-/** 医生签名为空时填入当前用户默认签名（中文姓名→拼音首字母，如「杨晨」→ yc；可手改为全名） */
+/** 医生签名为空时填入当前用户真实姓名（与用户管理一致；可手改或通过首字母展开为全名） */
 function ensureDoctorSignatureFromCurrentUser(form: {
   getFieldValue: (name: string) => unknown;
   setFieldValue: (name: string, value: string) => void;
 }) {
   const u = useAuthStore.getState().user;
-  const raw = u ? (u.real_name?.trim() || u.username?.trim() || '') : '';
-  if (!raw) return;
-  const name = defaultSignatureFromUserDisplayName(raw);
+  const name = u ? (u.real_name?.trim() || u.username?.trim() || '') : '';
   if (!name) return;
   const cur = form.getFieldValue('doctorSignature');
   if (cur == null || String(cur).trim() === '') {
@@ -746,6 +748,8 @@ export default function PrescriptionWorkspacePage() {
   /** 选中患者时 GET /patients/:id 拉取的档案快照（机位等以服务端为准，避免列表缓存滞后） */
   const [patientDetailFromApi, setPatientDetailFromApi] = useState<Patient | null>(null);
   const [dialyzerStocks, setDialyzerStocks] = useState<ConsumableStockRow[]>([]);
+  /** 用户管理中启用用户的真实姓名，供医生签名首字母展开与 datalist */
+  const [signatureRealNames, setSignatureRealNames] = useState<string[]>([]);
   /** 已成功拉取 /devices/consumables：透析器下拉严格跟仓库，不再混入内置 FX 等预设 */
   const [consumablesCatalogSynced, setConsumablesCatalogSynced] = useState(false);
   const lastConsumablesPullMsRef = useRef(0);
@@ -831,6 +835,25 @@ export default function PrescriptionWorkspacePage() {
       cancelled = true;
     };
   }, [selectedPatient]);
+
+  useEffect(() => {
+    let cancelled = false;
+    usersApi
+      .signatureNames()
+      .then((res) => {
+        const list = res.data?.data;
+        if (cancelled || !Array.isArray(list)) return;
+        setSignatureRealNames(
+          list.filter((s): s is string => typeof s === 'string' && s.trim().length > 0),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setSignatureRealNames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     prevHemoModeRef.current = undefined;
@@ -2266,6 +2289,11 @@ export default function PrescriptionWorkspacePage() {
           }}
           initialValues={prescriptionFormInitialValues}
         >
+          <datalist id={SIGNATURE_REAL_NAME_DATALIST_ID}>
+            {signatureRealNames.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
           {patientInfo && (
             <div className="hd-record-section">
               <div className="hd-record-section__header">
@@ -3087,8 +3115,13 @@ export default function PrescriptionWorkspacePage() {
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <Form.Item label="医生签名" name="doctorSignature" style={{ marginBottom: 8 }}>
                 <Input
-                  placeholder="默认拼音首字母，可填全名（如 杨晨 或 yc）"
+                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
                   style={{ width: 'min(220px, 100%)' }}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
+                    form.setFieldValue('doctorSignature', next);
+                  }}
                 />
               </Form.Item>
               <div

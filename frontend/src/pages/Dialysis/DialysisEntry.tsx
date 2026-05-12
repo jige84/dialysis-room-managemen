@@ -73,13 +73,13 @@ import {
 } from '../../utils/dialysisEntryDraft';
 import { calcSpKtv, calcUrr } from '../../utils/ktv';
 import { isMenuKeyAllowed } from '../../utils/menuAccess';
-import { defaultSignatureFromUserDisplayName } from '../../utils/patientNamePinyin';
+import { expandSignatureInputWithCandidates } from '../../utils/signatureRealNameExpand';
+import { usersApi } from '../../api/users';
 
 // ── 演示数据（与透析处方工作台共用） ─────────────────────────
 const PATIENTS_LIST = DIALYSIS_DEMO_PATIENTS;
 
-/** 护士签名等输入框占位：可填汉字全名或拼音首字母 */
-const SIGNATURE_INPUT_PLACEHOLDER = '全名或拼音首字母（如 杨晨 或 yc）';
+const SIGNATURE_REAL_NAME_DATALIST_ID = 'hd-signature-real-names';
 
 const COMPLICATIONS = [
   { value: 'hypotension',  label: '低血压',       emergency: false },
@@ -156,7 +156,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理措施或观察记录…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   cramp: {
@@ -193,7 +193,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理情况…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   nausea: {
@@ -224,7 +224,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他观察记录…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   headache: {
@@ -259,7 +259,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理及观察…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   fever: {
@@ -286,7 +286,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他处理或体温变化记录…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   pruritus: {
@@ -305,7 +305,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '其他情况…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   coagulation: {
@@ -333,7 +333,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '凝血情况详细描述…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   air_embolism: {
@@ -363,7 +363,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'emergency', label: '紧急抢救' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '事件经过详细记录…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   blood_leak: {
@@ -390,7 +390,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
         { value: 'yes', label: '已通知' }, { value: 'no', label: '无需通知' },
       ]},
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '事件经过及处理结果…' },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
   hemolysis: {
@@ -421,7 +421,7 @@ const COMPLICATION_CONFIG: Record<string, ComplicationConfig> = {
       ]},
       { key: 'doctorArrivalTime', label: '医生到达时间', type: 'text', placeholder: '如：14:35' },
       { key: 'remark', label: '备注', type: 'textarea', placeholder: '事件经过详细记录…', required: true },
-      { key: 'nurse', label: '处理护士签名', type: 'text', required: true, placeholder: SIGNATURE_INPUT_PLACEHOLDER },
+      { key: 'nurse', label: '处理护士签名', type: 'text', required: true },
     ],
   },
 };
@@ -1238,13 +1238,23 @@ export default function DialysisEntryPage() {
 
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  /** 本人签名默认值：含中文姓名时取拼音首字母小写（如「杨晨」→ yc），否则用登录名等原样；仍可手改为全名汉字 */
+  /** 本人默认签名：真实姓名（与用户管理一致）；纯字母输入时按首字母链展开为汉字 */
   const signerLabel = useAuthStore((s) => {
     const u = s.user;
     if (!u) return '';
-    const raw = u.real_name?.trim() || u.username?.trim() || '';
-    return defaultSignatureFromUserDisplayName(raw);
+    return u.real_name?.trim() || u.username?.trim() || '';
   });
+  const [signatureRealNames, setSignatureRealNames] = useState<string[]>([]);
+  useEffect(() => {
+    void usersApi
+      .signatureNames()
+      .then((res) => {
+        setSignatureRealNames(res.data.data ?? []);
+      })
+      .catch(() => {
+        setSignatureRealNames([]);
+      });
+  }, []);
   /** 仅「记录护士签名」（文末）默认带出当前用户；③上机前穿刺/上机/核对须手填，不自动写入 */
   const nurseSignatureInitialValues = useMemo(
     () => (signerLabel ? { nurse_record_sign: signerLabel } : {}),
@@ -2289,10 +2299,14 @@ export default function DialysisEntryPage() {
       if (isDialysisReadOnly) {
         return;
       }
+      let nextVal = val;
+      if (field === 'signature') {
+        nextVal = expandSignatureInputWithCandidates(val, signatureRealNames);
+      }
       setVitalRows((prev) =>
         prev.map((row) => {
           if (row.id !== rowId) return row;
-          const nextValues = { ...row.values, [field]: val };
+          const nextValues = { ...row.values, [field]: nextVal };
           if (field !== 'signature' && signerLabel) {
             if (vitalSignRowHasData(nextValues) && !String(nextValues.signature ?? '').trim()) {
               nextValues.signature = signerLabel;
@@ -2303,7 +2317,7 @@ export default function DialysisEntryPage() {
       );
       schedulePersistDialysisDraft();
     },
-    [isDialysisReadOnly, signerLabel, schedulePersistDialysisDraft],
+    [isDialysisReadOnly, signerLabel, signatureRealNames, schedulePersistDialysisDraft],
   );
 
   const handleAddVitalRow = () => {
@@ -2315,7 +2329,7 @@ export default function DialysisEntryPage() {
     schedulePersistDialysisDraft();
   };
 
-  /** 仅补充「记录护士签名」默认带出（拼音首字母）；③上机前三项不自动填充 */
+  /** 仅补充「记录护士签名」默认带出当前用户真实姓名；③上机前三项不自动填充 */
   useEffect(() => {
     if (!signerLabel) return;
     queueMicrotask(() => {
@@ -2377,7 +2391,7 @@ export default function DialysisEntryPage() {
       return !row.values.signature?.trim();
     });
     if (hasUnsignedVitalRow) {
-      message.warning('已填写数据的每一行生命体征须填写护士签名（录入数据后将自动带出拼音首字母，可改为全名）');
+      message.warning('已填写数据的每一行生命体征须填写护士签名（录入数据后将自动带出本人姓名，可改为他人）');
       return;
     }
 
@@ -2635,6 +2649,11 @@ export default function DialysisEntryPage() {
           schedulePersistDialysisDraft();
         }}
       >
+        <datalist id={SIGNATURE_REAL_NAME_DATALIST_ID}>
+          {signatureRealNames.map((n) => (
+            <option key={n} value={n} />
+          ))}
+        </datalist>
 
         {/* ══════════════════ ① 患者信息 + 处方 + 体重 ══════════════════ */}
         <Section>
@@ -3123,7 +3142,14 @@ export default function DialysisEntryPage() {
                 rules={[{ required: true, message: '请填写或确认穿刺护士签名' }]}
                 style={{ marginBottom: 0 }}
               >
-                <Input placeholder={SIGNATURE_INPUT_PLACEHOLDER} />
+                <Input
+                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
+                    form.setFieldValue('nurse_puncture_sign', next);
+                  }}
+                />
               </Form.Item>
               <Form.Item
                 label={<FieldLabel text="上机护士" required />}
@@ -3131,10 +3157,24 @@ export default function DialysisEntryPage() {
                 rules={[{ required: true, message: '请填写或确认上机护士签名' }]}
                 style={{ marginBottom: 0 }}
               >
-                <Input placeholder={SIGNATURE_INPUT_PLACEHOLDER} />
+                <Input
+                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
+                    form.setFieldValue('nurse_on_machine_sign', next);
+                  }}
+                />
               </Form.Item>
               <Form.Item label={<FieldLabel text="二次核对护士" />} name="nurse_double_check_sign" style={{ marginBottom: 0 }}>
-                <Input placeholder={`选填，${SIGNATURE_INPUT_PLACEHOLDER}`} />
+                <Input
+                  list={SIGNATURE_REAL_NAME_DATALIST_ID}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const next = expandSignatureInputWithCandidates(v, signatureRealNames);
+                    form.setFieldValue('nurse_double_check_sign', next);
+                  }}
+                />
               </Form.Item>
             </Grid>
           </SectionBody>
@@ -3211,7 +3251,7 @@ export default function DialysisEntryPage() {
                             type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
-                            placeholder={field === 'signature' ? '录入后自动填首字母' : ''}
+                            list={field === 'signature' ? SIGNATURE_REAL_NAME_DATALIST_ID : undefined}
                             readOnly={isDialysisReadOnly}
                             disabled={isDialysisReadOnly}
                             style={{
@@ -3984,8 +4024,13 @@ export default function DialysisEntryPage() {
                   style={{ marginBottom: 10 }}
                 >
                   <Input
-                    placeholder="默认拼音首字母，可改为全名"
+                    list={SIGNATURE_REAL_NAME_DATALIST_ID}
                     prefix={<span style={{ color: '#7C3AED' }}>✍</span>}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const next = expandSignatureInputWithCandidates(v, signatureRealNames);
+                      form.setFieldValue('nurse_record_sign', next);
+                    }}
                   />
                 </Form.Item>
                 <Form.Item label={<FieldLabel text="记录日期" />} style={{ marginBottom: 0 }}>
@@ -4053,7 +4098,18 @@ export default function DialysisEntryPage() {
                       rules={field.required ? [{ required: true, message: `请填写${field.label}` }] : []}
                       style={{ marginBottom: 12 }}
                     >
-                      <Input placeholder={field.placeholder} />
+                      {field.key === 'nurse' ? (
+                        <Input
+                          list={SIGNATURE_REAL_NAME_DATALIST_ID}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            const next = expandSignatureInputWithCandidates(v, signatureRealNames);
+                            treatmentForm.setFieldValue(field.key, next);
+                          }}
+                        />
+                      ) : (
+                        <Input placeholder={field.placeholder} />
+                      )}
                     </Form.Item>
                   );
                   if (field.type === 'number') return (

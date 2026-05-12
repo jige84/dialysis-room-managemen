@@ -66,6 +66,9 @@ export const usersApi = {
   nursingStaff: () =>
     request.get<ApiResponse<NursingStaffRow[]>>('/users/nursing-staff'),
 
+  /** 启用用户真实姓名列表（签名栏首字母展开为汉字，与「用户管理」同源） */
+  signatureNames: () => request.get<ApiResponse<string[]>>('/users/signature-names'),
+
   create: (payload: CreateUserPayload) =>
     request.post<ApiResponse<UserRow>>('/users', payload),
 

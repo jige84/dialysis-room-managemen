@@ -141,6 +141,29 @@ router.get('/nursing-staff', auth, rbac(['admin', 'doctor']), async (req, res, n
   } catch (err) { next(err); }
 });
 
+// GET /api/users/signature-names — 启用用户真实姓名（供透析/处方等签名栏首字母展开，不含敏感字段）
+router.get(
+  '/signature-names',
+  auth,
+  rbac(['admin', 'doctor', 'nurse', 'head_nurse', 'technician', 'qc', 'quality']),
+  async (req, res, next) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT TRIM(real_name) AS real_name
+         FROM users
+         WHERE is_active = true
+           AND real_name IS NOT NULL
+           AND TRIM(real_name) <> ''
+         ORDER BY real_name ASC`,
+      );
+      const list = rows.map((r) => String(r.real_name).trim()).filter(Boolean);
+      return success(res, list);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // GET /api/users
 router.get('/', auth, rbac(['admin']), async (req, res, next) => {
   try {
