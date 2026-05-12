@@ -31,3 +31,7 @@ Thumbs.db
 /2026lishshuju/
 *.zip
 
+# 本机直连 ECS 同步凭据（勿提交）
+scripts/cloud-sync-to-ecs.local.ps1
+scripts/cloud-sync-to-ecs.local.env
+
