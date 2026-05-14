@@ -17,6 +17,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import PageShell from '../../components/PageShell/PageShell';
 import { DIALYSIS_DEMO_PATIENTS, type DialysisDemoPatient } from '../../constants/dialysisDemoPatients';
 import {
@@ -27,6 +28,7 @@ import {
   type DialysisRecordDetail,
   type PrepareDialysisData,
   type OrderForSession,
+  type VitalSign,
 } from '../../api/dialysis';
 import { patientsApi, type Patient } from '../../api/patients';
 import { scheduleApi, type TodaySchedulePatientRow } from '../../api/schedule';
@@ -618,10 +620,20 @@ function mergeDraftOrdersWithSessions(
   return out;
 }
 
-type VitalSignRow = { id: string; time: string; values: Record<string, string> };
+type VitalSignRow = {
+  id: string;
+  time: string;
+  values: Record<string, string>;
+  /** 已持久化的 vital_signs.id */
+  vitalServerId?: string;
+  /** 该行录入人 users.id */
+  recordedByUserId?: string | null;
+};
 
 /** 生命体征行：除签名外任一有内容即视为「已填数据」，此时护士签名固定为当前登录用户姓名 */
 const VITAL_SIGN_DATA_KEYS = ['sbp', 'dbp', 'pulse', 'ap', 'vp', 'tmp', 'bloodflow', 'remark'] as const;
+const VITAL_TABLE_NAV_FIELDS = ['time', ...VITAL_SIGN_DATA_KEYS] as const;
+type VitalTableNavField = (typeof VITAL_TABLE_NAV_FIELDS)[number];
 
 function vitalSignRowHasData(values: Record<string, string>): boolean {
   return VITAL_SIGN_DATA_KEYS.some((k) => String(values[k] ?? '').trim() !== '');
@@ -633,6 +645,30 @@ function createVitalSignRow(): VitalSignRow {
     id: `vital-${now.valueOf()}-${Math.random().toString(36).slice(2, 7)}`,
     time: now.format('HH:mm'),
     values: {},
+  };
+}
+
+/** 组装写入/更新生命体征 API 的请求体（护士签名由服务端按登录用户登记） */
+function buildVitalApiPayloadForSave(row: VitalSignRow, dateStr: string): Omit<VitalSign, 'id'> {
+  const t = row.time?.trim() || dayjs().format('HH:mm');
+  const timePart = /^\d{2}:\d{2}$/.test(t) ? `${t}:00` : t;
+  const recordTime = `${dateStr}T${timePart}`;
+  const parseIntOrUndef = (s: string | undefined) => {
+    const x = String(s ?? '').trim();
+    if (!x) return undefined;
+    const n = parseInt(x, 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    time_label: t,
+    record_time: recordTime,
+    systolic_bp: parseIntOrUndef(row.values.sbp),
+    diastolic_bp: parseIntOrUndef(row.values.dbp),
+    heart_rate: parseIntOrUndef(row.values.pulse),
+    arterial_pressure: parseIntOrUndef(row.values.ap),
+    venous_pressure: parseIntOrUndef(row.values.vp),
+    tmp: parseIntOrUndef(row.values.tmp),
+    notes: row.values.remark?.trim() || undefined,
   };
 }
 
@@ -1302,6 +1338,18 @@ export default function DialysisEntryPage() {
     remoteDraftViewerOnlyRef.current = isRemoteDraftViewOnly;
   }, [isRemoteDraftViewOnly]);
 
+  /** 生命体征行：本人或管理员可改；未入库的新行当前账号可编辑 */
+  const canEditVitalRow = useCallback(
+    (row: VitalSignRow) => {
+      if (isDialysisReadOnly || isRemoteDraftViewOnly) return false;
+      if (currentRole === 'admin') return true;
+      if (!row.vitalServerId) return true;
+      if (!row.recordedByUserId) return false;
+      return row.recordedByUserId === currentUserId;
+    },
+    [isDialysisReadOnly, isRemoteDraftViewOnly, currentRole, currentUserId],
+  );
+
   useEffect(() => {
     setRemoteDraftOwnerId(null);
     setRemoteDraftOwnerName(null);
@@ -1351,6 +1399,7 @@ export default function DialysisEntryPage() {
   const [postDialysisSyncMeta, setPostDialysisSyncMeta] = useState<PostDialysisSyncPayload | null>(null);
   const [orders, setOrders] = useState<Record<string, boolean>>({});
   const [vitalRows, setVitalRows] = useState<VitalSignRow[]>(() => [createVitalSignRow()]);
+  const vitalCellRefs = useRef<Record<string, HTMLInputElement | null>>({});
   /** 间期用药（非透析日）：仅展示长期医嘱中的执行约定，不在此页勾选执行 */
   const [intervalOrdersReadonly, setIntervalOrdersReadonly] = useState<LongTermOrder[]>([]);
 
@@ -1540,6 +1589,145 @@ export default function DialysisEntryPage() {
     canWriteDialysis,
     applySessionDraftOwnerFromApiData,
   ]);
+
+  const vitalRowsRef = useRef<VitalSignRow[]>([]);
+  const recordIdFromUrlRef = useRef('');
+  const selectedPatientRef = useRef('');
+  const vitalSessionDateStrRef = useRef('');
+  const vitalPersistTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const vitalPersistInflightRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    vitalRowsRef.current = vitalRows;
+  }, [vitalRows]);
+  useEffect(() => {
+    recordIdFromUrlRef.current = recordIdFromUrl;
+  }, [recordIdFromUrl]);
+  useEffect(() => {
+    selectedPatientRef.current = selectedPatient;
+  }, [selectedPatient]);
+  useEffect(() => {
+    vitalSessionDateStrRef.current = openedRecordDetail?.session_date
+      ? String(openedRecordDetail.session_date).slice(0, 10)
+      : sessionDate.format('YYYY-MM-DD');
+  }, [openedRecordDetail?.session_date, sessionDate]);
+
+  const flushVitalRowSave = useCallback(async (rowId: string) => {
+    const recId = recordIdFromUrlRef.current;
+    if (!recId) return;
+    if (!isRealPatientId(selectedPatientRef.current)) return;
+
+    const row = vitalRowsRef.current.find((r) => r.id === rowId);
+    if (!row || !vitalSignRowHasData(row.values)) return;
+
+    const { user } = useAuthStore.getState();
+    const uid = user?.id ?? '';
+    const role = user?.role;
+
+    const canMutate =
+      role === 'admin' ||
+      !row.vitalServerId ||
+      (!!row.recordedByUserId && row.recordedByUserId === uid);
+    if (!canMutate) return;
+
+    const dateStr = vitalSessionDateStrRef.current;
+    const payload = buildVitalApiPayloadForSave(row, dateStr);
+
+    if (vitalPersistInflightRef.current.has(rowId)) return;
+    vitalPersistInflightRef.current.add(rowId);
+
+    try {
+      if (row.vitalServerId) {
+        const res = await dialysisApi.patchVitalSign(recId, row.vitalServerId, payload);
+        const data = res.data?.data;
+        if (data?.id) {
+          setVitalRows((prev) =>
+            prev.map((r) => {
+              if (r.id !== rowId) return r;
+              return {
+                ...r,
+                recordedByUserId: data.recorded_by ?? r.recordedByUserId,
+                time: toHHmm(data.record_time || r.time),
+                values: {
+                  sbp: data.systolic_bp != null ? String(data.systolic_bp) : '',
+                  dbp: data.diastolic_bp != null ? String(data.diastolic_bp) : '',
+                  pulse: data.heart_rate != null ? String(data.heart_rate) : '',
+                  ap: data.arterial_pressure != null ? String(data.arterial_pressure) : '',
+                  vp: data.venous_pressure != null ? String(data.venous_pressure) : '',
+                  tmp: data.tmp != null ? String(data.tmp) : '',
+                  bloodflow: r.values.bloodflow,
+                  remark: data.notes != null && String(data.notes) !== '' ? String(data.notes) : r.values.remark || '',
+                  signature:
+                    (data.nurse_signature != null && String(data.nurse_signature).trim()
+                      ? String(data.nurse_signature).trim()
+                      : '') ||
+                    (data.recorded_by_name != null && String(data.recorded_by_name).trim()
+                      ? String(data.recorded_by_name).trim()
+                      : '') ||
+                    r.values.signature ||
+                    '',
+                },
+              };
+            }),
+          );
+        }
+      } else {
+        const res = await dialysisApi.addVitalSign(recId, payload);
+        const data = res.data?.data;
+        if (data?.id) {
+          const sid = String(data.id);
+          setVitalRows((prev) =>
+            prev.map((r) => {
+              if (r.id !== rowId) return r;
+              const sig =
+                (data.nurse_signature != null && String(data.nurse_signature).trim()
+                  ? String(data.nurse_signature).trim()
+                  : '') ||
+                (data.recorded_by_name != null && String(data.recorded_by_name).trim()
+                  ? String(data.recorded_by_name).trim()
+                  : '') ||
+                r.values.signature ||
+                '';
+              return {
+                ...r,
+                vitalServerId: sid,
+                recordedByUserId: data.recorded_by ?? uid,
+                time: toHHmm(data.record_time || r.time),
+                values: { ...r.values, signature: sig },
+              };
+            }),
+          );
+        }
+      }
+    } finally {
+      vitalPersistInflightRef.current.delete(rowId);
+    }
+  }, []);
+
+  const scheduleVitalRowPersist = useCallback(
+    (rowId: string) => {
+      if (!recordIdFromUrlRef.current) return;
+      if (!isRealPatientId(selectedPatientRef.current)) return;
+      if (remoteDraftViewerOnlyRef.current) return;
+      if (isDialysisReadOnly) return;
+      const prevT = vitalPersistTimersRef.current[rowId];
+      if (prevT) window.clearTimeout(prevT);
+      vitalPersistTimersRef.current[rowId] = window.setTimeout(() => {
+        delete vitalPersistTimersRef.current[rowId];
+        void flushVitalRowSave(rowId);
+      }, 650);
+    },
+    [isDialysisReadOnly, flushVitalRowSave],
+  );
+
+  useEffect(
+    () => () => {
+      for (const t of Object.values(vitalPersistTimersRef.current)) {
+        window.clearTimeout(t);
+      }
+    },
+    [],
+  );
 
   useEffect(
     () => () => {
@@ -1896,6 +2084,11 @@ export default function DialysisEntryPage() {
           post_sbp: undefined,
           post_dbp: undefined,
           post_pulse: undefined,
+          nurse_puncture_sign: detail.nurse_puncture_sign ?? undefined,
+          nurse_on_machine_sign: detail.nurse_on_machine_sign ?? undefined,
+          nurse_double_check_sign: detail.nurse_double_check_sign ?? undefined,
+          nurse_record_sign:
+            detail.nurse_record_sign ?? detail.nurse_name ?? undefined,
         });
         setPostWeight(normNum(detail.post_weight) ?? null);
         setDurationHours(
@@ -1915,21 +2108,32 @@ export default function DialysisEntryPage() {
                 if (sa !== sb) return sa - sb;
                 return String(a.record_time ?? '').localeCompare(String(b.record_time ?? ''));
               })
-              .map((item, index) => ({
-                id: item.id || `vital-detail-${recordIdFromUrl}-${index}`,
-                time: toHHmm(item.record_time || item.time_label || ''),
-                values: {
-                  sbp: item.systolic_bp != null ? String(item.systolic_bp) : '',
-                  dbp: item.diastolic_bp != null ? String(item.diastolic_bp) : '',
-                  pulse: item.heart_rate != null ? String(item.heart_rate) : '',
-                  ap: item.arterial_pressure != null ? String(item.arterial_pressure) : '',
-                  vp: item.venous_pressure != null ? String(item.venous_pressure) : '',
-                  tmp: item.tmp != null ? String(item.tmp) : '',
-                  bloodflow: '',
-                  remark: item.notes || '',
-                  signature: '',
-                },
-              }))
+              .map((item, index) => {
+                const recName =
+                  typeof item.recorded_by_name === 'string' && item.recorded_by_name.trim()
+                    ? item.recorded_by_name.trim()
+                    : '';
+                return {
+                  id: item.id ? String(item.id) : `vital-detail-${recordIdFromUrl}-${index}`,
+                  vitalServerId: item.id ? String(item.id) : undefined,
+                  recordedByUserId: item.recorded_by ?? null,
+                  time: toHHmm(item.record_time || item.time_label || ''),
+                  values: {
+                    sbp: item.systolic_bp != null ? String(item.systolic_bp) : '',
+                    dbp: item.diastolic_bp != null ? String(item.diastolic_bp) : '',
+                    pulse: item.heart_rate != null ? String(item.heart_rate) : '',
+                    ap: item.arterial_pressure != null ? String(item.arterial_pressure) : '',
+                    vp: item.venous_pressure != null ? String(item.venous_pressure) : '',
+                    tmp: item.tmp != null ? String(item.tmp) : '',
+                    bloodflow: '',
+                    remark: item.notes || '',
+                    signature:
+                      (typeof item.nurse_signature === 'string' && item.nurse_signature.trim()
+                        ? item.nurse_signature.trim()
+                        : recName),
+                  },
+                };
+              })
           : [];
         setVitalRows(vitals.length > 0 ? vitals : [createVitalSignRow()]);
 
@@ -2250,6 +2454,7 @@ export default function DialysisEntryPage() {
   const postDbpWatch = Form.useWatch('post_dbp', form);
   const postPulseWatch = Form.useWatch('post_pulse', form);
   const preWeightWatch = Form.useWatch('pre_weight', form);
+  const inputVolumeWatch = Form.useWatch('input_volume', form);
   const postDialysisLockedByDoctor = postDialysisSyncMeta?.filledBy === 'doctor';
 
   /** 真实患者：与处方管理 / 排班合并后的只读摘要（依赖表单上机前体重用于超滤估算） */
@@ -2370,18 +2575,18 @@ export default function DialysisEntryPage() {
     preWeightWatch,
   ]);
 
-  /**
-   * 实际脱水量（mL）：
-   * - 演示患者：处方上机前体重 - 透后体重
-   * - 真实患者：表单上机前体重 - 透后体重
-   */
+  /** 实际脱水量（mL）= 上机前体重 - 透析后体重 - 透析期间入量 */
   const preWeightForUF =
     rxPreview?.preMachineWeightRx
     ?? (preWeightWatch != null && Number.isFinite(Number(preWeightWatch)) ? Number(preWeightWatch) : null)
     ?? null;
+  const inputVolumeMl =
+    inputVolumeWatch != null && Number.isFinite(Number(inputVolumeWatch))
+      ? Math.max(0, Number(inputVolumeWatch))
+      : 0;
   const computedUF =
     preWeightForUF != null && postWeight != null
-      ? Math.round((preWeightForUF - postWeight) * 1000)
+      ? Math.round((preWeightForUF - postWeight) * 1000 - inputVolumeMl)
       : null;
   const ufPercent = dryWeight && computedUF ? ((computedUF / (dryWeight * 1000)) * 100).toFixed(1) : null;
   const ufAlert = ufPercent ? parseFloat(ufPercent) > 5 : false;
@@ -2450,6 +2655,11 @@ export default function DialysisEntryPage() {
       if (isDialysisFormDisabled) {
         return;
       }
+      const rowNow = vitalRowsRef.current.find((r) => r.id === rowId);
+      if (!rowNow || !canEditVitalRow(rowNow)) {
+        message.warning('仅该行录入人可修改本行数据');
+        return;
+      }
       /** 生命体征护士签名：仅系统按当前登录用户写入，不允许手改 */
       if (field === 'signature') {
         return;
@@ -2460,6 +2670,7 @@ export default function DialysisEntryPage() {
           const nextValues = { ...row.values, [field]: val };
           if (signerLabel) {
             if (vitalSignRowHasData(nextValues)) {
+              // 该行被当前用户实际编辑时，签名更新为当前填写人（入库后由服务端登记姓名覆盖）
               nextValues.signature = signerLabel;
             } else {
               nextValues.signature = '';
@@ -2469,22 +2680,94 @@ export default function DialysisEntryPage() {
         }),
       );
       schedulePersistDialysisDraft();
+      scheduleVitalRowPersist(rowId);
     },
-    [isDialysisFormDisabled, signerLabel, schedulePersistDialysisDraft],
+    [isDialysisFormDisabled, signerLabel, schedulePersistDialysisDraft, canEditVitalRow, scheduleVitalRowPersist],
   );
 
   const handleVitalTimeChange = useCallback(
     (rowId: string, val: string) => {
       if (isDialysisFormDisabled) return;
+      const rowNow = vitalRowsRef.current.find((r) => r.id === rowId);
+      if (!rowNow || !canEditVitalRow(rowNow)) {
+        message.warning('仅该行录入人可修改本行数据');
+        return;
+      }
       const t =
         typeof val === 'string' && /^\d{2}:\d{2}$/.test(val.trim())
           ? val.trim()
           : dayjs().format('HH:mm');
-      setVitalRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, time: t } : row)));
+      setVitalRows((prev) => prev.map((row) => {
+        if (row.id !== rowId) return row;
+        const next = { ...row, time: t };
+        if (signerLabel && vitalSignRowHasData(next.values)) {
+          next.values = { ...next.values, signature: signerLabel };
+        }
+        return next;
+      }));
       schedulePersistDialysisDraft();
+      scheduleVitalRowPersist(rowId);
     },
-    [isDialysisFormDisabled, schedulePersistDialysisDraft],
+    [isDialysisFormDisabled, signerLabel, schedulePersistDialysisDraft, canEditVitalRow, scheduleVitalRowPersist],
   );
+
+  const getVitalCellKey = useCallback((rowId: string, field: VitalTableNavField) => `${rowId}:${field}`, []);
+
+  const setVitalCellRef = useCallback((rowId: string, field: VitalTableNavField, el: HTMLInputElement | null) => {
+    vitalCellRefs.current[getVitalCellKey(rowId, field)] = el;
+  }, [getVitalCellKey]);
+
+  const focusVitalCell = useCallback((rowId: string, field: VitalTableNavField) => {
+    const target = vitalCellRefs.current[getVitalCellKey(rowId, field)];
+    if (!target) return;
+    target.focus();
+    if (field === 'remark') {
+      const len = target.value?.length ?? 0;
+      target.setSelectionRange(len, len);
+    }
+  }, [getVitalCellKey]);
+
+  const handleVitalCellArrowNav = useCallback((
+    e: ReactKeyboardEvent<HTMLInputElement>,
+    rowId: string,
+    field: VitalTableNavField,
+  ) => {
+    if (isDialysisFormDisabled) return;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+
+    // 文本备注列保留光标左右移动；仅在到边界时切格
+    if (field === 'remark' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const input = e.currentTarget;
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? 0;
+      const len = input.value.length;
+      if (e.key === 'ArrowLeft' && (start !== 0 || end !== 0)) return;
+      if (e.key === 'ArrowRight' && (start !== len || end !== len)) return;
+    }
+
+    const rowIndex = vitalRows.findIndex((r) => r.id === rowId);
+    const colIndex = VITAL_TABLE_NAV_FIELDS.indexOf(field);
+    if (rowIndex < 0 || colIndex < 0) return;
+
+    let nextRow = rowIndex;
+    let nextCol = colIndex;
+    if (e.key === 'ArrowUp') nextRow -= 1;
+    if (e.key === 'ArrowDown') nextRow += 1;
+    if (e.key === 'ArrowLeft') nextCol -= 1;
+    if (e.key === 'ArrowRight') nextCol += 1;
+
+    if (nextRow < 0 || nextRow >= vitalRows.length) return;
+    if (nextCol < 0 || nextCol >= VITAL_TABLE_NAV_FIELDS.length) return;
+
+    const targetRow = vitalRows[nextRow];
+    if (!canEditVitalRow(targetRow)) {
+      message.info('该行为其他护士录入，只读');
+      return;
+    }
+
+    e.preventDefault();
+    focusVitalCell(vitalRows[nextRow].id, VITAL_TABLE_NAV_FIELDS[nextCol]);
+  }, [isDialysisFormDisabled, vitalRows, focusVitalCell, canEditVitalRow]);
 
   const handleAddVitalRow = () => {
     if (isDialysisFormDisabled) {
@@ -2510,31 +2793,7 @@ export default function DialysisEntryPage() {
     });
   }, [signerLabel, selectedPatient, form]);
 
-  /** 生命体征「护士签名」列：可写模式下始终与当前登录用户姓名一致 */
-  useEffect(() => {
-    if (!signerLabel || isDialysisFormDisabled) return;
-    let persist = false;
-    setVitalRows((prev) => {
-      let changed = false;
-      const next = prev.map((row) => {
-        if (!vitalSignRowHasData(row.values)) {
-          if (String(row.values.signature ?? '').trim() !== '') {
-            changed = true;
-            return { ...row, values: { ...row.values, signature: '' } };
-          }
-          return row;
-        }
-        if (row.values.signature === signerLabel) return row;
-        changed = true;
-        return { ...row, values: { ...row.values, signature: signerLabel } };
-      });
-      if (changed) persist = true;
-      return changed ? next : prev;
-    });
-    if (persist) schedulePersistDialysisDraft();
-  }, [signerLabel, isDialysisFormDisabled, selectedPatient, schedulePersistDialysisDraft]);
-
-  const handleRemoveVitalRow = (rowId: string) => {
+  const handleRemoveVitalRow = async (rowId: string) => {
     if (isDialysisFormDisabled) {
       message.warning(
         isRemoteDraftViewOnly
@@ -2543,9 +2802,25 @@ export default function DialysisEntryPage() {
       );
       return;
     }
-    setVitalRows(prev => {
-      if (prev.length <= 1) { message.warning('至少保留 1 条生命体征记录'); return prev; }
-      return prev.filter(row => row.id !== rowId);
+    const row = vitalRows.find((r) => r.id === rowId);
+    if (!row) return;
+    if (!canEditVitalRow(row)) {
+      message.warning('仅该行录入人可删除');
+      return;
+    }
+    if (row.vitalServerId && recordIdFromUrl) {
+      try {
+        await dialysisApi.deleteVitalSign(recordIdFromUrl, row.vitalServerId);
+      } catch {
+        return;
+      }
+    }
+    setVitalRows((prev) => {
+      if (prev.length <= 1) {
+        message.warning('至少保留 1 条生命体征记录');
+        return prev;
+      }
+      return prev.filter((r) => r.id !== rowId);
     });
     schedulePersistDialysisDraft();
   };
@@ -2615,7 +2890,7 @@ export default function DialysisEntryPage() {
 
         // 生命体征数组
         const vitalSignsPayload = vitalRows
-          .filter(row => row.values.sbp || row.values.systolic_bp)
+          .filter((row) => vitalSignRowHasData(row.values))
           .map((row, i) => ({
             sequence_no: i + 1,
             time_label: row.time || `第${i + 1}次`,
@@ -2627,6 +2902,7 @@ export default function DialysisEntryPage() {
             venous_pressure: row.values.vp ? parseInt(row.values.vp) : undefined,
             tmp: row.values.tmp ? parseInt(row.values.tmp) : undefined,
             notes: row.values.remark || undefined,
+            nurse_signature: row.values.signature?.trim() || undefined,
           }));
 
         // 并发症数组（合并类型字符串与详细记录）
@@ -2669,6 +2945,10 @@ export default function DialysisEntryPage() {
           pre_bun: preBun ?? undefined,
           post_bun: postBun ?? undefined,
           notes: (formValues.remark as string) || undefined,
+          nurse_puncture_sign: typeof formValues.nurse_puncture_sign === 'string' ? formValues.nurse_puncture_sign : undefined,
+          nurse_on_machine_sign: typeof formValues.nurse_on_machine_sign === 'string' ? formValues.nurse_on_machine_sign : undefined,
+          nurse_double_check_sign: typeof formValues.nurse_double_check_sign === 'string' ? formValues.nurse_double_check_sign : undefined,
+          nurse_record_sign: typeof formValues.nurse_record_sign === 'string' ? formValues.nurse_record_sign : undefined,
           vital_signs: vitalSignsPayload,
           complications: complicationsPayload,
           order_executions: orderExecPayload,
@@ -3397,7 +3677,7 @@ export default function DialysisEntryPage() {
             extra={
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, color: '#64748B' }}>
-                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间可手动选择 · 护士签名为当前登录账号自动填入
+                  <ClockCircleOutlined /> 每50分钟记录一次 · 时间可手动选择 · 护士签名按实际录入人自动登记 · 仅本人可改已保存行，他人只读；所有护士可新增行
                 </span>
                 <Button
                   size="small"
@@ -3443,7 +3723,9 @@ export default function DialysisEntryPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {vitalRows.map((row, idx) => (
+                  {vitalRows.map((row, idx) => {
+                    const rowLocked = isDialysisFormDisabled || !canEditVitalRow(row);
+                    return (
                     <tr key={row.id} style={{ background: idx % 2 === 0 ? '#fff' : '#FAFBFC' }}>
                       <td style={{
                         padding: '4px 6px', border: '1px solid #E2E8F0',
@@ -3457,15 +3739,25 @@ export default function DialysisEntryPage() {
                           }}>
                             {row.time}
                           </span>
+                        ) : rowLocked ? (
+                          <span style={{
+                            display: 'inline-block', fontWeight: 600, color: '#64748B',
+                            fontSize: 12, whiteSpace: 'nowrap', fontFamily: 'DM Mono, monospace',
+                            padding: '4px 0',
+                          }}>
+                            {row.time}
+                          </span>
                         ) : (
                           <input
                             type="time"
                             step={60}
+                            ref={(el) => setVitalCellRef(row.id, 'time', el)}
                             value={
                               typeof row.time === 'string' && /^\d{2}:\d{2}$/.test(row.time.trim())
                                 ? row.time.trim()
                                 : ''
                             }
+                            onKeyDown={(e) => handleVitalCellArrowNav(e, row.id, 'time')}
                             onChange={(e) =>
                               handleVitalTimeChange(row.id, e.target.value || dayjs().format('HH:mm'))
                             }
@@ -3484,7 +3776,15 @@ export default function DialysisEntryPage() {
                             type={field === 'remark' || field === 'signature' ? 'text' : 'number'}
                             value={row.values[field] || ''}
                             onChange={e => handleVitalChange(row.id, field, e.target.value)}
-                            readOnly={field === 'signature' || isDialysisFormDisabled}
+                            ref={(el) => {
+                              if (field === 'signature') return;
+                              setVitalCellRef(row.id, field as VitalTableNavField, el);
+                            }}
+                            onKeyDown={(e) => {
+                              if (field === 'signature') return;
+                              handleVitalCellArrowNav(e, row.id, field as VitalTableNavField);
+                            }}
+                            readOnly={field === 'signature' || rowLocked}
                             disabled={isDialysisFormDisabled}
                             style={{
                               width: '100%', padding: '4px 6px',
@@ -3510,13 +3810,14 @@ export default function DialysisEntryPage() {
                         <Button
                           danger size="small"
                           icon={<DeleteOutlined />}
-                          onClick={() => handleRemoveVitalRow(row.id)}
+                          onClick={() => void handleRemoveVitalRow(row.id)}
                           type="text"
-                          disabled={isDialysisFormDisabled}
+                          disabled={isDialysisFormDisabled || !canEditVitalRow(row)}
                         />
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -3950,7 +4251,12 @@ export default function DialysisEntryPage() {
                   disabled={postDialysisLockedByDoctor}
                 />
               </Form.Item>
-              <Form.Item label={<FieldLabel text="透析期间入量" />} style={{ marginBottom: 0 }}>
+              <Form.Item
+                name="input_volume"
+                label={<FieldLabel text="透析期间入量" />}
+                style={{ marginBottom: 0 }}
+                tooltip="用于实际脱水量计算：上机前体重 - 透析后体重 - 透析期间入量"
+              >
                 <InputNumber min={0} max={10000} style={{ width: '100%' }} addonAfter="mL" />
               </Form.Item>
             </Grid>

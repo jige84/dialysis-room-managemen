@@ -32,6 +32,12 @@ export interface VitalSign {
   is_hypotension?: boolean;
   is_hypertension?: boolean;
   notes?: string | null;
+  /** 行级护士签名（真实填写人） */
+  nurse_signature?: string | null;
+  /** 生命体征记录人 UUID（库字段） */
+  recorded_by?: string | null;
+  /** 生命体征记录人姓名（JOIN users，供历史/详情展示） */
+  recorded_by_name?: string | null;
 }
 
 /** 并发症记录（POST body 或 GET 响应） */
@@ -106,6 +112,11 @@ export interface DialysisRecordDetail extends DialysisRecordListRow {
   notes: string | null;
   machine_no: string | null;
   double_check_nurse_name: string | null;
+  /** 与录入页一致的护士签名字段 */
+  nurse_puncture_sign?: string | null;
+  nurse_on_machine_sign?: string | null;
+  nurse_double_check_sign?: string | null;
+  nurse_record_sign?: string | null;
   dob?: string;
   /** 生命体征记录（规程要求每50分钟一次） */
   vital_signs: VitalSign[];
@@ -157,6 +168,11 @@ export interface CreateDialysisPayload {
   pre_bun?: number | null;
   post_bun?: number | null;
   notes?: string | null;
+  /** 录入页护士签名字段（与纸质单一致，持久化便于历史/详情展示） */
+  nurse_puncture_sign?: string | null;
+  nurse_on_machine_sign?: string | null;
+  nurse_double_check_sign?: string | null;
+  nurse_record_sign?: string | null;
 
   /** 生命体征数组（上机即刻 + 中途 + 下机前） */
   vital_signs?: Omit<VitalSign, 'id'>[];
@@ -333,6 +349,14 @@ export const dialysisApi = {
   /** 追加单条生命体征（透析中实时录入） */
   addVitalSign: (dialysisRecordId: string, data: Omit<VitalSign, 'id'>) =>
     request.post<ApiResponse<VitalSign>>(`/dialysis/${dialysisRecordId}/vitals`, data),
+
+  /** 更新单条生命体征（仅该行录入人或管理员） */
+  patchVitalSign: (dialysisRecordId: string, vitalId: string, data: Partial<Omit<VitalSign, 'id'>>) =>
+    request.patch<ApiResponse<VitalSign>>(`/dialysis/${dialysisRecordId}/vitals/${vitalId}`, data),
+
+  /** 删除单条生命体征（仅该行录入人或管理员） */
+  deleteVitalSign: (dialysisRecordId: string, vitalId: string) =>
+    request.delete<ApiResponse<{ id: string }>>(`/dialysis/${dialysisRecordId}/vitals/${vitalId}`),
 
   /**
    * 获取透析准备数据（当前处方 + 今日应执行医嘱）

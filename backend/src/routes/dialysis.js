@@ -21,6 +21,7 @@ const {
   validateDialysisNotePayload,
   validateSessionDraftQuery,
   validateSessionDraftPutBody,
+  validatePatchVitalSignBody,
 } = require('../validators/dialysisValidators');
 const { success, created, paginated, error, notFound } = require('../utils/response');
 const { formatDate, getMonthRange } = require('../utils/dateUtils');
@@ -52,6 +53,55 @@ router.get('/prepare', auth, async (req, res, next) => {
 });
 
 const MAX_SESSION_DRAFT_BYTES = 1_500_000;
+
+/** 护士签名字段：截断长度、去首尾空格，避免异常超长 */
+function trimNurseSignField(v) {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (!t) return null;
+  return t.slice(0, 80);
+}
+
+/** JWT 中的登记姓名：用于生命体征行级签名（不信任客户端篡改） */
+function signerNameFromUser(user) {
+  if (!user || typeof user !== 'object') return null;
+  const fromReal = trimNurseSignField(user.real_name);
+  if (fromReal) return fromReal;
+  return trimNurseSignField(user.username);
+}
+
+/**
+ * 责任护士仅能操作「透析场次日期」为今日及以后的记录（与 restrictNurseEditTime 一致）
+ * @returns {Promise<{ ok: boolean, statusCode?: number, message?: string }>}
+ */
+async function checkNurseDialysisSessionDate(poolInstance, user, dialysisRecordId) {
+  if (!user || user.role !== 'nurse') return { ok: true };
+  const { rows } = await poolInstance.query(
+    `SELECT session_date::text AS sd FROM dialysis_records WHERE id = $1`,
+    [dialysisRecordId],
+  );
+  if (rows.length === 0) return { ok: false, statusCode: 404, message: '透析记录不存在' };
+  const recordDate = new Date(rows[0].sd);
+  recordDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (recordDate < today) {
+    return {
+      ok: false,
+      statusCode: 403,
+      message: '责任护士只能录入今日透析记录，修改历史记录请联系管理员',
+    };
+  }
+  return { ok: true };
+}
+
+/** 是否可修改/删除该行生命体征：录入人本人，或 recorded_by 为空时仅管理员，或管理员 */
+function canMutateVitalSignRow(user, row) {
+  if (!user || !row) return false;
+  if (user.role === 'admin') return true;
+  if (!row.recorded_by) return false;
+  return String(row.recorded_by) === String(user.id);
+}
 
 // GET /api/dialysis/session-draft?patient_id=&date= — 工作台多用户轮询拉取同患者同日草稿
 router.get('/session-draft', auth, async (req, res, next) => {
@@ -274,7 +324,11 @@ router.get('/:id', auth, async (req, res, next) => {
     const record = rows[0];
 
     const { rows: vitals } = await pool.query(
-      `SELECT * FROM vital_signs WHERE dialysis_record_id = $1 ORDER BY sequence_no`,
+      `SELECT vs.*, ur.real_name AS recorded_by_name
+       FROM vital_signs vs
+       LEFT JOIN users ur ON ur.id = vs.recorded_by
+       WHERE vs.dialysis_record_id = $1
+       ORDER BY vs.sequence_no, vs.record_time`,
       [req.params.id]
     );
     record.vital_signs = vitals;
@@ -327,11 +381,20 @@ router.post('/',
         is_avf_session, coagulation_grade, blood_return_method,
         pre_bun, post_bun,
         notes,
+        nurse_puncture_sign: rawNursePuncture,
+        nurse_on_machine_sign: rawNurseOnMachine,
+        nurse_double_check_sign: rawNurseDoubleCheck,
+        nurse_record_sign: rawNurseRecord,
         // 批量子记录（可在创建透析记录时一并提交）
         vital_signs = [],     // VitalSign[]
         complications = [],   // { comp_type, occurred_at?, notes?, detail? }[]
         order_executions = [] // { long_term_order_id, status, actual_dose?, notes? }[]
       } = payloadValid.value;
+
+      const nurse_puncture_sign = trimNurseSignField(rawNursePuncture);
+      const nurse_on_machine_sign = trimNurseSignField(rawNurseOnMachine);
+      const nurse_double_check_sign = trimNurseSignField(rawNurseDoubleCheck);
+      const nurse_record_sign = trimNurseSignField(rawNurseRecord);
 
       // 传染病初筛完整性校验：仅「新入患者」（尚无任意透析记录）时强制 4 项齐全
       const { rows: priorDialysis } = await pool.query(
@@ -398,10 +461,11 @@ router.post('/',
              is_avf_session, coagulation_grade, is_circuit_clotted, is_membrane_ruptured,
              blood_return_method,
              pre_bun, post_bun, ktv, urr,
-             notes
+             notes,
+             nurse_puncture_sign, nurse_on_machine_sign, nurse_double_check_sign, nurse_record_sign
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
            ) RETURNING id, session_date, shift, ktv, urr, uf_volume`,
           [
             patient_id, prescription_id || null, machine_id || null,
@@ -416,7 +480,11 @@ router.post('/',
             coagulation_grade || 0, isCircuitClotted, isMembraneRuptured,
             blood_return_method || 'closed',
             pre_bun || null, post_bun || null, ktvResult.ktv, ktvResult.urr,
-            notes || null
+            notes || null,
+            nurse_puncture_sign,
+            nurse_on_machine_sign,
+            nurse_double_check_sign,
+            nurse_record_sign,
           ]
         );
         savedRow = rows[0];
@@ -434,13 +502,14 @@ router.post('/',
           const vs = vital_signs[i];
           const isHypotension = isHypotensionFlag(vs.systolic_bp, baselineSbp);
           const isHypertension = typeof vs.systolic_bp === 'number' && vs.systolic_bp > 200;
+          const nurseSignature = signerNameFromUser(req.user);
           await client.query(
             `INSERT INTO vital_signs (
                dialysis_record_id, patient_id, record_time, time_label, sequence_no,
                systolic_bp, diastolic_bp, heart_rate, arterial_pressure, venous_pressure,
-               tmp, body_temp, is_hypotension, is_hypertension, notes, recorded_by
+               tmp, body_temp, is_hypotension, is_hypertension, notes, recorded_by, nurse_signature
              )
-             SELECT $1, patient_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+             SELECT $1, patient_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
              FROM dialysis_records WHERE id = $1`,
             [
               savedRow.id,
@@ -451,7 +520,7 @@ router.post('/',
               vs.arterial_pressure || null, vs.venous_pressure || null,
               vs.tmp || null, vs.body_temp || null,
               isHypotension, isHypertension,
-              vs.notes || null, req.user.id,
+              vs.notes || null, req.user.id, nurseSignature,
             ]
           );
         }
@@ -539,12 +608,26 @@ router.post('/',
 router.post('/:id/vitals',
   auth,
   rbac(['admin', 'nurse', 'head_nurse']),
-  restrictNurseEditTime,
   auditLog('vital_signs', 'CREATE'),
   async (req, res, next) => {
     try {
-      const { record_time, time_label, sequence_no, systolic_bp, diastolic_bp,
-              heart_rate, arterial_pressure, venous_pressure, tmp, body_temp, notes } = req.body;
+      const nurseDateCheck = await checkNurseDialysisSessionDate(pool, req.user, req.params.id);
+      if (!nurseDateCheck.ok) {
+        return error(res, nurseDateCheck.message, nurseDateCheck.statusCode || 403);
+      }
+
+      const {
+        record_time, time_label, sequence_no, systolic_bp, diastolic_bp,
+        heart_rate, arterial_pressure, venous_pressure, tmp, body_temp, notes,
+      } = req.body;
+      const nurseSignatureFinal = signerNameFromUser(req.user);
+
+      const { rows: seqRows } = await pool.query(
+        `SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq
+         FROM vital_signs WHERE dialysis_record_id = $1`,
+        [req.params.id],
+      );
+      const nextSeq = seqRows[0]?.next_seq != null ? Number(seqRows[0].next_seq) : 1;
 
       const { rows: baselineRows } = await pool.query(
         `SELECT systolic_bp FROM vital_signs
@@ -558,27 +641,194 @@ router.post('/:id/vitals',
       const isHypotension = isHypotensionFlag(systolic_bp, baselineSbp);
       const isHypertension = typeof systolic_bp === 'number' && systolic_bp > 200;
 
-      const { rows } = await pool.query(
+      const { rows: insRows } = await pool.query(
         `INSERT INTO vital_signs (
            dialysis_record_id, patient_id, record_time, time_label, sequence_no,
            systolic_bp, diastolic_bp, heart_rate, arterial_pressure, venous_pressure,
-           tmp, body_temp, is_hypotension, is_hypertension, notes, recorded_by
+           tmp, body_temp, is_hypotension, is_hypertension, notes, recorded_by, nurse_signature
          )
-         SELECT $1, patient_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+         SELECT $1, patient_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
          FROM dialysis_records WHERE id = $1
-         RETURNING id, sequence_no, record_time, systolic_bp, diastolic_bp, is_hypotension`,
+         RETURNING id`,
         [
-          req.params.id, record_time || new Date().toISOString(), time_label, sequence_no || 1,
+          req.params.id,
+          record_time || new Date().toISOString(),
+          time_label,
+          typeof sequence_no === 'number' && Number.isFinite(sequence_no) ? sequence_no : nextSeq,
           systolic_bp || null, diastolic_bp || null, heart_rate || null,
           arterial_pressure || null, venous_pressure || null,
           tmp || null, body_temp || null,
-          isHypotension, isHypertension, notes || null, req.user.id,
-        ]
+          isHypotension, isHypertension, notes || null, req.user.id, nurseSignatureFinal,
+        ],
       );
 
-      return created(res, rows[0], '生命体征记录成功');
+      const newId = insRows[0]?.id;
+      if (!newId) {
+        return error(res, '透析记录不存在或无法写入生命体征', 404);
+      }
+      const { rows: fullRows } = await pool.query(
+        `SELECT vs.*, ur.real_name AS recorded_by_name
+         FROM vital_signs vs
+         LEFT JOIN users ur ON ur.id = vs.recorded_by
+         WHERE vs.id = $1`,
+        [newId],
+      );
+
+      return created(res, fullRows[0] || insRows[0], '生命体征记录成功');
     } catch (err) { next(err); }
-  }
+  },
+);
+
+// PATCH /api/dialysis/:id/vitals/:vitalId — 仅该行录入人（或管理员）可改
+router.patch('/:id/vitals/:vitalId',
+  auth,
+  rbac(['admin', 'nurse', 'head_nurse']),
+  auditLog('vital_signs', 'UPDATE'),
+  async (req, res, next) => {
+    try {
+      const nurseDateCheck = await checkNurseDialysisSessionDate(pool, req.user, req.params.id);
+      if (!nurseDateCheck.ok) {
+        return error(res, nurseDateCheck.message, nurseDateCheck.statusCode || 403);
+      }
+
+      const payloadValid = validatePatchVitalSignBody(req.body);
+      if (!payloadValid.ok) return error(res, payloadValid.message, 400);
+      const b = payloadValid.value;
+
+      const { rows: curRows } = await pool.query(
+        `SELECT * FROM vital_signs WHERE id = $1 AND dialysis_record_id = $2`,
+        [req.params.vitalId, req.params.id],
+      );
+      if (curRows.length === 0) return notFound(res, '生命体征记录不存在');
+      const cur = curRows[0];
+      if (!canMutateVitalSignRow(req.user, cur)) {
+        return error(res, '仅该行录入人可修改', 403);
+      }
+
+      const pick = (key) => (Object.prototype.hasOwnProperty.call(b, key) ? b[key] : cur[key]);
+
+      const recordTime = pick('record_time');
+      const timeLabel = pick('time_label');
+      const sequenceNo = pick('sequence_no');
+      const systolicBp = pick('systolic_bp');
+      const diastolicBp = pick('diastolic_bp');
+      const heartRate = pick('heart_rate');
+      const arterialPressure = pick('arterial_pressure');
+      const venousPressure = pick('venous_pressure');
+      const tmpVal = pick('tmp');
+      const bodyTemp = pick('body_temp');
+      const notesVal = pick('notes');
+
+      const toSmallIntOrNull = (v) => {
+        if (v === null || v === undefined || v === '') return null;
+        const n = typeof v === 'number' ? v : Number(v);
+        if (!Number.isFinite(n)) return null;
+        return Math.round(n);
+      };
+      const toNumericOrNull = (v) => {
+        if (v === null || v === undefined || v === '') return null;
+        const n = typeof v === 'number' ? v : Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+
+      const sbpN = toSmallIntOrNull(systolicBp);
+      const dbpN = toSmallIntOrNull(diastolicBp);
+      const hrN = toSmallIntOrNull(heartRate);
+      const apN = toSmallIntOrNull(arterialPressure);
+      const vpN = toSmallIntOrNull(venousPressure);
+      const tmpN = toSmallIntOrNull(tmpVal);
+      const bodyTempN = toNumericOrNull(bodyTemp);
+      const seqN = toSmallIntOrNull(sequenceNo);
+
+      const { rows: baselineRows } = await pool.query(
+        `SELECT systolic_bp FROM vital_signs
+         WHERE dialysis_record_id = $1 AND systolic_bp IS NOT NULL
+         ORDER BY sequence_no ASC, record_time ASC
+         LIMIT 1`,
+        [req.params.id],
+      );
+      const baselineSbp = baselineRows[0]?.systolic_bp ?? null;
+
+      const isHypotension = isHypotensionFlag(sbpN, baselineSbp);
+      const isHypertension = typeof sbpN === 'number' && sbpN > 200;
+
+      await pool.query(
+        `UPDATE vital_signs SET
+           record_time = $1::timestamptz,
+           time_label = $2,
+           sequence_no = COALESCE($3::smallint, sequence_no),
+           systolic_bp = $4::smallint,
+           diastolic_bp = $5::smallint,
+           heart_rate = $6::smallint,
+           arterial_pressure = $7::smallint,
+           venous_pressure = $8::smallint,
+           tmp = $9::smallint,
+           body_temp = $10::numeric,
+           is_hypotension = $11,
+           is_hypertension = $12,
+           notes = $13
+         WHERE id = $14 AND dialysis_record_id = $15`,
+        [
+          recordTime,
+          timeLabel || null,
+          seqN,
+          sbpN,
+          dbpN,
+          hrN,
+          apN,
+          vpN,
+          tmpN,
+          bodyTempN,
+          isHypotension,
+          isHypertension,
+          notesVal || null,
+          req.params.vitalId,
+          req.params.id,
+        ],
+      );
+
+      const { rows: fullRows } = await pool.query(
+        `SELECT vs.*, ur.real_name AS recorded_by_name
+         FROM vital_signs vs
+         LEFT JOIN users ur ON ur.id = vs.recorded_by
+         WHERE vs.id = $1`,
+        [req.params.vitalId],
+      );
+
+      return success(res, fullRows[0], '生命体征已更新');
+    } catch (err) { next(err); }
+  },
+);
+
+// DELETE /api/dialysis/:id/vitals/:vitalId — 仅该行录入人（或管理员）可删
+router.delete('/:id/vitals/:vitalId',
+  auth,
+  rbac(['admin', 'nurse', 'head_nurse']),
+  auditLog('vital_signs', 'DELETE'),
+  async (req, res, next) => {
+    try {
+      const nurseDateCheck = await checkNurseDialysisSessionDate(pool, req.user, req.params.id);
+      if (!nurseDateCheck.ok) {
+        return error(res, nurseDateCheck.message, nurseDateCheck.statusCode || 403);
+      }
+
+      const { rows: curRows } = await pool.query(
+        `SELECT * FROM vital_signs WHERE id = $1 AND dialysis_record_id = $2`,
+        [req.params.vitalId, req.params.id],
+      );
+      if (curRows.length === 0) return notFound(res, '生命体征记录不存在');
+      if (!canMutateVitalSignRow(req.user, curRows[0])) {
+        return error(res, '仅该行录入人可删除', 403);
+      }
+
+      await pool.query(
+        `DELETE FROM vital_signs WHERE id = $1 AND dialysis_record_id = $2`,
+        [req.params.vitalId, req.params.id],
+      );
+
+      return success(res, { id: req.params.vitalId }, '生命体征记录已删除');
+    } catch (err) { next(err); }
+  },
 );
 
 // PATCH /api/dialysis/:id/note - 护士仅可在当班日期添加备注（不可修改其他字段）

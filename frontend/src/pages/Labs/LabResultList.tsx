@@ -54,6 +54,7 @@ import {
   requiresSampleTiming,
   type LabStatusUi,
 } from '../../utils/labReportOcr';
+import { parseApiDateOnlyForPicker } from '../../utils/medicalDate';
 
 const { Text } = Typography;
 
@@ -601,7 +602,7 @@ export default function LabResultListPage() {
     if (!showModal) return;
     form.setFieldsValue({
       patient_id: undefined,
-      test_date: dayjs(),
+      test_date: dayjs().startOf('day'),
       items: [{ test_type: undefined, value: undefined, unit: undefined }],
     });
   }, [showModal, form]);
@@ -659,7 +660,7 @@ export default function LabResultListPage() {
         test_type: row.test_type,
         value: row.value,
         unit: row.unit,
-        test_date: row.test_date ? dayjs(row.test_date) : dayjs(),
+        test_date: parseApiDateOnlyForPicker(row.test_date),
         sample_timing: getSampleTimingValue(row.notes),
       });
       setEditOpen(true);
@@ -689,7 +690,7 @@ export default function LabResultListPage() {
         test_type: testType,
         value: numericValue,
         unit: typeof values.unit === 'string' ? values.unit.trim() : '',
-        test_date: values.test_date ? values.test_date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+        test_date: values.test_date ? values.test_date.format('YYYY-MM-DD') : dayjs().startOf('day').format('YYYY-MM-DD'),
         notes: needsSampleTiming && values.sample_timing
           ? `${SAMPLE_TIMING_NOTE_PREFIX} ${values.sample_timing}`
           : undefined,
@@ -972,7 +973,7 @@ export default function LabResultListPage() {
                   block
                   onClick={() => {
                     form.setFieldsValue({
-                      test_date: form.getFieldValue('test_date') || dayjs(),
+                      test_date: form.getFieldValue('test_date') || dayjs().startOf('day'),
                       items: form.getFieldValue('items') || [{}],
                     });
                     setShowModal(true);
@@ -1333,7 +1334,7 @@ export default function LabResultListPage() {
           layout="vertical"
           size="middle"
           style={{ marginTop: 8 }}
-          initialValues={{ test_date: dayjs(), items: [{}] }}
+          initialValues={{ test_date: dayjs().startOf('day'), items: [{}] }}
         >
           <div className="grid-2" style={{ gap: 16 }}>
             <Form.Item label="患者" name="patient_id" rules={[{ required: true, message: '请选择患者' }]}>

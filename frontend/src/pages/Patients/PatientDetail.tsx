@@ -577,14 +577,55 @@ function TabDialysisHistory({ rows, patientId }: TabDialysisHistoryProps) {
             <div className="grid-3" style={{ gap: 12 }}>
               <div>日期：<b>{detailRecord.session_date}</b></div>
               <div>班次：<b>{formatShift(detailRecord.shift)}</b></div>
-              <div>护士：<b>{detailRecord.nurse_name || '—'}</b></div>
+              <div>责任护士（提交人）：<b>{detailRecord.nurse_name || '—'}</b></div>
               <div>机器：<b>{detailRecord.machine_no || '—'}</b></div>
+              <div>穿刺护士：<b>{detailRecord.nurse_puncture_sign?.trim() || '—'}</b></div>
+              <div>上机护士：<b>{detailRecord.nurse_on_machine_sign?.trim() || '—'}</b></div>
+              <div>二次核对：<b>{detailRecord.nurse_double_check_sign?.trim() || detailRecord.double_check_nurse_name?.trim() || '—'}</b></div>
+              <div>记录护士：<b>{detailRecord.nurse_record_sign?.trim() || detailRecord.nurse_name || '—'}</b></div>
               <div>透前体重：<b>{detailRecord.pre_weight ?? '—'}{detailRecord.pre_weight != null ? ' kg' : ''}</b></div>
               <div>透后体重：<b>{detailRecord.post_weight ?? '—'}{detailRecord.post_weight != null ? ' kg' : ''}</b></div>
               <div>超滤量：<b>{detailRecord.uf_volume ?? '—'}{detailRecord.uf_volume != null ? ' mL' : ''}</b></div>
               <div>实际时长：<b>{detailRecord.actual_duration != null ? `${(detailRecord.actual_duration / 60).toFixed(1)} h` : '—'}</b></div>
               <div>Kt/V：<b>{detailRecord.ktv ?? '—'}</b></div>
             </div>
+            {(detailRecord.vital_signs?.length ?? 0) > 0 ? (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>透析中生命体征</div>
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey={(r) => r.id || `${r.record_time}-${r.sequence_no}`}
+                  dataSource={detailRecord.vital_signs}
+                  columns={[
+                    {
+                      title: '时间',
+                      key: 't',
+                      width: 100,
+                      render: (_, r) => {
+                        const rt = r.record_time ? String(r.record_time) : '';
+                        const hh = rt.includes('T') ? rt.split('T')[1]?.slice(0, 5) : rt.slice(11, 16);
+                        return hh || r.time_label || '—';
+                      },
+                    },
+                    { title: '收缩压', dataIndex: 'systolic_bp', width: 72, render: (v) => v ?? '—' },
+                    { title: '舒张压', dataIndex: 'diastolic_bp', width: 72, render: (v) => v ?? '—' },
+                    { title: '脉搏', dataIndex: 'heart_rate', width: 64, render: (v) => v ?? '—' },
+                    {
+                      title: '护士签名',
+                      key: 'sig',
+                      ellipsis: true,
+                      render: (_, r) =>
+                        (typeof r.nurse_signature === 'string' && r.nurse_signature.trim()
+                          ? r.nurse_signature.trim()
+                          : typeof r.recorded_by_name === 'string' && r.recorded_by_name.trim()
+                            ? r.recorded_by_name.trim()
+                            : '') || '—',
+                    },
+                  ]}
+                />
+              </div>
+            ) : null}
             <div style={{ color: '#1F2937' }}>
               生命体征 {detailRecord.vital_signs?.length || 0} 条；并发症 {detailRecord.complications?.length || 0} 条；医嘱执行 {detailRecord.order_executions?.length || 0} 条
             </div>

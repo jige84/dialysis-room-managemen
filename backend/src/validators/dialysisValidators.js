@@ -73,6 +73,29 @@ function validateSessionDraftPutBody(body) {
   };
 }
 
+/** PATCH /api/dialysis/:id/vitals/:vitalId — 至少包含一项可更新字段 */
+function validatePatchVitalSignBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, message: '请求体须为 JSON 对象' };
+  }
+  const keys = [
+    'record_time',
+    'time_label',
+    'sequence_no',
+    'systolic_bp',
+    'diastolic_bp',
+    'heart_rate',
+    'arterial_pressure',
+    'venous_pressure',
+    'tmp',
+    'body_temp',
+    'notes',
+  ];
+  const hasAny = keys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
+  if (!hasAny) return { ok: false, message: '请提供至少一项要更新的生命体征字段' };
+  return { ok: true, value: body };
+}
+
 module.exports = {
   validatePrepareQuery,
   validateYearMonthQuery,
@@ -80,5 +103,6 @@ module.exports = {
   validateDialysisNotePayload,
   validateSessionDraftQuery,
   validateSessionDraftPutBody,
+  validatePatchVitalSignBody,
 };
 
